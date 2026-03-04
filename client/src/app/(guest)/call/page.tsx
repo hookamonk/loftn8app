@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { api } from "@/lib/api";
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
@@ -43,7 +43,16 @@ function ActionCard({
 }
 
 function SmallIcon({ name }: { name: "user" | "zap" | "card" }) {
-  const common = { width: 20, height: 20, fill: "none", stroke: "rgba(255,255,255,0.85)", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const common = {
+    width: 20,
+    height: 20,
+    fill: "none",
+    stroke: "rgba(255,255,255,0.85)",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
   if (name === "user")
     return (
       <svg {...common} viewBox="0 0 24 24">
@@ -51,12 +60,14 @@ function SmallIcon({ name }: { name: "user" | "zap" | "card" }) {
         <path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z" />
       </svg>
     );
+
   if (name === "zap")
     return (
       <svg {...common} viewBox="0 0 24 24">
         <path d="M13 2 3 14h8l-1 8 11-14h-8l0-6Z" />
       </svg>
     );
+
   return (
     <svg {...common} viewBox="0 0 24 24">
       <path d="M3 10h18" />
@@ -82,7 +93,10 @@ export default function CallPage() {
     setCooldown(true);
 
     try {
-      await api("/calls", { method: "POST", body: JSON.stringify({ type, message: message || undefined }) });
+      await api("/calls", {
+        method: "POST",
+        body: JSON.stringify({ type, message: message || undefined }),
+      });
       push({ kind: "success", title: "Отправлено", message: "Персонал видит ваш стол" });
       setMsg("");
     } catch (e: any) {
@@ -128,69 +142,71 @@ export default function CallPage() {
   };
 
   return (
-    <RequireTable>
-      <main className="mx-auto max-w-md px-4 pb-28 pt-5">
-        <div className="mb-4">
-          <div className="text-[11px] tracking-[0.28em] text-white/55">LOFT №8</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">Персонал</h1>
+    <Suspense fallback={null}>
+      <RequireTable>
+        <main className="mx-auto max-w-md px-4 pb-28 pt-5">
+          <div className="mb-4">
+            <div className="text-[11px] tracking-[0.28em] text-white/55">LOFT №8</div>
+            <h1 className="mt-1 text-2xl font-bold text-white">Персонал</h1>
 
-          {!loading && !me?.authenticated ? (
-            <div className="mt-2 text-xs text-white/60">
-              Вы в режиме гостя — доступен персонал. Заказы и оценка доступны после входа.
-            </div>
-          ) : null}
-        </div>
+            {!loading && !me?.authenticated ? (
+              <div className="mt-2 text-xs text-white/60">
+                Вы в режиме гостя — доступен персонал. Заказы и оценка доступны после входа.
+              </div>
+            ) : null}
+          </div>
 
-        <div className="grid gap-3">
-          <ActionCard
-            disabled={cooldown}
-            title="Нужен официант"
-            subtitle="Быстрый вызов"
-            icon={<SmallIcon name="user" />}
-            onClick={() => send("WAITER")}
-          />
-          <ActionCard
-            disabled={cooldown}
-            title="Срочно кальянщик"
-            subtitle="Быстрый вызов"
-            icon={<SmallIcon name="zap" />}
-            onClick={() => send("HOOKAH")}
-          />
-          <ActionCard
-            disabled={cooldown}
-            title="Оплата"
-            subtitle="Карта / Наличные"
-            icon={<SmallIcon name="card" />}
-            onClick={() => setPayOpen(true)}
-          />
-        </div>
+          <div className="grid gap-3">
+            <ActionCard
+              disabled={cooldown}
+              title="Нужен официант"
+              subtitle="Быстрый вызов"
+              icon={<SmallIcon name="user" />}
+              onClick={() => send("WAITER")}
+            />
+            <ActionCard
+              disabled={cooldown}
+              title="Срочно кальянщик"
+              subtitle="Быстрый вызов"
+              icon={<SmallIcon name="zap" />}
+              onClick={() => send("HOOKAH")}
+            />
+            <ActionCard
+              disabled={cooldown}
+              title="Оплата"
+              subtitle="Карта / Наличные"
+              icon={<SmallIcon name="card" />}
+              onClick={() => setPayOpen(true)}
+            />
+          </div>
 
-        <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
-          <div className="text-sm font-semibold text-white">Сообщение персоналу</div>
-          <textarea
-            className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/40 outline-none"
-            placeholder="Например: «Горит кальян», «Подойти к столику»"
-            value={msg}
-            onChange={(e) => setMsg(e.target.value)}
-            rows={3}
-          />
-          <button
-            disabled={cooldown}
-            className="mt-3 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
-            onClick={() => send("HELP", msg)}
-          >
-            Отправить
-          </button>
-        </div>
+          <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
+            <div className="text-sm font-semibold text-white">Сообщение персоналу</div>
+            <textarea
+              className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/40 outline-none"
+              placeholder="Например: «Горит кальян», «Подойти к столику»"
+              value={msg}
+              onChange={(e) => setMsg(e.target.value)}
+              rows={3}
+            />
+            <button
+              disabled={cooldown}
+              className="mt-3 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+              onClick={() => send("HELP", msg)}
+            >
+              Отправить
+            </button>
+          </div>
 
-        <PaymentSheet open={payOpen} onClose={() => setPayOpen(false)} onPick={requestPayment} />
-        <RatingSheet
-          open={ratingOpen}
-          onClose={() => setRatingOpen(false)}
-          onSubmit={submitRating}
-          googleReviewUrl={GOOGLE_REVIEW_URL}
-        />
-      </main>
-    </RequireTable>
+          <PaymentSheet open={payOpen} onClose={() => setPayOpen(false)} onPick={requestPayment} />
+          <RatingSheet
+            open={ratingOpen}
+            onClose={() => setRatingOpen(false)}
+            onSubmit={submitRating}
+            googleReviewUrl={GOOGLE_REVIEW_URL}
+          />
+        </main>
+      </RequireTable>
+    </Suspense>
   );
 }
