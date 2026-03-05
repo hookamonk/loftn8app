@@ -11,17 +11,31 @@ import { ordersRouter } from "./modules/orders/orders.routes";
 import { callsRouter } from "./modules/calls/calls.routes";
 import { paymentsRouter } from "./modules/payments/payments.routes";
 import { ratingsRouter } from "./modules/ratings/ratings.routes";
-
 import { staffRouter } from "./modules/staff/staff.router";
 
 const app = express();
 
-app.use(
-  cors({
-    origin: env.FRONTEND_ORIGIN,
-    credentials: true, 
-  })
-);
+
+const allowedOrigins = (env.FRONTEND_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const corsMiddleware = cors({
+  origin: (origin, cb) => {
+ 
+    if (!origin) return cb(null, true);
+
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+
+    return cb(new Error(`CORS blocked origin: ${origin}`));
+  },
+  credentials: true,
+});
+
+
+app.use(corsMiddleware);
+app.options("*", corsMiddleware);
 
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
@@ -36,8 +50,6 @@ app.use("/orders", ordersRouter);
 app.use("/calls", callsRouter);
 app.use("/payments", paymentsRouter);
 app.use("/ratings", ratingsRouter);
-
-// ✅ one mount for staff 
 app.use("/staff", staffRouter);
 
 app.use(errorHandler);

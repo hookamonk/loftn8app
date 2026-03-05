@@ -15,11 +15,18 @@ const CreateSessionSchema = z.object({
 });
 
 function setCookie(res: any, name: string, value: string, maxAgeSeconds: number) {
+  const isProd = env.NODE_ENV === "production";
+
   res.cookie(name, value, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: env.NODE_ENV === "production",
+
+
+    sameSite: isProd ? "none" : "lax",
+    secure: isProd,
+
+  
     domain: env.COOKIE_DOMAIN || undefined,
+
     maxAge: maxAgeSeconds * 1000,
     path: "/",
   });
@@ -53,7 +60,7 @@ guestRouter.post(
   })
 );
 
-// ✅ реально проверяет cookie gsid (иначе вернет 401 из guestSessionAuth)
+
 guestRouter.get(
   "/me",
   guestSessionAuth,
@@ -63,6 +70,7 @@ guestRouter.get(
       where: { id: s.id },
       include: { table: { select: { id: true, code: true, label: true } } },
     });
+
     if (!session) throw new HttpError(401, "GUEST_SESSION_INVALID", "Guest session is invalid");
 
     res.json({
