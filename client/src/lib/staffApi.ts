@@ -1,7 +1,6 @@
 import type { StaffSession, StaffRole } from "@/providers/staffSession";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:4000";
+const API_BASE = "/api";
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error: string; status: number };
@@ -19,6 +18,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult
 
   const text = await res.text();
   let json: any = null;
+
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
@@ -36,40 +36,69 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult
 // пробуем основной путь, если 404 — пробуем альтернативный
 async function tryPaths<T>(paths: string[], init?: RequestInit): Promise<ApiResult<T>> {
   let last: ApiResult<T> | null = null;
+
   for (const p of paths) {
     const r = await fetchJson<T>(p, init);
     last = r;
+
     if (r.ok) return r;
     if (!r.ok && r.status !== 404) return r;
   }
+
   return last ?? { ok: false, error: "HTTP_404", status: 404 };
 }
 
 // --------- AUTH ----------
-export async function staffLogin(username: string, password: string): Promise<ApiResult<{ staff: StaffSession }>> {
-  const r = await tryPaths<{ ok: true; staff: { id: string; role: StaffRole; venueId: number; username: string } }>(
-    ["/staff/auth/login", "/staff/login"],
-    { method: "POST", body: JSON.stringify({ username, password }) }
-  );
+export async function staffLogin(
+  username: string,
+  password: string
+): Promise<ApiResult<{ staff: StaffSession }>> {
+  const r = await tryPaths<{
+    ok: true;
+    staff: { id: string; role: StaffRole; venueId: number; username: string };
+  }>(["/staff/auth/login", "/staff/login"], {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+
   if (!r.ok) return r;
 
   return { ok: true, data: { staff: r.data.staff } };
 }
 
 export async function staffLogout(): Promise<ApiResult<{ ok: true }>> {
-  return tryPaths<{ ok: true }>(["/staff/auth/logout", "/staff/logout"], { method: "POST" });
+  return tryPaths<{ ok: true }>(["/staff/auth/logout", "/staff/logout"], {
+    method: "POST",
+  });
 }
 
 // --------- DASHBOARD ----------
-export type StaffSummary = { newOrders: number; newCalls: number; pendingPayments: number };
+export type StaffSummary = {
+  newOrders: number;
+  newCalls: number;
+  pendingPayments: number;
+};
 
 export async function getStaffSummary(): Promise<ApiResult<StaffSummary>> {
-  const r = await tryPaths<{ ok: true; newOrders: number; newCalls: number; pendingPayments: number }>(
-    ["/staff/dashboard/summary", "/staff/summary"],
-    { method: "GET" }
-  );
+  const r = await tryPaths<{
+    ok: true;
+    newOrders: number;
+    newCalls: number;
+    pendingPayments: number;
+  }>(["/staff/dashboard/summary", "/staff/summary"], {
+    method: "GET",
+  });
+
   if (!r.ok) return r;
-  return { ok: true, data: { newOrders: r.data.newOrders, newCalls: r.data.newCalls, pendingPayments: r.data.pendingPayments } };
+
+  return {
+    ok: true,
+    data: {
+      newOrders: r.data.newOrders,
+      newCalls: r.data.newCalls,
+      pendingPayments: r.data.pendingPayments,
+    },
+  };
 }
 
 export type OrderStatus = "NEW" | "ACCEPTED" | "IN_PROGRESS" | "DELIVERED" | "CANCELLED";
@@ -138,7 +167,11 @@ export type StaffPayment = {
   method: PaymentMethod;
   createdAt: string;
   table: { code: string; label: string | null };
-  session: { id: string; userId: string | null; user: { id: string; name: string; phone: string } | null };
+  session: {
+    id: string;
+    userId: string | null;
+    user: { id: string; name: string; phone: string } | null;
+  };
 };
 
 export async function listPayments(status: PaymentStatus): Promise<ApiResult<{ payments: StaffPayment[] }>> {
