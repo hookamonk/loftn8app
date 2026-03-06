@@ -1,20 +1,12 @@
 
-const API =
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  "";
-
-if (!API) {
-
-  console.warn("NEXT_PUBLIC_API_BASE_URL is missing");
-}
+const API = "/api";
 
 type FetchOptions = Omit<RequestInit, "headers"> & {
   headers?: Record<string, string>;
 };
 
 export async function api<T>(path: string, options: FetchOptions = {}): Promise<T> {
-  const base = API.replace(/\/$/, ""); // убрать trailing /
+  const base = API.replace(/\/$/, "");
   const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
 
   const res = await fetch(url, {
@@ -31,7 +23,9 @@ export async function api<T>(path: string, options: FetchOptions = {}): Promise<
 
   if (!res.ok) {
     const msg =
-      typeof data === "object" && data && "message" in data ? String((data as any).message) : `HTTP ${res.status}`;
+      typeof data === "object" && data && "message" in data
+        ? String((data as any).message)
+        : `HTTP ${res.status}`;
     throw new Error(msg);
   }
 
