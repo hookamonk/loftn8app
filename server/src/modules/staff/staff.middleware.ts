@@ -18,10 +18,15 @@ export const STAFF_COOKIE_NAME = "sid";
 const JWT_STAFF_SECRET = process.env.JWT_STAFF_SECRET || "dev_staff_secret";
 
 export function setStaffCookie(res: any, token: string, maxAgeSeconds: number) {
+  const isProd = env.NODE_ENV === "production";
+
   res.cookie(STAFF_COOKIE_NAME, token, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: env.NODE_ENV === "production",
+
+    // ✅ важно для Vercel(front) + Render(api)
+    sameSite: isProd ? "none" : "lax",
+    secure: isProd,
+
     domain: env.COOKIE_DOMAIN || undefined,
     maxAge: maxAgeSeconds * 1000,
     path: "/",
@@ -29,7 +34,11 @@ export function setStaffCookie(res: any, token: string, maxAgeSeconds: number) {
 }
 
 export function clearStaffCookie(res: any) {
+  const isProd = env.NODE_ENV === "production";
+
   res.clearCookie(STAFF_COOKIE_NAME, {
+    sameSite: isProd ? "none" : "lax",
+    secure: isProd,
     domain: env.COOKIE_DOMAIN || undefined,
     path: "/",
   });
@@ -40,7 +49,11 @@ export const requireStaffAuth: RequestHandler = async (req, _res, next) => {
     const token = (req.cookies?.[STAFF_COOKIE_NAME] as string | undefined) ?? undefined;
     if (!token) throw new HttpError(401, "STAFF_UNAUTH", "Staff auth required");
 
-    const payload = jwt.verify(token, JWT_STAFF_SECRET) as { staffId: string; venueId: number; role: StaffRole };
+    const payload = jwt.verify(token, JWT_STAFF_SECRET) as {
+      staffId: string;
+      venueId: number;
+      role: StaffRole;
+    };
 
     const staff = await prisma.staffUser.findUnique({ where: { id: payload.staffId } });
     if (!staff || !staff.isActive) throw new HttpError(401, "STAFF_INVALID", "Staff session invalid");
