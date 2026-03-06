@@ -42,7 +42,14 @@ function setCookie(res: any, name: string, value: string, maxAgeSeconds: number)
 }
 
 function clearCookie(res: any, name: string) {
-  res.clearCookie(name, { domain: env.COOKIE_DOMAIN || undefined, path: "/" });
+  const isProd = env.NODE_ENV === "production";
+
+  res.clearCookie(name, {
+    sameSite: isProd ? "none" : "lax",
+    secure: isProd,
+    domain: env.COOKIE_DOMAIN || undefined,
+    path: "/",
+  });
 }
 
 function normalizePhone(phone: string) {
@@ -226,6 +233,7 @@ authRouter.post(
   "/guest/logout",
   asyncHandler(async (_req, res) => {
     clearCookie(res, "uid");
+    clearCookie(res, "gsid");
     res.json({ ok: true });
   })
 );
