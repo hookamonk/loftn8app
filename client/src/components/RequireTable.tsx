@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 
 const TABLE_STORAGE_KEY = "loft_table_code";
@@ -9,11 +9,11 @@ const TABLE_STORAGE_KEY = "loft_table_code";
 export function RequireTable({ children }: { children: React.ReactNode }) {
   const sp = useSearchParams();
   const pathname = usePathname();
+  const router = useRouter();
 
   const queryTable = sp.get("table");
 
   const pathTable = useMemo(() => {
-    // поддержка URL вида /t/T1
     const m = pathname.match(/^\/t\/([^/]+)$/);
     return m ? decodeURIComponent(m[1]) : null;
   }, [pathname]);
@@ -28,7 +28,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
       setErr(null);
       setReady(false);
 
-      // 1) если уже есть активная guest session — просто пускаем
+      // 1) если уже есть активная guest session — пропускаем
       try {
         await api("/guest/me");
         if (!cancelled) setReady(true);
@@ -37,8 +37,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
         // ignore
       }
 
-      // 2) определяем tableCode:
-      // приоритет: ?table= -> /t/T1 -> localStorage
+      // 2) ищем tableCode: query -> path -> localStorage
       let tableCode =
         queryTable ||
         pathTable ||
@@ -51,7 +50,6 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
             body: JSON.stringify({ tableCode }),
           });
 
-          // сохраняем стол, чтобы потом не терялся
           if (typeof window !== "undefined") {
             localStorage.setItem(TABLE_STORAGE_KEY, tableCode);
           }
@@ -66,13 +64,24 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
           if (!cancelled) {
             setErr(e?.message ?? "Не удалось создать сессию стола");
           }
+
+          // если стол битый — отправляем на выбор стола
+          setTimeout(() => {
+            router.replace("/table");
+          }, 700);
+
           return;
         }
       }
 
+      // 3) если стола нет вообще — сразу ведём на экран выбора
       if (!cancelled) {
-        setErr("Сканируй QR стола или открой ссылку с параметром ?table=T1");
+        setErr("Не выбран стол. Перенаправляем на экран выбора…");
       }
+
+      setTimeout(() => {
+        router.replace("/table");
+      }, 700);
     }
 
     void run();
@@ -80,7 +89,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [queryTable, pathTable]);
+  }, [queryTable, pathTable, router]);
 
   if (!ready) {
     return (
@@ -91,9 +100,9 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
 
           <button
             className="mt-3 w-full rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-black"
-            onClick={() => window.location.reload()}
+            onClick={() => router.replace("/table")}
           >
-            Обновить
+            Выбрать стол
           </button>
         </div>
       </div>
