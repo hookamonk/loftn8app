@@ -15,7 +15,6 @@ import { staffRouter } from "./modules/staff/staff.router";
 
 const app = express();
 
-
 const allowedOrigins = (env.FRONTEND_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
@@ -23,19 +22,19 @@ const allowedOrigins = (env.FRONTEND_ORIGIN || "")
 
 const corsMiddleware = cors({
   origin: (origin, cb) => {
- 
     if (!origin) return cb(null, true);
 
-    if (allowedOrigins.includes(origin)) return cb(null, true);
+    const isAllowed =
+      allowedOrigins.includes(origin) || origin.endsWith(".vercel.app");
+
+    if (isAllowed) return cb(null, true);
 
     return cb(new Error(`CORS blocked origin: ${origin}`));
   },
   credentials: true,
 });
 
-
 app.use(corsMiddleware);
-app.options("*", corsMiddleware);
 
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
@@ -44,7 +43,6 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/auth", authRouter);
 app.use("/guest", guestRouter);
-
 app.use("/menu", menuRouter);
 app.use("/orders", ordersRouter);
 app.use("/calls", callsRouter);
