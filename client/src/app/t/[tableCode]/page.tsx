@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useSession } from "@/providers/session";
 
-const TABLE_STORAGE_KEY = "loft_table_code";
+const TABLE_STORAGE_KEY = "tableCode";
 
 function normalizeToCode(raw: string) {
   const v = String(raw || "").trim().toUpperCase().replace(/\s+/g, "");
@@ -31,15 +31,12 @@ export default function TableEntry() {
           body: JSON.stringify({ tableCode }),
         });
 
-        // сохраняем в session provider
         setTableCode(tableCode);
 
-        // сохраняем в localStorage, чтобы RequireTable видел стол
         if (typeof window !== "undefined") {
           localStorage.setItem(TABLE_STORAGE_KEY, tableCode);
         }
 
-        // уводим на menu уже с параметром table
         router.replace(`/menu?table=${encodeURIComponent(tableCode)}`);
       } catch (e: any) {
         setErr(e?.message ?? "Failed to create session");
