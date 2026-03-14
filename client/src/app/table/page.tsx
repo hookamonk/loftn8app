@@ -6,6 +6,7 @@ import { Html5Qrcode } from "html5-qrcode";
 function extractTableCode(rawInput: string): string | null {
   const raw = String(rawInput || "").trim();
 
+  // Полная ссылка
   try {
     const url = new URL(raw);
 
@@ -22,11 +23,23 @@ function extractTableCode(rawInput: string): string | null {
       if (/^T\d+$/.test(v)) return v;
     }
   } catch {
-    // not a URL
+    // not URL
   }
 
+  // /t/T1
+  if (/^\/t\/T?\d+$/i.test(raw)) {
+    const m = raw.match(/\/t\/(T?\d+)$/i);
+    if (m?.[1]) {
+      const v = m[1].toUpperCase();
+      return v.startsWith("T") ? v : `T${v}`;
+    }
+  }
+
+  // T1
   const compact = raw.toUpperCase().replace(/\s+/g, "");
   if (/^T\d+$/.test(compact)) return compact;
+
+  // 1
   if (/^\d+$/.test(compact)) return `T${compact}`;
 
   return null;
@@ -44,7 +57,6 @@ export default function TablePage() {
   const [processingFile, setProcessingFile] = useState(false);
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
-  const startingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const canGo = useMemo(() => !!extractTableCode(table), [table]);
@@ -57,7 +69,7 @@ export default function TablePage() {
     setErr(null);
     const code = extractTableCode(table);
     if (!code) {
-      setErr("Введите номер стола или отсканируйте QR");
+      setErr("Введите номер стола");
       return;
     }
     goToTable(code);
@@ -83,14 +95,13 @@ export default function TablePage() {
     }
 
     scannerRef.current = null;
-    startingRef.current = false;
   };
 
   const handleDecoded = async (decodedText: string) => {
     const code = extractTableCode(decodedText);
 
     if (!code) {
-      setScanErr("QR считан, но формат не распознан. Нужен код стола или ссылка вида /t/T1");
+      setScanErr("QR считан, но формат не распознан. Лучше использовать короткий QR: T1, T2, T3.");
       return;
     }
 
@@ -101,36 +112,41 @@ export default function TablePage() {
   };
 
   const startScan = async () => {
-    if (startingRef.current) return;
-
     setScanErr(null);
     setStartingScan(true);
-    startingRef.current = true;
 
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("Нет доступа к камере. Используйте фото QR или введите номер вручную.");
       }
 
+      // Сначала пробуем получить доступ, чтобы браузер раскрыл реальные камеры
+      const warmup = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+      warmup.getTracks().forEach((t) => t.stop());
+
       const cameras = await Html5Qrcode.getCameras();
       if (!cameras?.length) {
         throw new Error("Камера не найдена. Используйте фото QR или введите номер вручную.");
       }
 
-      // стараемся выбрать заднюю камеру
-      const preferredCamera =
-        cameras.find((c) => /back|rear|environment/i.test(c.label))?.id || cameras[0].id;
+      // Стараемся выбрать заднюю
+      const rear =
+        cameras.find((c) => /back|rear|environment|wide/i.test(c.label)) ||
+        cameras[cameras.length - 1];
 
       const scanner = new Html5Qrcode(SCANNER_ID);
       scannerRef.current = scanner;
 
       await scanner.start(
-        preferredCamera,
+        rear.id,
         {
-          fps: 10,
-          // специально НЕ задаём qrbox, чтобы iPhone мог искать по всему кадру
+          fps: 8,
           aspectRatio: 1,
           disableFlip: false,
+          // qrbox убираем, чтобы искать по всему кадру
         },
         async (decodedText) => {
           await handleDecoded(decodedText);
@@ -144,7 +160,6 @@ export default function TablePage() {
       await stopScan();
     } finally {
       setStartingScan(false);
-      startingRef.current = false;
     }
   };
 
@@ -157,6 +172,7 @@ export default function TablePage() {
     try {
       const scanner = new Html5Qrcode(SCANNER_ID);
       const decodedText = await scanner.scanFile(file, true);
+
       try {
         scanner.clear();
       } catch {
@@ -210,7 +226,7 @@ export default function TablePage() {
               </div>
             ) : (
               <div className="mt-3 text-xs text-white/60">
-                Наведи камеру на QR на столе. Если не считывает — сделай фото QR и загрузи его ниже.
+                Наведи камеру на QR на столе. Лучше работают короткие QR: T1, T2, T3.
               </div>
             )}
 
