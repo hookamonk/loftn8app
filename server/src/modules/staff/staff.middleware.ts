@@ -71,4 +71,4 @@ export function requireStaffRole(roles: StaffRole[]): RequestHandler {
     if (!roles.includes(req.staff.role)) return next(new HttpError(403, "STAFF_FORBIDDEN", "Forbidden"));
     next();
   };
-}
+} 

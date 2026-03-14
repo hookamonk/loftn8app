@@ -45,7 +45,7 @@ staffAuthRouter.get(
   })
 );
 
-staffAuthRouter.post(
+staffAuthRouter.post( 
   "/logout",
   asyncHandler(async (_req, res) => {
     clearStaffCookie(res);

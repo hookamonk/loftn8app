@@ -48,5 +48,5 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <>{children}</>;
+  return <>{children}</>; 
 }

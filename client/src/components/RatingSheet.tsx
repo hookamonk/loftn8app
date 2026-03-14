@@ -105,7 +105,7 @@ export function RatingSheet({
 
         <button
           className="mt-3 w-full rounded-3xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/70"
-          onClick={onClose}
+          onClick={onClose} 
         >
           Закрыть
         </button>

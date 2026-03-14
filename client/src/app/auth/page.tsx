@@ -55,7 +55,7 @@ export default function AuthPage() {
 
   useEffect(() => {
     if (loading) return;
-    if (me?.authenticated) router.replace("/table");
+    if (me?.authenticated) router.replace("/table"); 
   }, [loading, me, router]);
 
   const canSend =

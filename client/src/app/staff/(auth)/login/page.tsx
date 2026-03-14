@@ -77,7 +77,7 @@ export default function StaffLoginPage() {
             </button>
           </form>
         </div>
-      </div>
+      </div> 
     </main>
   );
 }

@@ -47,7 +47,7 @@ export function StaffSessionProvider({ children }: { children: React.ReactNode }
 
   const value = useMemo(() => ({ staff, setStaff, clear }), [staff]);
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>; 
 }
 
 export function useStaffSession() {

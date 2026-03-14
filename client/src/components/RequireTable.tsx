@@ -19,7 +19,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   const [ready, setReady] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null); 
 
   useEffect(() => {
     let cancelled = false;
@@ -106,4 +106,4 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>;
-}
+}  
