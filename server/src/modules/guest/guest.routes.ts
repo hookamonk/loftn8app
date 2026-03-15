@@ -49,22 +49,22 @@ guestRouter.post(
       throw new HttpError(404, "TABLE_NOT_FOUND", "Table not found");
     }
 
+    // ✅ гостевое приложение работает всегда:
+    // если смена открыта — привязываем session к shift
+    // если смены нет — просто создаём session без shiftId
     const shift = await prisma.shift.findFirst({
       where: {
         venueId: table.venueId,
         status: "OPEN",
       },
       orderBy: { openedAt: "desc" },
+      select: { id: true, openedAt: true },
     });
-
-    if (!shift) {
-      throw new HttpError(409, "SHIFT_NOT_OPEN", "Venue shift is not open");
-    }
 
     const session = await prisma.guestSession.create({
       data: {
         tableId: table.id,
-        shiftId: shift.id,
+        shiftId: shift?.id ?? null,
       },
     });
 
@@ -85,10 +85,12 @@ guestRouter.post(
           code: table.code,
           label: table.label,
         },
-        shift: {
-          id: shift.id,
-          openedAt: shift.openedAt,
-        },
+        shift: shift
+          ? {
+              id: shift.id,
+              openedAt: shift.openedAt,
+            }
+          : null,
         startedAt: session.startedAt,
       },
     });
@@ -121,16 +123,13 @@ guestRouter.get(
       throw new HttpError(401, "GUEST_SESSION_ENDED", "Guest session ended");
     }
 
-    if (!session.shift || session.shift.status !== "OPEN") {
-      throw new HttpError(401, "SHIFT_CLOSED", "Shift is closed");
-    }
-
+    // ✅ больше НЕ блокируем гостя из-за закрытой смены
     res.json({
       ok: true,
       session: {
         id: session.id,
         table: session.table,
-        shift: session.shift,
+        shift: session.shift ?? null,
         startedAt: session.startedAt,
       },
     });
@@ -147,7 +146,6 @@ guestRouter.post(
 
     const session = await prisma.guestSession.findUnique({
       where: { id: s.id },
-      include: { shift: true },
     });
 
     if (!session) {
@@ -156,10 +154,6 @@ guestRouter.post(
 
     if (session.endedAt) {
       throw new HttpError(401, "SESSION_ENDED", "Session ended");
-    }
-
-    if (!session.shift || session.shift.status !== "OPEN") {
-      throw new HttpError(401, "SHIFT_CLOSED", "Shift is closed");
     }
 
     const values = [food, drinks, hookah].filter((v) => typeof v === "number") as number[];
