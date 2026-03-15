@@ -63,17 +63,17 @@ model Shift {
 
 model ShiftParticipant {
   id         String         @id @default(cuid())
-  shiftId     String
-  staffId      String
-  role         StaffRole
-  joinedAt     DateTime      @default(now())
-  leftAt       DateTime?
-  isActive     Boolean       @default(true)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  shiftId    String
+  staffId    String
+  role       StaffRole
+  joinedAt   DateTime       @default(now())
+  leftAt     DateTime?
+  isActive   Boolean        @default(true)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
 
-  shift        Shift         @relation(fields: [shiftId], references: [id])
-  staff        StaffUser     @relation(fields: [staffId], references: [id])
+  shift      Shift          @relation(fields: [shiftId], references: [id])
+  staff      StaffUser      @relation(fields: [staffId], references: [id])
 
   @@unique([shiftId, staffId])
   @@index([shiftId, isActive])
@@ -295,6 +295,7 @@ enum StaffRole {
   WAITER
   HOOKAH
   MANAGER
+  ADMIN
 }
 
 enum ShiftStatus {

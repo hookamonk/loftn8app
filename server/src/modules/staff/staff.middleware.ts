@@ -71,3 +71,5 @@ export function requireStaffRole(roles: StaffRole[]): RequestHandler {
 }
 
 export const requireManagerOnly = requireStaffRole(["MANAGER"]);
+export const requireAdminOnly = requireStaffRole(["ADMIN"]);
+export const requireAdminOrManager = requireStaffRole(["ADMIN", "MANAGER"]);

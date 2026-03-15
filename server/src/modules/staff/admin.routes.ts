@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
-import { requireStaffAuth, requireManagerOnly } from "./staff.middleware";
+import { requireStaffAuth, requireAdminOrManager } from "./staff.middleware";
 
 export const staffAdminRouter = Router();
 
 staffAdminRouter.use(requireStaffAuth);
-staffAdminRouter.use(requireManagerOnly);
+staffAdminRouter.use(requireAdminOrManager);
 
 // общий summary
 staffAdminRouter.get(
@@ -333,4 +333,4 @@ staffAdminRouter.get(
 
     res.json({ ok: true, staff: result });
   })
-);
+); 

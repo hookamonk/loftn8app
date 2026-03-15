@@ -78,15 +78,15 @@ export default function StaffAdminPage() {
     void load();
   }, []);
 
-  if (staff?.role !== "MANAGER") {
+  if (staff?.role !== "MANAGER" && staff?.role !== "ADMIN") {
     return (
       <main className="min-h-screen bg-black text-white">
         <div className="mx-auto max-w-md px-4 py-6">
           <div className={glass}>
             <div className="text-lg font-semibold">Admin panel</div>
-            <div className="mt-2 text-sm text-white/60">Доступ только для менеджера.</div>
+            <div className="mt-2 text-sm text-white/60">Доступ только для manager/admin.</div>
           </div>
-        </div>
+        </div> 
       </main>
     );
   }
@@ -117,9 +117,7 @@ export default function StaffAdminPage() {
           ) : null}
         </div>
 
-        {loading ? (
-          <div className="mt-4 text-sm text-white/60">Загрузка…</div>
-        ) : null}
+        {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
 
         {summary ? (
           <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -212,9 +210,7 @@ export default function StaffAdminPage() {
                   <div className="text-sm font-semibold">
                     {s.username} • {s.role}
                   </div>
-                  <div className="mt-1 text-xs text-white/60">
-                    Смен: {s.shiftsJoined}
-                  </div>
+                  <div className="mt-1 text-xs text-white/60">Смен: {s.shiftsJoined}</div>
                   <div className="mt-1 text-xs text-white/60">
                     Confirmed payments: {s.confirmedPaymentsCount}
                   </div>
@@ -230,4 +226,4 @@ export default function StaffAdminPage() {
       </div>
     </main>
   );
-}
+} 

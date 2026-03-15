@@ -65,6 +65,20 @@ export async function staffLogin(
   return { ok: true, data: { staff: r.data.staff } };
 }
 
+export async function getStaffMe(): Promise<ApiResult<{ staff: StaffSession }>> {
+  const r = await tryPaths<{
+    ok: true;
+    staff: { id: string; role: StaffRole; venueId: number; username: string } | null;
+  }>(["/staff/auth/me"], {
+    method: "GET",
+  });
+
+  if (!r.ok) return r;
+  if (!r.data.staff) return { ok: false, error: "STAFF_UNAUTH", status: 401 };
+
+  return { ok: true, data: { staff: r.data.staff } };
+}
+
 export async function staffLogout(): Promise<ApiResult<{ ok: true }>> {
   return tryPaths<{ ok: true }>(["/staff/auth/logout", "/staff/logout"], {
     method: "POST",
@@ -174,6 +188,7 @@ export type CallStatus = "NEW" | "ACKED" | "DONE";
 export type PaymentStatus = "PENDING" | "CONFIRMED" | "CANCELLED";
 export type CallType = "WAITER" | "HOOKAH" | "BILL" | "HELP";
 export type PaymentMethod = "CARD" | "CASH";
+export type StaffRoleExtended = "WAITER" | "HOOKAH" | "MANAGER" | "ADMIN";
 
 export type StaffOrder = {
   id: string;

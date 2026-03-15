@@ -3,30 +3,30 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStaffSession } from "@/providers/staffSession";
-import { getStaffSummary } from "@/lib/staffApi";
+import { getStaffMe } from "@/lib/staffApi";
 
 export function StaffGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { staff, clear } = useStaffSession();
+  const { staff, clear, setStaff } = useStaffSession();
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function run() {
-      // нет локальной сессии → на логин
       if (!staff) {
         router.replace("/staff/login");
         return;
       }
 
-      // проверим, что cookie staff реально валидна (иначе будет "тихий" разлогин)
-      const r = await getStaffSummary();
-      if (!r.ok && (r.status === 401 || r.status === 403)) {
+      const r = await getStaffMe();
+      if (!r.ok) {
         clear();
         router.replace("/staff/login");
         return;
       }
+
+      setStaff(r.data.staff);
 
       if (!cancelled) setReady(true);
     }
@@ -35,7 +35,7 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [staff, router, clear]);
+  }, [staff, router, clear, setStaff]);
 
   if (!ready) {
     return (
@@ -48,5 +48,5 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <>{children}</>; 
+  return <>{children}</>;
 }
