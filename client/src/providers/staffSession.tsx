@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-export type StaffRole = "WAITER" | "HOOKAH" | "MANAGER";
+export type StaffRole = "WAITER" | "HOOKAH" | "MANAGER" | "ADMIN";
 
 export type StaffSession = {
   id: string;
@@ -47,7 +47,7 @@ export function StaffSessionProvider({ children }: { children: React.ReactNode }
 
   const value = useMemo(() => ({ staff, setStaff, clear }), [staff]);
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>; 
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useStaffSession() {
