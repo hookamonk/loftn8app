@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   getStaffSummary,
   type StaffSummary,
@@ -47,6 +48,9 @@ export default function StaffSummaryPage() {
   const [pushStatus, setPushStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const isAdmin = staff?.role === "ADMIN";
+  const isManager = staff?.role === "MANAGER";
+
   const loadShift = async () => {
     const r = await getCurrentShift();
     if (!r.ok) {
@@ -90,13 +94,18 @@ export default function StaffSummaryPage() {
     activeMs: 5000,
     idleMs: 15000,
     immediate: true,
-    enabled: true,
+    enabled: !isAdmin,
   });
 
   useEffect(() => {
+    if (isAdmin) return;
     const off = attachStaffRealtime(() => void tick());
     return off;
-  }, [tick]);
+  }, [tick, isAdmin]);
+
+  useEffect(() => {
+    void loadAll({ silent: false });
+  }, []);
 
   const onEnableNotifications = async () => {
     setPushStatus(null);
@@ -159,9 +168,32 @@ export default function StaffSummaryPage() {
     await loadAll({ silent: false });
   };
 
-  const isManager = staff?.role === "MANAGER";
   const participants = shift?.participants ?? [];
   const isInShift = !!staff && participants.some((p) => p.staffId === staff.id && p.role === staff.role);
+
+  if (isAdmin) {
+    return (
+      <main className="min-h-screen bg-black text-white">
+        <div className="mx-auto max-w-md px-4 py-6">
+          <div className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-2xl backdrop-blur">
+            <div className="text-lg font-semibold">Режим администратора</div>
+            <div className="mt-2 text-sm text-white/60">
+              Для вас основная рабочая область — это admin panel.
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <Link
+                href="/staff/admin"
+                className="rounded-2xl border border-white/10 bg-white/15 px-4 py-3 text-sm font-semibold text-white hover:bg-white/20"
+              >
+                Открыть admin panel
+              </Link>
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-black text-white">
