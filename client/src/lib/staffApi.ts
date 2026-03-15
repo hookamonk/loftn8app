@@ -33,7 +33,6 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult
   return { ok: true, data: json as T };
 }
 
-// пробуем основной путь, если 404 — пробуем альтернативный
 async function tryPaths<T>(paths: string[], init?: RequestInit): Promise<ApiResult<T>> {
   let last: ApiResult<T> | null = null;
 
@@ -72,16 +71,82 @@ export async function staffLogout(): Promise<ApiResult<{ ok: true }>> {
   });
 }
 
+// --------- SHIFT ----------
+export type ShiftParticipant = {
+  id: string;
+  staffId: string;
+  role: StaffRole;
+  joinedAt: string;
+  staff?: {
+    id: string;
+    username: string;
+    role: StaffRole;
+  };
+};
+
+export type ActiveShift = {
+  id: string;
+  venueId?: number;
+  status?: "OPEN" | "CLOSED";
+  openedAt: string;
+  closedAt?: string | null;
+  participants?: ShiftParticipant[];
+};
+
+export async function getCurrentShift(): Promise<ApiResult<{ shift: ActiveShift | null }>> {
+  return tryPaths<{ ok: true; shift: ActiveShift | null }>(
+    ["/staff/shift/current"],
+    { method: "GET" }
+  ).then((r) => (r.ok ? { ok: true, data: { shift: r.data.shift } } : r));
+}
+
+export async function openShift(): Promise<ApiResult<{ shift: ActiveShift }>> {
+  return tryPaths<{ ok: true; shift: ActiveShift }>(
+    ["/staff/shift/open"],
+    { method: "POST" }
+  ).then((r) => (r.ok ? { ok: true, data: { shift: r.data.shift } } : r));
+}
+
+export async function joinShift(): Promise<ApiResult<{ shiftId: string }>> {
+  return tryPaths<{ ok: true; shiftId: string }>(
+    ["/staff/shift/join"],
+    { method: "POST" }
+  ).then((r) => (r.ok ? { ok: true, data: { shiftId: r.data.shiftId } } : r));
+}
+
+export async function leaveShift(): Promise<ApiResult<{ ok: true }>> {
+  return tryPaths<{ ok: true }>(
+    ["/staff/shift/leave"],
+    { method: "POST" }
+  );
+}
+
+export async function closeShift(): Promise<ApiResult<{ shiftId: string; closedAt: string }>> {
+  return tryPaths<{ ok: true; shiftId: string; closedAt: string }>(
+    ["/staff/shift/close"],
+    { method: "POST" }
+  ).then((r) =>
+    r.ok
+      ? { ok: true, data: { shiftId: r.data.shiftId, closedAt: r.data.closedAt } }
+      : r
+  );
+}
+
 // --------- DASHBOARD ----------
 export type StaffSummary = {
   newOrders: number;
   newCalls: number;
   pendingPayments: number;
+  shift?: {
+    id: string;
+    openedAt: string;
+  };
 };
 
 export async function getStaffSummary(): Promise<ApiResult<StaffSummary>> {
   const r = await tryPaths<{
     ok: true;
+    shift?: { id: string; openedAt: string };
     newOrders: number;
     newCalls: number;
     pendingPayments: number;
@@ -94,6 +159,7 @@ export async function getStaffSummary(): Promise<ApiResult<StaffSummary>> {
   return {
     ok: true,
     data: {
+      shift: r.data.shift,
       newOrders: r.data.newOrders,
       newCalls: r.data.newCalls,
       pendingPayments: r.data.pendingPayments,
@@ -186,4 +252,4 @@ export async function confirmPayment(id: string, amountCzk: number): Promise<Api
     [`/staff/dashboard/payments/${id}/confirm`, `/staff/payments/${id}/confirm`],
     { method: "POST", body: JSON.stringify({ amountCzk }) }
   );
-} 
+}
