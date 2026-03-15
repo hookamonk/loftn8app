@@ -20,6 +20,7 @@ model Venue {
   pushSubscriptions    StaffPushSubscription[]
   staffUsers           StaffUser[]
   tables               Table[]
+  shifts               Shift[]
 }
 
 model Table {
@@ -37,14 +38,58 @@ model Table {
   venue     Venue            @relation(fields: [venueId], references: [id])
 }
 
+model Shift {
+  id                String             @id @default(cuid())
+  venueId           Int
+  status            ShiftStatus        @default(OPEN)
+  openedAt          DateTime           @default(now())
+  closedAt          DateTime?
+  openedByManagerId String
+  closedByManagerId String?
+  note              String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  venue             Venue              @relation(fields: [venueId], references: [id])
+  openedByManager   StaffUser          @relation("ShiftOpenedBy", fields: [openedByManagerId], references: [id])
+  closedByManager   StaffUser?         @relation("ShiftClosedBy", fields: [closedByManagerId], references: [id])
+
+  participants      ShiftParticipant[]
+  guestSessions     GuestSession[]
+
+  @@index([venueId, status])
+  @@index([venueId, openedAt])
+}
+
+model ShiftParticipant {
+  id         String         @id @default(cuid())
+  shiftId     String
+  staffId      String
+  role         StaffRole
+  joinedAt     DateTime      @default(now())
+  leftAt       DateTime?
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  shift        Shift         @relation(fields: [shiftId], references: [id])
+  staff        StaffUser     @relation(fields: [staffId], references: [id])
+
+  @@unique([shiftId, staffId])
+  @@index([shiftId, isActive])
+  @@index([staffId, isActive])
+}
+
 model GuestSession {
   id        String           @id @default(cuid())
   tableId   Int
   userId    String?
+  shiftId   String?
   startedAt DateTime         @default(now())
   endedAt   DateTime?
   table     Table            @relation(fields: [tableId], references: [id])
   user      User?            @relation(fields: [userId], references: [id])
+  shift     Shift?           @relation(fields: [shiftId], references: [id])
   orders    Order[]
   payments  PaymentRequest[]
   ratings   Rating[]
@@ -62,7 +107,7 @@ model User {
   updatedAt          DateTime  @updatedAt
 
   sessions             GuestSession[]
-  loyaltyTransactions  LoyaltyTransaction[] 
+  loyaltyTransactions  LoyaltyTransaction[]
   orders               Order[]
   paymentConfirmations PaymentConfirmation[]
 }
@@ -95,8 +140,8 @@ model MenuItem {
   categoryId  Int
   name        String
   description String?
-  priceCzk    Int 
-  imageUrl    String?      
+  priceCzk    Int
+  imageUrl    String?
   isActive    Boolean      @default(true)
   sort        Int          @default(0)
   createdAt   DateTime     @default(now())
@@ -186,6 +231,9 @@ model StaffUser {
   paymentConfirmations PaymentConfirmation[]
   paymentRequests      PaymentRequest[]
   pushSubscriptions    StaffPushSubscription[]
+  shiftParticipants    ShiftParticipant[]
+  openedShifts         Shift[]                 @relation("ShiftOpenedBy")
+  closedShifts         Shift[]                 @relation("ShiftClosedBy")
   venue                Venue                   @relation(fields: [venueId], references: [id])
 }
 
@@ -193,7 +241,7 @@ model PaymentConfirmation {
   id               String              @id @default(cuid())
   paymentRequestId String              @unique
   venueId          Int
-  staffId          String 
+  staffId          String
   userId           String?
   method           PaymentMethod
   amountCzk        Int
@@ -247,6 +295,11 @@ enum StaffRole {
   WAITER
   HOOKAH
   MANAGER
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
 }
 
 enum OrderStatus {
