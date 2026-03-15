@@ -47,10 +47,10 @@ export default function StaffLoginPage() {
 
       <div className="relative mx-auto flex min-h-screen max-w-md items-center px-4 py-10">
         <div className="w-full rounded-3xl border border-white/10 bg-white/5 p-5 shadow-2xl backdrop-blur">
-          <div className="text-xs tracking-[0.22em] text-white/45">LOFT N8</div>
+          <div className="text-xs tracking-[0.22em] text-white/45">LOFT №8</div>
           <h1 className="mt-2 text-2xl font-semibold">Вход в систему</h1>
           <p className="mt-1 text-sm text-white/60">
-            Официант, кальянщик, менеджер или администратор
+            Официант, кальянщик, менеджер
           </p>
 
           {err ? (
@@ -64,7 +64,7 @@ export default function StaffLoginPage() {
               <label className="text-xs text-white/60">Username</label>
               <input
                 className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
-                placeholder="pilot_waiter / pilot_admin"
+                placeholder="login"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 autoCapitalize="none"
@@ -92,10 +92,6 @@ export default function StaffLoginPage() {
               {loading ? "Входим…" : "Войти"}
             </button>
           </form>
-
-          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3 text-xs text-white/45">
-            ADMIN после входа автоматически попадёт в admin panel.
-          </div>
         </div>
       </div>
     </main>
