@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStaffSession } from "@/providers/staffSession";
 import { getStaffMe } from "@/lib/staffApi";
@@ -10,8 +10,12 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { clear, setStaff } = useStaffSession();
   const [ready, setReady] = useState(false);
+  const startedRef = useRef(false);
 
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
     let cancelled = false;
 
     async function run() {
@@ -25,8 +29,11 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
 
       setStaff(r.data.staff);
 
-      // ✅ если подписка уже есть в браузере — пересохраняем её на backend
-      await rebindPushIfPossible();
+      try {
+        await rebindPushIfPossible();
+      } catch {
+        // ignore
+      }
 
       if (!cancelled) setReady(true);
     }

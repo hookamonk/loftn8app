@@ -1,6 +1,13 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+} from "react";
 
 export type StaffRole = "WAITER" | "HOOKAH" | "MANAGER" | "ADMIN";
 
@@ -33,7 +40,7 @@ export function StaffSessionProvider({ children }: { children: React.ReactNode }
     }
   }, []);
 
-  const setStaff = (s: StaffSession | null) => {
+  const setStaff = useCallback((s: StaffSession | null) => {
     setStaffState(s);
     try {
       if (!s) localStorage.removeItem(KEY);
@@ -41,11 +48,13 @@ export function StaffSessionProvider({ children }: { children: React.ReactNode }
     } catch {
       // ignore
     }
-  };
+  }, []);
 
-  const clear = () => setStaff(null);
+  const clear = useCallback(() => {
+    setStaff(null);
+  }, [setStaff]);
 
-  const value = useMemo(() => ({ staff, setStaff, clear }), [staff]);
+  const value = useMemo(() => ({ staff, setStaff, clear }), [staff, setStaff, clear]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -54,4 +63,4 @@ export function useStaffSession() {
   const ctx = useContext(Ctx);
   if (!ctx) throw new Error("useStaffSession must be used within StaffSessionProvider");
   return ctx;
-}
+} 
