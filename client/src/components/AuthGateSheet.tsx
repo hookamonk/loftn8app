@@ -39,9 +39,9 @@ export function AuthGateSheet() {
       <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#0d0d0d] p-4 shadow-[0_30px_120px_rgba(0,0,0,0.7)]">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-base font-bold text-white">Войти и получать бонусы</div>
+            <div className="text-base font-bold text-white">Sign in and get bonuses</div>
             <div className="mt-1 text-xs text-white/65">
-              В V1 начисление — после подтверждения оплаты персоналом.
+              In V1, rewards are added after payment is confirmed by the staff.
             </div>
           </div>
           <button
@@ -51,22 +51,22 @@ export function AuthGateSheet() {
               setOpen(false);
             }}
           >
-            Позже
+            Later
           </button>
         </div>
 
         <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
             <div className="font-semibold text-white">Cashback</div>
-            <div className="mt-1 text-white/60">после оплаты</div>
+            <div className="mt-1 text-white/60">after payment</div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-            <div className="font-semibold text-white">Профиль</div>
-            <div className="mt-1 text-white/60">имя + история</div>
+            <div className="font-semibold text-white">Profile</div>
+            <div className="mt-1 text-white/60">name + history</div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-            <div className="font-semibold text-white">Быстрее</div>
-            <div className="mt-1 text-white/60">заказ/персонал</div>
+            <div className="font-semibold text-white">Faster</div>
+            <div className="mt-1 text-white/60">orders/staff</div>
           </div>
         </div>
 
@@ -74,7 +74,7 @@ export function AuthGateSheet() {
           href="/auth"
           className="mt-3 block w-full rounded-3xl bg-white px-4 py-3 text-center text-sm font-semibold text-black"
         >
-          Войти / Регистрация
+          Sign in / Register
         </Link>
       </div>
     </div>

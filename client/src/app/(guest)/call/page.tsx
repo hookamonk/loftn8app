@@ -100,15 +100,15 @@ export default function CallPage() {
 
       push({
         kind: "success",
-        title: "Отправлено",
-        message: "Персонал видит ваш стол",
+        title: "Sent",
+        message: "The staff can already see your table",
       });
 
       setMsg("");
     } catch (e: any) {
       push({
         kind: "error",
-        title: "Ошибка",
+        title: "Error",
         message: e?.message ?? "Failed",
       });
     } finally {
@@ -126,9 +126,9 @@ export default function CallPage() {
     } else {
       push({
         kind: "info",
-        title: "Оценка доступна после входа",
-        message: "Войдите/зарегистрируйтесь, чтобы оставить оценку.",
-        action: { label: "Войти", href: "/auth" },
+        title: "Rating is available after sign in",
+        message: "Please sign in or register to leave a rating.",
+        action: { label: "Sign in", href: "/auth" },
       });
     }
   };
@@ -142,15 +142,14 @@ export default function CallPage() {
     if (!canRate) {
       push({
         kind: "info",
-        title: "Нужен аккаунт",
-        message: "Оценка доступна только после входа.",
-        action: { label: "Войти", href: "/auth" },
+        title: "Account required",
+        message: "Rating is available only after sign in.",
+        action: { label: "Sign in", href: "/auth" },
       });
       return;
     }
 
     try {
-      // ✅ ИСПРАВЛЕННЫЙ ENDPOINT
       await api("/guest/rating", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -158,13 +157,13 @@ export default function CallPage() {
 
       push({
         kind: "success",
-        title: "Спасибо!",
-        message: "Оценка отправлена",
+        title: "Thank you!",
+        message: "Your rating has been submitted",
       });
     } catch (e: any) {
       push({
         kind: "error",
-        title: "Ошибка",
+        title: "Error",
         message: e?.message ?? "Failed",
       });
     }
@@ -177,12 +176,11 @@ export default function CallPage() {
           <div className="text-[11px] tracking-[0.28em] text-white/55">
             LOFT №8
           </div>
-          <h1 className="mt-1 text-2xl font-bold text-white">Персонал</h1>
+          <h1 className="mt-1 text-2xl font-bold text-white">Staff</h1>
 
           {!loading && !me?.authenticated ? (
             <div className="mt-2 text-xs text-white/60">
-              Вы в режиме гостя — доступен персонал. Заказы и оценка доступны
-              после входа.
+              You are in guest mode — staff assistance is available. Orders and ratings are available after sign in.
             </div>
           ) : null}
         </div>
@@ -190,24 +188,24 @@ export default function CallPage() {
         <div className="grid gap-3">
           <ActionCard
             disabled={cooldown}
-            title="Нужен официант"
-            subtitle="Быстрый вызов"
+            title="Call waiter"
+            subtitle="Quick request"
             icon={<SmallIcon name="user" />}
             onClick={() => send("WAITER")}
           />
 
           <ActionCard
             disabled={cooldown}
-            title="Срочно кальянщик"
-            subtitle="Быстрый вызов"
+            title="Urgent hookah service"
+            subtitle="Quick request"
             icon={<SmallIcon name="zap" />}
             onClick={() => send("HOOKAH")}
           />
 
           <ActionCard
             disabled={cooldown}
-            title="Оплата"
-            subtitle="Карта / Наличные"
+            title="Payment"
+            subtitle="Card / Cash"
             icon={<SmallIcon name="card" />}
             onClick={() => setPayOpen(true)}
           />
@@ -215,12 +213,12 @@ export default function CallPage() {
 
         <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
           <div className="text-sm font-semibold text-white">
-            Сообщение персоналу
+            Message to staff
           </div>
 
           <textarea
             className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/40 outline-none"
-            placeholder="Например: «Горит кальян», «Подойти к столику»"
+            placeholder='For example: "Hookah is burning", "Please come to the table"'
             value={msg}
             onChange={(e) => setMsg(e.target.value)}
             rows={3}
@@ -231,7 +229,7 @@ export default function CallPage() {
             className="mt-3 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
             onClick={() => send("HELP", msg)}
           >
-            Отправить
+            Send
           </button>
         </div>
 
@@ -250,4 +248,4 @@ export default function CallPage() {
       </main>
     </RequireTable>
   );
-}
+} 

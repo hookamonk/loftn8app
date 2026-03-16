@@ -21,10 +21,7 @@ export function CartBar() {
 
   if (!mounted) return null;
   if (loading) return null;
-
-  // ✅ anon не видит корзину вообще
   if (!me?.authenticated) return null;
-
   if (count === 0) return null;
 
   return (
@@ -34,7 +31,7 @@ export function CartBar() {
           href="/cart"
           className="flex items-center justify-between rounded-3xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.45)]"
         >
-          <div className="text-sm font-semibold text-white">Корзина · {count}</div>
+          <div className="text-sm font-semibold text-white">Cart · {count}</div>
           <div className="text-sm font-semibold text-white">{total} Kč</div>
         </Link>
       </div>

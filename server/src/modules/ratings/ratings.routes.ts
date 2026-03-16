@@ -25,7 +25,7 @@ async function attachSessionToActiveShiftIfNeeded(sessionId: string) {
       shiftId: true,
       table: { select: { venueId: true } },
     },
-  });
+  }); 
 
   if (!session) throw new HttpError(401, "SESSION_INVALID", "Session invalid");
   if (session.shiftId) return session;

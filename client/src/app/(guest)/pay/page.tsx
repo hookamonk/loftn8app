@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 function Stars({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   return (
     <div className="flex gap-1">
-      {[1,2,3,4,5].map((n) => (
+      {[1, 2, 3, 4, 5].map((n) => (
         <button
           key={n}
           type="button"
@@ -66,7 +66,7 @@ export default function PayPage() {
       {step === "pay" ? (
         <div className="mt-4 space-y-3">
           <button className="w-full rounded-xl bg-black px-4 py-3 text-left text-white" onClick={() => requestPay("CARD")}>
-            Pay by card (call staff with terminal)
+            Pay by card (Terminal)
           </button>
           <button className="w-full rounded-xl border bg-white px-4 py-3 text-left" onClick={() => requestPay("CASH")}>
             Pay by cash (call staff)

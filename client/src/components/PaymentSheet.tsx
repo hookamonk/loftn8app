@@ -17,27 +17,27 @@ export function PaymentSheet({
         className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#0d0d0d] p-4 shadow-[0_30px_120px_rgba(0,0,0,0.7)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="text-sm font-semibold text-white">К вам подойдут с терминалом или счётом.</div>
+        <div className="text-sm font-semibold text-white">A staff member will come to you with a terminal or the bill.</div>
 
         <button
           className="mt-3 w-full rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-black"
           onClick={() => onPick("CARD")}
         >
-          Картой (терминал)
+          Card (terminal)
         </button>
 
         <button
           className="mt-2 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white"
           onClick={() => onPick("CASH")}
         >
-          Наличными
+          Cash
         </button>
 
         <button
           className="mt-3 w-full rounded-3xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/70"
           onClick={onClose}
         >
-          Закрыть
+          Close
         </button>
       </div>
     </div>

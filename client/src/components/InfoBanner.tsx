@@ -13,10 +13,10 @@ export function InfoBanner() {
       <div className="rounded-xl border bg-yellow-50 p-3 text-sm">
         <div className="font-semibold">Bonus / Cashback</div>
         <div className="mt-1 text-gray-700">
-          Зарегистрируйтесь, чтобы получать кэшбэк и видеть историю бонусов.
+          Register to get cashback and see your bonus history.
         </div>
         <Link href="/auth" className="mt-2 inline-block underline">
-          Зарегистрироваться
+          Register
         </Link>
       </div>
     </div>

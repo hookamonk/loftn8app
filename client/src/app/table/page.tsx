@@ -6,7 +6,6 @@ import { Html5Qrcode } from "html5-qrcode";
 function extractTableCode(rawInput: string): string | null {
   const raw = String(rawInput || "").trim();
 
-  // Полная ссылка
   try {
     const url = new URL(raw);
 
@@ -22,11 +21,8 @@ function extractTableCode(rawInput: string): string | null {
       if (/^\d+$/.test(v)) return `T${v}`;
       if (/^T\d+$/.test(v)) return v;
     }
-  } catch {
-    // not URL
-  }
+  } catch {}
 
-  // /t/T1
   if (/^\/t\/T?\d+$/i.test(raw)) {
     const m = raw.match(/\/t\/(T?\d+)$/i);
     if (m?.[1]) {
@@ -35,11 +31,8 @@ function extractTableCode(rawInput: string): string | null {
     }
   }
 
-  // T1
   const compact = raw.toUpperCase().replace(/\s+/g, "");
   if (/^T\d+$/.test(compact)) return compact;
-
-  // 1
   if (/^\d+$/.test(compact)) return `T${compact}`;
 
   return null;
@@ -69,7 +62,7 @@ export default function TablePage() {
     setErr(null);
     const code = extractTableCode(table);
     if (!code) {
-      setErr("Введите номер стола");
+      setErr("Enter the table number");
       return;
     }
     goToTable(code);
@@ -84,15 +77,11 @@ export default function TablePage() {
       if (state === 2 || state === 1) {
         await scanner.stop();
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     try {
       scanner.clear();
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     scannerRef.current = null;
   };
@@ -101,7 +90,7 @@ export default function TablePage() {
     const code = extractTableCode(decodedText);
 
     if (!code) {
-      setScanErr("QR считан, но формат не распознан. Лучше использовать короткий QR: T1, T2, T3.");
+      setScanErr("QR was scanned, but the format was not recognized. It is better to use a short QR like T1, T2, T3.");
       return;
     }
 
@@ -117,10 +106,9 @@ export default function TablePage() {
 
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error("Нет доступа к камере. Используйте фото QR или введите номер вручную.");
+        throw new Error("No camera access. Please use a QR photo or enter the table number manually.");
       }
 
-      // Сначала пробуем получить доступ, чтобы браузер раскрыл реальные камеры
       const warmup = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: false,
@@ -129,10 +117,9 @@ export default function TablePage() {
 
       const cameras = await Html5Qrcode.getCameras();
       if (!cameras?.length) {
-        throw new Error("Камера не найдена. Используйте фото QR или введите номер вручную.");
+        throw new Error("Camera not found. Please use a QR photo or enter the table number manually.");
       }
 
-      // Стараемся выбрать заднюю
       const rear =
         cameras.find((c) => /back|rear|environment|wide/i.test(c.label)) ||
         cameras[cameras.length - 1];
@@ -146,17 +133,14 @@ export default function TablePage() {
           fps: 8,
           aspectRatio: 1,
           disableFlip: false,
-          // qrbox убираем, чтобы искать по всему кадру
         },
         async (decodedText) => {
           await handleDecoded(decodedText);
         },
-        () => {
-          // ignore decode noise
-        }
+        () => {}
       );
     } catch (e: any) {
-      setScanErr(e?.message ?? "Не удалось запустить сканер");
+      setScanErr(e?.message ?? "Failed to start scanner");
       await stopScan();
     } finally {
       setStartingScan(false);
@@ -175,13 +159,11 @@ export default function TablePage() {
 
       try {
         scanner.clear();
-      } catch {
-        // ignore
-      }
+      } catch {}
 
       await handleDecoded(decodedText);
     } catch (e: any) {
-      setScanErr(e?.message ?? "Не удалось прочитать QR с фото");
+      setScanErr(e?.message ?? "Failed to read QR from image");
     } finally {
       setProcessingFile(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -207,12 +189,12 @@ export default function TablePage() {
         <div className="fixed inset-0 z-50 bg-black/70 p-4">
           <div className="mx-auto max-w-md rounded-3xl border border-white/10 bg-[rgba(20,20,20,0.92)] p-4 backdrop-blur">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-white">Сканирование QR</div>
+              <div className="text-sm font-semibold text-white">Scan QR</div>
               <button
                 className="text-xs text-white/70 underline underline-offset-4"
                 onClick={() => setScanOpen(false)}
               >
-                Закрыть
+                Close
               </button>
             </div>
 
@@ -226,12 +208,12 @@ export default function TablePage() {
               </div>
             ) : (
               <div className="mt-3 text-xs text-white/60">
-                Наведи камеру на QR на столе. Лучше работают короткие QR: T1, T2, T3.
+                Point the camera at the QR code on the table. Short QR codes work best: T1, T2, T3.
               </div>
             )}
 
             {startingScan ? (
-              <div className="mt-2 text-xs text-white/50">Запускаем камеру…</div>
+              <div className="mt-2 text-xs text-white/50">Starting camera…</div>
             ) : null}
 
             <div className="mt-4">
@@ -250,7 +232,7 @@ export default function TablePage() {
                 onClick={() => fileInputRef.current?.click()}
                 disabled={processingFile}
               >
-                {processingFile ? "Обрабатываем фото…" : "Сканировать QR с фото / камеры"}
+                {processingFile ? "Processing image…" : "Scan QR from image / camera"}
               </button>
             </div>
           </div>
@@ -260,12 +242,12 @@ export default function TablePage() {
       <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
         <div className="mb-4">
           <div className="text-[11px] tracking-[0.28em] text-white/55">LOFT №8</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">Выбор стола</h1>
-          <div className="mt-1 text-xs text-white/60">Введите номер стола или отсканируйте QR</div>
+          <h1 className="mt-1 text-2xl font-bold text-white">Select table</h1>
+          <div className="mt-1 text-xs text-white/60">Enter the table number or scan the QR code</div>
         </div>
 
         <div className="rounded-3xl border border-white/10 bg-[rgba(20,20,20,0.72)] p-4 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur">
-          <label className="text-xs text-white/60">Номер стола</label>
+          <label className="text-xs text-white/60">Table number</label>
 
           <div className="mt-2 flex gap-2">
             <input
@@ -274,7 +256,7 @@ export default function TablePage() {
                 setErr(null);
                 setTable(e.target.value);
               }}
-              placeholder="Например: 3"
+              placeholder="For example: 3"
               className="h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
               inputMode="text"
             />
@@ -283,7 +265,7 @@ export default function TablePage() {
               disabled={!canGo}
               className="h-12 shrink-0 rounded-2xl bg-white px-5 text-sm font-semibold text-black disabled:opacity-50"
             >
-              Далее
+              Next
             </button>
           </div>
 
@@ -301,10 +283,10 @@ export default function TablePage() {
               setScanOpen(true);
             }}
           >
-            Отсканировать QR
+            Scan QR
           </button>
         </div>
       </div>
     </main>
   );
-} 
+}

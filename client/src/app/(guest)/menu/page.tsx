@@ -54,7 +54,7 @@ function Qty({
         ].join(" ")}
         onClick={onPlus}
       >
-        Добавить
+        Add
       </button>
     );
   }
@@ -69,7 +69,7 @@ function Qty({
           disabled ? "opacity-40" : "",
         ].join(" ")}
         onClick={onMinus}
-        aria-label="Уменьшить"
+        aria-label="Decrease"
       >
         −
       </button>
@@ -82,7 +82,7 @@ function Qty({
           disabled ? "opacity-40" : "",
         ].join(" ")}
         onClick={onPlus}
-        aria-label="Увеличить"
+        aria-label="Increase"
       >
         +
       </button>
@@ -91,16 +91,15 @@ function Qty({
 }
 
 const SECTION_LABEL: Record<MenuSection, string> = {
-  DISHES: "Блюда",
-  DRINKS: "Напитки",
-  HOOKAH: "Кальян",
+  DISHES: "Dishes",
+  DRINKS: "Drinks",
+  HOOKAH: "Hookah",
 };
 
 function firstSection(categories: MenuCategory[]): MenuSection {
   return (categories[0]?.section as MenuSection) ?? "DISHES";
 }
 
-// "SPIRITS · Rum" => { group: "SPIRITS", sub: "Rum" }
 function splitCatName(name: string): { group: string; sub: string | null } {
   const sep = " · ";
   if (!name.includes(sep)) return { group: name.trim(), sub: null };
@@ -109,13 +108,12 @@ function splitCatName(name: string): { group: string; sub: string | null } {
 }
 
 type CatGroup = {
-  key: string; // e.g. "SPIRITS"
-  label: string; // display label
-  sort: number; // min sort among cats
-  cats: MenuCategory[]; // leaf categories in this group
+  key: string;
+  label: string;
+  sort: number;
+  cats: MenuCategory[];
 };
 
-// ✅ для глобального поиска добавляем метаданные (категория/секция)
 type SearchItem = MenuItem & {
   __catId?: number;
   __catName?: string;
@@ -148,9 +146,6 @@ function MenuPage() {
     const load = async () => {
       try {
         const m = await api<MenuResponse>("/menu");
-
-        // ✅ фильтруем пустые категории (без активных items),
-        // чтобы “мусор” из старых сидов не показывался
         const catsWithItems = (m.categories ?? []).filter((c) => (c.items?.length ?? 0) > 0);
 
         setData({ ...m, categories: catsWithItems });
@@ -198,7 +193,6 @@ function MenuPage() {
       g.cats.push(c);
     }
 
-    // sort groups + cats
     for (const [sec, list] of map.entries()) {
       list.sort((a, b) => a.sort - b.sort);
       for (const g of list) g.cats.sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
@@ -247,14 +241,11 @@ function MenuPage() {
     return map;
   }, [items]);
 
-  // ✅ ПРАВКА №5: глобальный поиск по всему меню
   const filteredItems = useMemo<SearchItem[]>(() => {
     const query = q.trim().toLowerCase();
 
-    // если нет поиска — как раньше: только активная категория
     if (!query) return (activeCat?.items ?? []) as SearchItem[];
 
-    // если есть поиск — ищем по всем категориям/секциям
     const hits: SearchItem[] = [];
     for (const c of cats) {
       const sec = c.section as MenuSection;
@@ -279,9 +270,9 @@ function MenuPage() {
   const needAuthToast = () => {
     push({
       kind: "info",
-      title: "Нужен аккаунт",
-      message: "Чтобы заказывать, нужно войти или зарегистрироваться.",
-      action: { label: "Войти", href: "/auth" },
+      title: "Account required",
+      message: "To place an order, please sign in or register.",
+      action: { label: "Sign in", href: "/auth" },
     });
   };
 
@@ -290,9 +281,9 @@ function MenuPage() {
     add(i);
     push({
       kind: "success",
-      title: "Добавлено",
+      title: "Added",
       message: i.name,
-      action: { label: "В корзину", href: "/cart" },
+      action: { label: "Cart", href: "/cart" },
     });
   };
 
@@ -308,16 +299,16 @@ function MenuPage() {
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
         <div className="mb-4">
           <div className="text-[11px] tracking-[0.28em] text-white/55">LOFT №8</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">Меню</h1>
-          <div className="mt-1 text-xs text-white/60">Заказывайте в 1-2 клика</div>
+          <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
+          <div className="mt-1 text-xs text-white/60">Order in 1–2 taps</div>
         </div>
 
         {!authLoading && !canOrder ? (
           <div className="mt-6 grid min-h-[45vh] place-items-center">
             <div className="w-full rounded-[28px] border border-white/10 bg-white/6 p-5 text-center backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
-              <div className="text-base font-semibold text-white">Вы в режиме гостя</div>
+              <div className="text-base font-semibold text-white">You are in guest mode</div>
               <div className="mt-2 text-sm text-white/70">
-                Без регистрации доступен только раздел <b>Персонал</b>.
+                Without registration, only the <b>Staff</b> section is available.
               </div>
 
               <div className="mt-4 flex justify-center gap-2">
@@ -325,14 +316,14 @@ function MenuPage() {
                   className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white"
                   href="/call"
                 >
-                  Персонал
+                  Staff
                 </Link>
                 <Link className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-black" href="/auth">
-                  Войти / Регистрация
+                  Sign in / Register
                 </Link>
               </div>
 
-              <div className="mt-3 text-[11px] text-white/55">Зарегистрируйтесь, чтобы заказывать.</div>
+              <div className="mt-3 text-[11px] text-white/55">Register to place orders.</div>
             </div>
           </div>
         ) : (
@@ -340,7 +331,7 @@ function MenuPage() {
             <div className="rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
               <input
                 className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/40 outline-none"
-                placeholder="Поиск по меню…"
+                placeholder="Search the menu…"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
@@ -368,7 +359,6 @@ function MenuPage() {
                   ))}
               </div>
 
-              {/* ✅ groups row */}
               <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
                 {sectionGroups.map((g) => (
                   <Pill
@@ -384,7 +374,6 @@ function MenuPage() {
                 ))}
               </div>
 
-              {/* ✅ dropdown for subcategories внутри группы */}
               {showSubDropdown && activeGroup ? (
                 <div className="mt-2">
                   <div className="relative">
@@ -418,10 +407,9 @@ function MenuPage() {
               ) : null}
             </div>
 
-            {/* ✅ cards */}
             <div className="mt-4 space-y-3">
               {isSearching ? (
-                <div className="px-1 text-xs text-white/55">Найдено: {filteredItems.length}</div>
+                <div className="px-1 text-xs text-white/55">Found: {filteredItems.length}</div>
               ) : null}
 
               {filteredItems.map((i) => {
@@ -438,7 +426,6 @@ function MenuPage() {
                     className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]"
                   >
                     <div className="flex items-center gap-3">
-                      {/* LEFT: PHOTO */}
                       <div className="h-[92px] w-[92px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
                         {i.imageUrl ? (
                           <img
@@ -457,7 +444,6 @@ function MenuPage() {
                         </div>
                       </div>
 
-                      {/* MIDDLE */}
                       <div className="min-w-0 flex-1">
                         {meta ? <div className="text-[11px] text-white/55">{meta}</div> : null}
 
@@ -470,7 +456,6 @@ function MenuPage() {
                         <div className="mt-2 text-sm font-semibold text-white">{i.priceCzk} Kč</div>
                       </div>
 
-                      {/* RIGHT */}
                       <div className="shrink-0">
                         <Qty qty={qty} disabled={!canOrder} onMinus={() => onMinus(i)} onPlus={() => onPlus(i)} />
                       </div>
@@ -481,7 +466,7 @@ function MenuPage() {
 
               {filteredItems.length === 0 ? (
                 <div className="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
-                  Ничего не найдено.
+                  Nothing found.
                 </div>
               ) : null}
             </div>

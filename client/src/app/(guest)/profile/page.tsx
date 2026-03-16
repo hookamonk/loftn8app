@@ -33,7 +33,7 @@ export default function ProfilePage() {
       push({ kind: "error", title: "Ошибка", message: e?.message ?? "Failed" });
     } finally {
       setBusy(false);
-    }
+    } 
   };
 
   return (

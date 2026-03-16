@@ -19,7 +19,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   const [ready, setReady] = useState(false);
-  const [err, setErr] = useState<string | null>(null); 
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,9 +32,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
         await api("/guest/me");
         if (!cancelled) setReady(true);
         return;
-      } catch {
-        // ignore
-      }
+      } catch {}
 
       const tableCode =
         queryTable ||
@@ -60,7 +58,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
           }
 
           if (!cancelled) {
-            setErr(e?.message ?? "Не удалось создать сессию стола");
+            setErr(e?.message ?? "Failed to create table session");
           }
 
           setTimeout(() => {
@@ -72,7 +70,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
       }
 
       if (!cancelled) {
-        setErr("Не выбран стол. Перенаправляем на экран выбора…");
+        setErr("No table selected. Redirecting to table selection…");
       }
 
       setTimeout(() => {
@@ -91,14 +89,14 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
     return (
       <div className="mx-auto max-w-md p-4">
         <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
-          <div className="text-sm font-semibold text-white">Нужен стол</div>
-          <div className="mt-2 text-xs text-white/70">{err ?? "Подключаем стол…"}</div>
+          <div className="text-sm font-semibold text-white">Table required</div>
+          <div className="mt-2 text-xs text-white/70">{err ?? "Connecting table…"}</div>
 
           <button
             className="mt-3 w-full rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-black"
             onClick={() => router.replace("/table")}
           >
-            Выбрать стол
+            Select table
           </button>
         </div>
       </div>
