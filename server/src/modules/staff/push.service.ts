@@ -7,7 +7,7 @@ type PushPayload = {
   title: string;
   body: string;
   url?: string;
-  tag?: string; // ВАЖНО: должен быть уникальный для события, иначе нотификации “слипаются”
+  tag?: string;
   ts?: number;
 };
 
@@ -21,7 +21,7 @@ function ensureConfiguredOrThrow() {
   const priv = env.VAPID_PRIVATE_KEY;
 
   if (!subject || !pub || !priv) {
-    throw new Error("WebPush not configured: set VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY in .env");
+    throw new Error("WebPush not configured: set VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY");
   }
 
   webpush.setVapidDetails(subject, pub, priv);
@@ -41,7 +41,6 @@ async function sendToSubscriptions(
   const safePayload: PushPayload = {
     ...payload,
     ts: payload.ts ?? Date.now(),
-    // если вдруг кто-то вызвал без tag — не даём “слипнуться”
     tag: payload.tag ?? uniq("evt"),
   };
 
@@ -58,9 +57,7 @@ async function sendToSubscriptions(
           { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
           json,
           {
-            // ✅ важно для сна/оффлайна: держим 1 час
-            TTL: 60 * 60,
-            // ✅ просим высокую срочность (не всегда влияет, но полезно)
+            TTL: 60 * 60 * 4,
             urgency: "high" as any,
           }
         );
@@ -69,16 +66,14 @@ async function sendToSubscriptions(
         failed += 1;
 
         const status = e?.statusCode;
-        // протухшие подписки чистим
         if (status === 404 || status === 410) {
           removed += 1;
           await prisma.staffPushSubscription.delete({ where: { id: s.id } }).catch(() => {});
         }
 
-        // лог — чтобы ты видел причины
         console.warn("webpush failed", {
           status,
-          endpoint: s.endpoint?.slice(0, 40) + "...",
+          endpoint: s.endpoint?.slice(0, 60) + "...",
           msg: e?.message,
         });
       }
@@ -100,9 +95,6 @@ export async function pushToStaff(staffId: string, payload: PushPayload) {
   return { sent: r.ok, failed: r.failed, removed: r.removed };
 }
 
-/**
- * Отправить пуш всем staff ролям в точке
- */
 export async function pushToVenueRoles(venueId: number, roles: StaffRole[], payload: PushPayload) {
   const staff = await prisma.staffUser.findMany({
     where: { venueId, isActive: true, role: { in: roles } },
@@ -123,12 +115,6 @@ export async function pushToVenueRoles(venueId: number, roles: StaffRole[], payl
   return { sent: r.ok, failed: r.failed, removed: r.removed };
 }
 
-/**
- * ✅ FIX: ранее было по category.name ("Hookah/Kitchen/Bar"), но ты перешёл на MenuSection.
- * Теперь:
- *  - HOOKAH секция -> пуш HOOKAH + MANAGER
- *  - есть DISHES/DRINKS -> пуш WAITER + MANAGER
- */
 export async function notifyOrderCreated(orderId: string) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -153,17 +139,16 @@ export async function notifyOrderCreated(orderId: string) {
 
   const sections = order.items.map((it) => it.menuItem.category.section as MenuSection);
   const hasHookah = sections.includes("HOOKAH");
-  const hasNonHookah = sections.some((s) => s !== "HOOKAH"); // DISHES/DRINKS
+  const hasNonHookah = sections.some((s) => s !== "HOOKAH");
 
   const roles: StaffRole[] = ["MANAGER"];
   if (hasHookah) roles.push("HOOKAH");
   if (hasNonHookah) roles.push("WAITER");
 
   await pushToVenueRoles(venueId, Array.from(new Set(roles)), {
-    title: "New order",
-    body: `Table ${tableCode}`,
-    url: "/staff/orders?status=NEW",
-    // ✅ уникальный tag по событию
+    title: "Новый заказ",
+    body: `Стол ${tableCode}`,
+    url: "/staff/orders",
     tag: `order_new:${order.id}`,
     ts: Date.now(),
   });
@@ -185,10 +170,19 @@ export async function notifyCallCreated(callId: string) {
   if (call.type === "HELP") roles.push("WAITER", "HOOKAH");
   if (call.type === "BILL") roles.push("WAITER");
 
+  const kind =
+    call.type === "HOOKAH"
+      ? "Нужен кальянщик"
+      : call.type === "WAITER"
+      ? "Нужен официант"
+      : call.type === "BILL"
+      ? "Запрос оплаты"
+      : "Нужна помощь";
+
   await pushToVenueRoles(venueId, Array.from(new Set(roles)), {
-    title: "New call",
-    body: `${call.type} • Table ${tableCode}`,
-    url: "/staff/calls?status=NEW",
+    title: "Новый вызов",
+    body: `${kind} • Стол ${tableCode}`,
+    url: "/staff/calls",
     tag: `call_new:${call.id}`,
     ts: Date.now(),
   });
@@ -203,9 +197,9 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
   if (pr.status !== "PENDING") return;
 
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
-    title: "Payment requested",
-    body: `${pr.method} • Table ${pr.table.code}`,
-    url: "/staff/payments?status=PENDING",
+    title: "Запрос оплаты",
+    body: `${pr.method === "CARD" ? "Карта" : "Наличные"} • Стол ${pr.table.code}`,
+    url: "/staff/payments",
     tag: `payment_pending:${pr.id}`,
     ts: Date.now(),
   });

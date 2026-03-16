@@ -11,31 +11,27 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
+  let cancelled = false;
 
-    async function run() {
-      if (!staff) {
-        router.replace("/staff/login");
-        return;
-      }
+  async function run() {
+    const r = await getStaffMe();
 
-      const r = await getStaffMe();
-      if (!r.ok) {
-        clear();
-        router.replace("/staff/login");
-        return;
-      }
-
-      setStaff(r.data.staff);
-
-      if (!cancelled) setReady(true);
+    if (!r.ok) {
+      clear();
+      router.replace("/staff/login");
+      return;
     }
 
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [staff, router, clear, setStaff]);
+    setStaff(r.data.staff);
+
+    if (!cancelled) setReady(true);
+  }
+
+  void run();
+  return () => {
+    cancelled = true;
+  };
+}, [router, clear, setStaff]);
 
   if (!ready) {
     return (
@@ -49,4 +45,4 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>;
-}
+} 

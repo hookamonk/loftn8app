@@ -16,6 +16,7 @@ import { attachStaffRealtime } from "@/lib/staffRealtime";
 import { ensurePushSubscribed } from "@/lib/staffPush";
 import { armAudio } from "@/lib/staffAlerts";
 import { useStaffSession } from "@/providers/staffSession";
+import { useToast } from "@/providers/toast";
 
 function StatCard({
   title,
@@ -27,19 +28,24 @@ function StatCard({
   hint: string;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-2xl backdrop-blur">
+    <div className="rounded-[24px] border border-white/10 bg-white/6 p-4 shadow-2xl backdrop-blur">
       <div className="text-xs text-white/60">{title}</div>
-      <div className="mt-1 text-3xl font-semibold">{value}</div>
-      <div className="mt-2 text-xs text-white/40">{hint}</div>
+      <div className="mt-2 text-3xl font-semibold text-white">{value}</div>
+      <div className="mt-2 text-xs text-white/45">{hint}</div>
     </div>
   );
 }
 
+const card =
+  "rounded-[28px] border border-white/10 bg-white/6 p-4 shadow-2xl backdrop-blur-xl";
 const btn =
-  "rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 transition disabled:opacity-50";
+  "rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-50";
+const btnGhost =
+  "rounded-2xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white";
 
 export default function StaffSummaryPage() {
   const { staff } = useStaffSession();
+  const { push } = useToast();
 
   const [data, setData] = useState<StaffSummary | null>(null);
   const [shift, setShift] = useState<ActiveShift | null>(null);
@@ -54,9 +60,7 @@ export default function StaffSummaryPage() {
   const loadShift = async () => {
     const r = await getCurrentShift();
     if (!r.ok) {
-      if (r.status === 401) {
-        setErr("Staff auth required");
-      }
+      if (r.status === 401) setErr("Нужен вход");
       return;
     }
     setShift(r.data.shift);
@@ -70,15 +74,11 @@ export default function StaffSummaryPage() {
 
     if (!r.ok) {
       if (r.status === 409) {
-        setData({
-          newOrders: 0,
-          newCalls: 0,
-          pendingPayments: 0,
-        });
+        setData({ newOrders: 0, newCalls: 0, pendingPayments: 0 });
         return;
       }
 
-      if (!silent) setErr(r.error || "Something went wrong");
+      if (!silent) setErr(r.error || "Ошибка");
       return;
     }
 
@@ -91,8 +91,8 @@ export default function StaffSummaryPage() {
   };
 
   const { tick, isRunning } = usePolling(() => loadAll({ silent: true }), {
-    activeMs: 5000,
-    idleMs: 15000,
+    activeMs: 4000,
+    idleMs: 12000,
     immediate: true,
     enabled: !isAdmin,
   });
@@ -114,11 +114,13 @@ export default function StaffSummaryPage() {
     const r = await ensurePushSubscribed();
     if (!r.ok) {
       setErr(r.error || "Не удалось включить уведомления");
+      push({ kind: "error", title: "Ошибка", message: r.error || "Не удалось включить уведомления" });
       return;
     }
 
     await armAudio();
-    setPushStatus("✅ Уведомления включены");
+    setPushStatus("Уведомления включены");
+    push({ kind: "success", title: "Готово", message: "Уведомления включены" });
   };
 
   const onOpenShift = async () => {
@@ -133,6 +135,7 @@ export default function StaffSummaryPage() {
       return;
     }
 
+    push({ kind: "success", title: "Смена открыта" });
     await loadAll({ silent: false });
   };
 
@@ -148,6 +151,7 @@ export default function StaffSummaryPage() {
       return;
     }
 
+    push({ kind: "success", title: "Вы вошли в смену" });
     await loadAll({ silent: false });
   };
 
@@ -165,6 +169,7 @@ export default function StaffSummaryPage() {
       return;
     }
 
+    push({ kind: "success", title: "Смена закрыта" });
     await loadAll({ silent: false });
   };
 
@@ -175,18 +180,18 @@ export default function StaffSummaryPage() {
     return (
       <main className="min-h-screen bg-black text-white">
         <div className="mx-auto max-w-md px-4 py-6">
-          <div className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-2xl backdrop-blur">
+          <div className={card}>
             <div className="text-lg font-semibold">Режим администратора</div>
             <div className="mt-2 text-sm text-white/60">
-              Для вас основная рабочая область — это admin panel.
+              Основная рабочая область для вас — админ-панель.
             </div>
 
-            <div className="mt-4 flex gap-2">
+            <div className="mt-4">
               <Link
                 href="/staff/admin"
-                className="rounded-2xl border border-white/10 bg-white/15 px-4 py-3 text-sm font-semibold text-white hover:bg-white/20"
+                className="inline-flex rounded-2xl border border-white/10 bg-white/15 px-4 py-3 text-sm font-semibold text-white hover:bg-white/20"
               >
-                Открыть admin panel
+                Открыть админ-панель
               </Link>
             </div>
           </div>
@@ -198,32 +203,29 @@ export default function StaffSummaryPage() {
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto max-w-md px-4 py-6">
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-2xl backdrop-blur">
+        <div className={card}>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-lg font-semibold">Сводка</div>
+              <div className="text-xl font-semibold">Сводка</div>
               <div className="mt-1 text-xs text-white/50">
-                Auto-refresh: {isRunning ? "ON" : "OFF"}
-                {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
+                Автообновление: {isRunning ? "включено" : "выключено"}
+                {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
               </div>
-              <div className="mt-2 text-xs text-white/60">
-                {shift
-                  ? `Смена открыта • ${new Date(shift.openedAt).toLocaleString()}`
-                  : "Активной смены нет"}
+              <div className="mt-2 text-sm text-white/65">
+                {shift ? `Смена открыта • ${new Date(shift.openedAt).toLocaleString()}` : "Смена сейчас не открыта"}
               </div>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <button className={btn} onClick={onEnableNotifications}>
-                🔔 Уведомления
-              </button>
-              <button className={btn} onClick={() => void tick()}>
-                ↻ Обновить
-              </button>
-            </div>
+            <button className={btnGhost} onClick={() => void tick()}>
+              Обновить
+            </button>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 gap-2">
+          <div className="mt-4 grid gap-2">
+            <button className={btn} onClick={onEnableNotifications}>
+              Включить уведомления
+            </button>
+
             {!shift && isManager ? (
               <button className={btn} disabled={busy} onClick={onOpenShift}>
                 Открыть смену
@@ -237,15 +239,15 @@ export default function StaffSummaryPage() {
             ) : null}
 
             {shift && isManager ? (
-              <button className={btn} disabled={busy} onClick={onCloseShift}>
+              <button className={btnGhost} disabled={busy} onClick={onCloseShift}>
                 Закрыть смену
               </button>
             ) : null}
           </div>
 
           {shift?.participants?.length ? (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="text-xs text-white/50">Участники активной смены</div>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3">
+              <div className="text-xs text-white/50">Кто сейчас в смене</div>
               <div className="mt-2 space-y-2">
                 {shift.participants.map((p) => (
                   <div key={p.id} className="text-sm text-white/85">
@@ -270,11 +272,11 @@ export default function StaffSummaryPage() {
         </div>
 
         <div className="mt-4 grid grid-cols-3 gap-3">
-          <StatCard title="Новые заказы" value={data?.newOrders ?? 0} hint="ожидают принятия" />
-          <StatCard title="Вызовы" value={data?.newCalls ?? 0} hint="официант / кальян / счёт" />
-          <StatCard title="Оплаты" value={data?.pendingPayments ?? 0} hint="ожидают обработки" />
+          <StatCard title="Новые заказы" value={data?.newOrders ?? 0} hint="ждут принятия" />
+          <StatCard title="Вызовы" value={data?.newCalls ?? 0} hint="нужны действия" />
+          <StatCard title="Оплаты" value={data?.pendingPayments ?? 0} hint="ждут подтверждения" />
         </div>
       </div>
     </main>
   );
-}
+} 

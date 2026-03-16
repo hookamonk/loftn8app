@@ -1,8 +1,7 @@
-import { ApiResult } from "@/lib/staffApi";
-import { primeAlerts } from "@/lib/staffAlerts"; // ✅ add (звук/вибро разблок)
+import type { ApiResult } from "@/lib/staffApi";
+import { primeAlerts } from "@/lib/staffAlerts";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:4000";
+const API_BASE = "/api";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -15,36 +14,16 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiResult<
   let json: any = null;
   try {
     json = text ? JSON.parse(text) : null;
-  } catch {}
+  } catch {
+    // ignore
+  }
 
   if (!res.ok) {
     const msg = (json && (json.message || json.error)) || `HTTP_${res.status}`;
     return { ok: false, error: msg, status: res.status };
   }
+
   return { ok: true, data: json as T };
-}
-
-export async function getVapidKey(): Promise<ApiResult<{ publicKey: string }>> {
-  return apiFetch<{ ok: true; publicKey: string }>("/staff/push/vapid-public-key").then((r) =>
-    r.ok ? { ok: true, data: { publicKey: (r.data as any).publicKey } } : r
-  );
-}
-
-export async function subscribePush(sub: PushSubscription): Promise<ApiResult<{ ok: true }>> {
-  const json = sub.toJSON() as any;
-  return apiFetch<{ ok: true }>("/staff/push/subscribe", {
-    method: "POST",
-    body: JSON.stringify({
-      endpoint: json.endpoint,
-      keys: json.keys,
-      userAgent: navigator.userAgent,
-    }),
-  });
-}
-
-export async function sendTestPush(): Promise<ApiResult<{ ok: true; sent?: number }>> {
-  // ✅ правильный endpoint из backend: POST /staff/push/test-send
-  return apiFetch<{ ok: true; sent?: number }>("/staff/push/test-send", { method: "POST" });
 }
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -56,33 +35,81 @@ function urlBase64ToUint8Array(base64String: string) {
   return output;
 }
 
+export async function getVapidKey(): Promise<ApiResult<{ publicKey: string }>> {
+  return apiFetch<{ publicKey: string }>("/staff/push/vapid-public-key");
+}
+
+export async function subscribePush(sub: PushSubscription): Promise<ApiResult<{ ok: true }>> {
+  const json = sub.toJSON() as any;
+
+  return apiFetch<{ ok: true }>("/staff/push/subscribe", {
+    method: "POST",
+    body: JSON.stringify({
+      endpoint: json.endpoint,
+      keys: json.keys,
+    }),
+  });
+}
+
+export async function unsubscribePush(sub: PushSubscription): Promise<ApiResult<{ ok: true }>> {
+  const json = sub.toJSON() as any;
+
+  return apiFetch<{ ok: true }>("/staff/push/unsubscribe", {
+    method: "POST",
+    body: JSON.stringify({
+      endpoint: json.endpoint,
+    }),
+  });
+}
+
 export async function ensurePushSubscribed(): Promise<ApiResult<{ ok: true }>> {
+  if (typeof window === "undefined") return { ok: false, error: "NO_WINDOW", status: 400 };
   if (!("serviceWorker" in navigator)) return { ok: false, error: "NO_SW", status: 400 };
   if (!("PushManager" in window)) return { ok: false, error: "NO_PUSH", status: 400 };
 
-  const perm = await Notification.requestPermission();
-  if (perm !== "granted") return { ok: false, error: "NOT_ALLOWED", status: 403 };
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    return { ok: false, error: "NOT_ALLOWED", status: 403 };
+  }
 
-  // ✅ важно: вызвать из user gesture (кнопка) — разблокирует звук/вибро
   await primeAlerts();
 
   const reg = await navigator.serviceWorker.register("/sw.js");
-  const existing = await reg.pushManager.getSubscription();
-  if (existing) {
-    const r = await subscribePush(existing);
-    return r.ok ? { ok: true, data: { ok: true } } : r;
+  await navigator.serviceWorker.ready;
+
+  let sub = await reg.pushManager.getSubscription();
+
+  if (!sub) {
+    const keyRes = await getVapidKey();
+    if (!keyRes.ok) return keyRes as any;
+
+    const appServerKey = urlBase64ToUint8Array(keyRes.data.publicKey);
+
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: appServerKey,
+    });
   }
 
-  const keyRes = await getVapidKey();
-  if (!keyRes.ok) return keyRes as any;
+  const saveRes = await subscribePush(sub);
+  if (!saveRes.ok) return saveRes;
 
-  const appServerKey = urlBase64ToUint8Array(keyRes.data.publicKey);
-
-  const sub = await reg.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: appServerKey,
-  });
-
-  const r = await subscribePush(sub);
-  return r.ok ? { ok: true, data: { ok: true } } : r;
+  return { ok: true, data: { ok: true } };
 }
+
+export async function rebindPushIfPossible(): Promise<void> {
+  try {
+    if (typeof window === "undefined") return;
+    if (!("serviceWorker" in navigator)) return;
+
+    const reg = await navigator.serviceWorker.getRegistration("/sw.js");
+    if (!reg) return;
+
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+
+    await subscribePush(sub);
+  } catch {
+    // ignore
+  }
+} 

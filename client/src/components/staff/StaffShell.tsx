@@ -4,7 +4,30 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { staffLogout } from "@/lib/staffApi";
 import { useStaffSession } from "@/providers/staffSession";
-import StaffNav from "@/app/staff/(app)/_components/StaffNav";
+
+function NavLink({
+  href,
+  label,
+  active,
+}: {
+  href: string;
+  label: string;
+  active: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      className={[
+        "rounded-2xl border px-4 py-3 text-sm font-semibold transition whitespace-nowrap",
+        active
+          ? "border-white/20 bg-white/15 text-white"
+          : "border-white/10 bg-white/5 text-white/75 hover:bg-white/10 hover:text-white",
+      ].join(" ")}
+    >
+      {label}
+    </Link>
+  );
+}
 
 export function StaffShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -29,62 +52,45 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <div className={`relative mx-auto p-4 pb-10 ${isAdminPage ? "max-w-7xl" : "max-w-md"}`}>
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-4 backdrop-blur">
+        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="text-xs text-white/50">Loft №8 • Staff</div>
-              <div className="mt-1 text-lg font-semibold">
-                {isAdminPage ? "Админ-панель" : "Панель персонала"}
+              <div className="text-xs tracking-[0.2em] text-white/45">LOFT №8 • STAFF</div>
+              <div className="mt-2 text-xl font-semibold">
+                {isAdminPage ? "Админ-панель" : "Рабочая панель"}
               </div>
 
               {staff ? (
-                <div className="mt-1 text-xs text-white/60">
+                <div className="mt-1 text-sm text-white/60">
                   {staff.username} • {staff.role} • venue #{staff.venueId}
                 </div>
               ) : null}
             </div>
 
             <button
-              className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 transition hover:bg-white/10 hover:text-white"
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
               onClick={onLogout}
             >
               Выйти
             </button>
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-2">
-            {!isAdmin ? (
-              <div className="min-w-0 flex-1">
-                <StaffNav />
-              </div>
-            ) : null}
+          <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+            {!isAdmin && (
+              <>
+                <NavLink href="/staff/summary" label="Сводка" active={pathname.startsWith("/staff/summary")} />
+                <NavLink href="/staff/orders" label="Заказы" active={pathname.startsWith("/staff/orders")} />
+                <NavLink href="/staff/calls" label="Вызовы" active={pathname.startsWith("/staff/calls")} />
+                <NavLink href="/staff/payments" label="Оплаты" active={pathname.startsWith("/staff/payments")} />
+              </>
+            )}
 
             {(isAdmin || isManager) && (
-              <Link
-                href="/staff/admin"
-                className={[
-                  "rounded-2xl border px-3 py-2 text-sm transition",
-                  pathname.startsWith("/staff/admin")
-                    ? "border-white/20 bg-white/15 text-white"
-                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white",
-                ].join(" ")}
-              >
-                Admin
-              </Link>
+              <NavLink href="/staff/admin" label="Админ" active={pathname.startsWith("/staff/admin")} />
             )}
 
             {isAdmin && (
-              <Link
-                href="/staff/summary"
-                className={[
-                  "rounded-2xl border px-3 py-2 text-sm transition",
-                  pathname === "/staff/summary"
-                    ? "border-white/20 bg-white/15 text-white"
-                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white",
-                ].join(" ")}
-              >
-                Staff view
-              </Link>
+              <NavLink href="/staff/summary" label="Staff view" active={pathname === "/staff/summary"} />
             )}
           </div>
         </div>

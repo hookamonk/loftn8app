@@ -21,10 +21,6 @@ function getAudioCtx(): AudioContext | null {
   }
 }
 
-/**
- * ВАЖНО: вызывать из user-gesture (клик по “Включить уведомления”),
- * чтобы браузер разрешил звук дальше.
- */
 export async function primeAlerts(): Promise<void> {
   const ctx = getAudioCtx();
   if (!ctx) return;
@@ -32,14 +28,12 @@ export async function primeAlerts(): Promise<void> {
   try {
     if (ctx.state === "suspended") await ctx.resume();
 
-    // “тихий старт” — чтобы потом не блочило
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     gain.gain.value = 0.0001;
 
     osc.connect(gain);
     gain.connect(ctx.destination);
-
     osc.start();
     osc.stop(ctx.currentTime + 0.01);
 
@@ -49,17 +43,18 @@ export async function primeAlerts(): Promise<void> {
   }
 }
 
-// ✅ чтобы ты мог импортить ровно как у тебя в коде: `import { armAudio } ...`
 export async function armAudio(): Promise<void> {
   return primeAlerts();
 }
 
-export function vibrate(pattern: number[] = [120, 60, 120]) {
+export function vibrate(pattern: number[] = [160, 80, 160]) {
   try {
     if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-      (navigator as any).vibrate?.(pattern);
+      navigator.vibrate?.(pattern);
     }
-  } catch {}
+  } catch {
+    // ignore
+  }
 }
 
 export function beep() {
@@ -68,7 +63,7 @@ export function beep() {
     if (!ctx) return;
 
     const now = Date.now();
-    if (now - lastBeepAt < 900) return;
+    if (now - lastBeepAt < 700) return;
     lastBeepAt = now;
 
     if (!primed || ctx.state === "suspended") return;
@@ -76,20 +71,21 @@ export function beep() {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    osc.type = "sine";
-    osc.frequency.value = 880;
-    gain.gain.value = 0.12;
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(920, ctx.currentTime);
+    gain.gain.setValueAtTime(0.14, ctx.currentTime);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
 
     osc.start();
-    osc.stop(ctx.currentTime + 0.08);
-  } catch {}
+    osc.stop(ctx.currentTime + 0.12);
+  } catch {
+    // ignore
+  }
 }
 
 export function fireInAppAlert(_payload?: StaffPushPayload) {
-  // когда вкладка открыта — вибро + beep (если разлочено)
   vibrate();
   beep();
 }

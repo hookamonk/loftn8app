@@ -13,23 +13,22 @@ export type StaffPushPayload = {
 
 export function useStaffPushEvents(onEvent?: (p: StaffPushPayload) => void) {
   useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
     const handler = (e: MessageEvent) => {
       const data = e.data;
-      if (!data) return;
+      if (!data || data.type !== "STAFF_PUSH") return;
 
-      if (data.type === "STAFF_PUSH") {
-        const p = (data.payload ?? {}) as StaffPushPayload;
+      const payload = (data.payload ?? {}) as StaffPushPayload;
 
-        // звук/вибро имеет смысл только когда вкладка открыта
-        if (document.visibilityState === "visible") {
-          fireInAppAlert(p);
-        }
-
-        onEvent?.(p);
+      if (document.visibilityState === "visible") {
+        fireInAppAlert(payload);
       }
+
+      onEvent?.(payload);
     };
 
-    navigator.serviceWorker?.addEventListener("message", handler);
-    return () => navigator.serviceWorker?.removeEventListener("message", handler);
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
   }, [onEvent]);
 }
