@@ -120,22 +120,6 @@ function RangeButton({
   );
 }
 
-function TableShell({
-  columns,
-  children,
-}: {
-  columns: string[];
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="overflow-hidden rounded-xl border border-slate-200">
-      <div className={`grid bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500`} style={{ gridTemplateColumns: columns.join(" ") }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
 function ShiftDetailsDrawer({
   open,
   onClose,
@@ -157,9 +141,9 @@ function ShiftDetailsDrawer({
       >
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
           <div>
-            <div className="text-lg font-semibold text-slate-900">Shift details</div>
+            <div className="text-lg font-semibold text-slate-900">Детали смены</div>
             <div className="mt-1 text-sm text-slate-500">
-              Подробная статистика смены
+              Подробная статистика по конкретной смене
             </div>
           </div>
           <button
@@ -180,56 +164,56 @@ function ShiftDetailsDrawer({
           {!loading && data ? (
             <div className="space-y-5">
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <StatCard title="Status" value={data.shift.status} />
-                <StatCard title="Opened" value={formatDate(data.shift.openedAt)} />
-                <StatCard title="Closed" value={formatDate(data.shift.closedAt)} />
-                <StatCard title="Revenue" value={`${data.stats.revenueCzk} Kč`} />
-                <StatCard title="Orders" value={data.stats.ordersCount} />
-                <StatCard title="Payments" value={data.stats.paymentsCount} />
-                <StatCard title="Calls" value={data.stats.callsCount} />
-                <StatCard title="Ratings" value={data.stats.ratingsCount} />
-                <StatCard title="Registrations" value={data.stats.registrationsCount} />
+                <StatCard title="Статус" value={data.shift.status} />
+                <StatCard title="Открыта" value={formatDate(data.shift.openedAt)} />
+                <StatCard title="Закрыта" value={formatDate(data.shift.closedAt)} />
+                <StatCard title="Заработок смены" value={`${data.stats.revenueCzk} Kč`} />
+                <StatCard title="Заказы" value={data.stats.ordersCount} />
+                <StatCard title="Оплаты" value={data.stats.paymentsCount} />
+                <StatCard title="Вызовы" value={data.stats.callsCount} />
+                <StatCard title="Оценки" value={data.stats.ratingsCount} />
+                <StatCard title="Регистрации" value={data.stats.registrationsCount} />
               </div>
 
-              <SectionCard title="Shift meta" subtitle="Базовая информация по смене">
+              <SectionCard title="Общая информация" subtitle="Кто открыл / кто закрыл / средние оценки">
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                     <div>
-                      <span className="font-medium text-slate-900">Opened by:</span>{" "}
+                      <span className="font-medium text-slate-900">Открыл:</span>{" "}
                       {data.shift.openedByManager?.username ?? "—"}
                     </div>
                     <div className="mt-2">
-                      <span className="font-medium text-slate-900">Closed by:</span>{" "}
+                      <span className="font-medium text-slate-900">Закрыл:</span>{" "}
                       {data.shift.closedByManager?.username ?? "—"}
                     </div>
                     <div className="mt-2">
-                      <span className="font-medium text-slate-900">Shift ID:</span>{" "}
+                      <span className="font-medium text-slate-900">ID смены:</span>{" "}
                       {data.shift.id}
                     </div>
                   </div>
 
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                     <div>
-                      <span className="font-medium text-slate-900">Avg overall:</span>{" "}
+                      <span className="font-medium text-slate-900">Средняя общая:</span>{" "}
                       {data.stats.avgOverall?.toFixed(1) ?? "—"}
                     </div>
                     <div className="mt-2">
-                      <span className="font-medium text-slate-900">Food:</span>{" "}
+                      <span className="font-medium text-slate-900">Еда:</span>{" "}
                       {data.stats.avgFood?.toFixed(1) ?? "—"}
                     </div>
                     <div className="mt-2">
-                      <span className="font-medium text-slate-900">Drinks:</span>{" "}
+                      <span className="font-medium text-slate-900">Напитки:</span>{" "}
                       {data.stats.avgDrinks?.toFixed(1) ?? "—"}
                     </div>
                     <div className="mt-2">
-                      <span className="font-medium text-slate-900">Hookah:</span>{" "}
+                      <span className="font-medium text-slate-900">Кальян:</span>{" "}
                       {data.stats.avgHookah?.toFixed(1) ?? "—"}
                     </div>
                   </div>
                 </div>
               </SectionCard>
 
-              <SectionCard title="Participants" subtitle="Кто участвовал в смене">
+              <SectionCard title="Участники смены" subtitle="Кто работал в рамках этой смены">
                 <div className="space-y-3">
                   {data.shift.participants.map((p) => (
                     <div key={p.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -242,7 +226,7 @@ function ShiftDetailsDrawer({
                         </div>
                       </div>
                       <div className="mt-2 text-xs text-slate-500">
-                        Joined: {formatDate(p.joinedAt)} • Left: {formatDate(p.leftAt)}
+                        Вошёл: {formatDate(p.joinedAt)} • Вышел: {formatDate(p.leftAt)}
                       </div>
                     </div>
                   ))}
@@ -321,7 +305,7 @@ export default function StaffAdminPage() {
     setShiftLoading(false);
 
     if (!r.ok) {
-      setErr(r.error || "Failed to load shift details");
+      setErr(r.error || "Не удалось загрузить детали смены");
       return;
     }
 
@@ -378,14 +362,11 @@ export default function StaffAdminPage() {
 
   const latestRatings = filteredRatings.slice(0, 6);
   const latestUsers = filteredUsers.slice(0, 6);
-  const topStaff = [...filteredStaff]
-    .sort((a, b) => b.confirmedPaymentsSumCzk - a.confirmedPaymentsSumCzk)
-    .slice(0, 6);
 
   if (!isAllowed) {
     return (
       <main className="rounded-3xl border border-slate-200 bg-white p-8 text-slate-900 shadow-sm">
-        <div className="text-lg font-semibold">Admin panel</div>
+        <div className="text-lg font-semibold">Админ-панель</div>
         <div className="mt-2 text-sm text-slate-500">Доступ только для manager/admin.</div>
       </main>
     );
@@ -397,13 +378,13 @@ export default function StaffAdminPage() {
         <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-              Loft N8 Analytics
+              Loft N8 Аналитика
             </div>
             <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
-              Admin Dashboard
+              Админ-панель
             </div>
             <div className="mt-2 max-w-2xl text-sm text-slate-500">
-              Чистая панель статистики по выручке, сменам, отзывам, пользователям и эффективности персонала.
+              Понятная статистика по выручке, сменам, отзывам, пользователям и персоналу.
             </div>
           </div>
 
@@ -412,7 +393,7 @@ export default function StaffAdminPage() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Поиск: user / table / username / comment"
+                placeholder="Поиск: пользователь / стол / комментарий / логин"
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none placeholder:text-slate-400"
               />
               <button
@@ -425,34 +406,34 @@ export default function StaffAdminPage() {
 
             <div className="flex flex-wrap gap-2">
               <TabButton active={tab === "overview"} onClick={() => setTab("overview")}>
-                Overview
+                Обзор
               </TabButton>
               <TabButton active={tab === "shifts"} onClick={() => setTab("shifts")}>
-                Shifts
+                Смены
               </TabButton>
               <TabButton active={tab === "ratings"} onClick={() => setTab("ratings")}>
-                Ratings
+                Оценки
               </TabButton>
               <TabButton active={tab === "users"} onClick={() => setTab("users")}>
-                Users
+                Пользователи
               </TabButton>
               <TabButton active={tab === "staff"} onClick={() => setTab("staff")}>
-                Staff
+                Персонал
               </TabButton>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <RangeButton active={range === "all"} onClick={() => setRange("all")}>
-                All
+                Всё
               </RangeButton>
               <RangeButton active={range === "today"} onClick={() => setRange("today")}>
-                Today
+                Сегодня
               </RangeButton>
               <RangeButton active={range === "week"} onClick={() => setRange("week")}>
-                7 days
+                7 дней
               </RangeButton>
               <RangeButton active={range === "month"} onClick={() => setRange("month")}>
-                30 days
+                30 дней
               </RangeButton>
             </div>
           </div>
@@ -473,34 +454,34 @@ export default function StaffAdminPage() {
         {!loading && tab === "overview" && summary ? (
           <div className="mt-4 space-y-4">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <StatCard title="Revenue" value={`${summary.totalRevenueCzk} Kč`} hint="подтверждённые оплаты" />
-              <StatCard title="Users" value={summary.usersCount} />
-              <StatCard title="Orders" value={summary.ordersCount} />
-              <StatCard title="Calls" value={summary.callsCount} />
-              <StatCard title="Ratings" value={summary.ratingsCount} />
-              <StatCard title="Confirmed payments" value={summary.confirmedPaymentsCount} />
+              <StatCard title="Выручка" value={`${summary.totalRevenueCzk} Kč`} hint="заработок за выбранный период" />
+              <StatCard title="Пользователи" value={summary.usersCount} />
+              <StatCard title="Заказы" value={summary.ordersCount} />
+              <StatCard title="Вызовы" value={summary.callsCount} />
+              <StatCard title="Оценки" value={summary.ratingsCount} />
+              <StatCard title="Оплаты" value={summary.paymentsCount} />
               <StatCard
-                title="Average rating"
+                title="Средняя оценка"
                 value={summary.avgOverall ? summary.avgOverall.toFixed(1) : "—"}
-                hint={`Food ${summary.avgFood?.toFixed(1) ?? "—"} • Drinks ${summary.avgDrinks?.toFixed(1) ?? "—"} • Hookah ${summary.avgHookah?.toFixed(1) ?? "—"}`}
+                hint={`Еда ${summary.avgFood?.toFixed(1) ?? "—"} • Напитки ${summary.avgDrinks?.toFixed(1) ?? "—"} • Кальян ${summary.avgHookah?.toFixed(1) ?? "—"}`}
               />
               <StatCard
-                title="Shifts"
+                title="Смены"
                 value={summary.shiftsTotal}
-                hint={summary.openShift ? `Open: ${formatDate(summary.openShift.openedAt)}` : "Сейчас смена закрыта"}
+                hint={summary.openShift ? `Открыта: ${formatDate(summary.openShift.openedAt)}` : "Сейчас смена закрыта"}
               />
             </div>
 
             <div className="grid gap-4 xl:grid-cols-2">
-              <SectionCard title="Latest ratings" subtitle="Свежий фид отзывов">
+              <SectionCard title="Последние оценки" subtitle="Свежий фид отзывов">
                 <div className="space-y-3">
                   {latestRatings.map((r) => (
                     <div key={r.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                       <div className="text-sm font-semibold text-slate-900">
-                        Стол {r.table.code} • overall {r.overall}
+                        Стол {r.table.code} • общая {r.overall}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        Food {r.food ?? "—"} • Drinks {r.drinks ?? "—"} • Hookah {r.hookah ?? "—"}
+                        Еда {r.food ?? "—"} • Напитки {r.drinks ?? "—"} • Кальян {r.hookah ?? "—"}
                       </div>
                       <div className="mt-1 text-xs text-slate-400">{formatDate(r.createdAt)}</div>
                       {r.comment ? <div className="mt-2 text-sm text-slate-700">{r.comment}</div> : null}
@@ -512,7 +493,7 @@ export default function StaffAdminPage() {
                 </div>
               </SectionCard>
 
-              <SectionCard title="Latest users" subtitle="Новые регистрации">
+              <SectionCard title="Последние пользователи" subtitle="Новые регистрации">
                 <div className="space-y-3">
                   {latestUsers.map((u) => (
                     <div key={u.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -528,37 +509,12 @@ export default function StaffAdminPage() {
                 </div>
               </SectionCard>
 
-              <SectionCard title="Top staff" subtitle="По сумме подтверждённых оплат">
-                <div className="space-y-3">
-                  {topStaff.map((s) => (
-                    <div key={s.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-900">
-                            {s.username} • {s.role}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            Смен: {s.shiftsJoined} • Payments: {s.confirmedPaymentsCount}
-                          </div>
-                        </div>
-                        <div className="text-sm font-semibold text-slate-900">
-                          {s.confirmedPaymentsSumCzk} Kč
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {topStaff.length === 0 ? (
-                    <div className="text-sm text-slate-500">Нет staff данных.</div>
-                  ) : null}
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Current status" subtitle="Быстрые показатели">
+              <SectionCard title="Текущий статус" subtitle="Ключевые показатели по точке">
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Active shift</div>
+                    <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Активная смена</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {summary.openShift ? "Open" : "Closed"}
+                      {summary.openShift ? "Открыта" : "Закрыта"}
                     </div>
                     <div className="mt-2 text-sm text-slate-500">
                       {summary.openShift ? formatDate(summary.openShift.openedAt) : "Сейчас смена закрыта"}
@@ -566,10 +522,34 @@ export default function StaffAdminPage() {
                   </div>
 
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Current range</div>
-                    <div className="mt-2 text-2xl font-semibold capitalize text-slate-900">{summary.range}</div>
-                    <div className="mt-2 text-sm text-slate-500">Фильтр применяется ко всем данным панели</div>
+                    <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Период</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {range === "all" ? "Всё время" : range === "today" ? "Сегодня" : range === "week" ? "7 дней" : "30 дней"}
+                    </div>
+                    <div className="mt-2 text-sm text-slate-500">Фильтр применяется ко всей админке</div>
                   </div>
+                </div>
+              </SectionCard>
+
+              <SectionCard title="Персонал" subtitle="Сколько смен отработано">
+                <div className="space-y-3">
+                  {filteredStaff.map((s) => (
+                    <div key={s.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">
+                            {s.username} • {s.role}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            Смен отработано: {s.shiftsJoined}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredStaff.length === 0 ? (
+                    <div className="text-sm text-slate-500">Нет данных по персоналу.</div>
+                  ) : null}
                 </div>
               </SectionCard>
             </div>
@@ -578,17 +558,17 @@ export default function StaffAdminPage() {
 
         {!loading && tab === "shifts" && (
           <SectionCard
-            title="Shifts"
+            title="Смены"
             subtitle="История смен и быстрый просмотр деталей"
             right={<div className="text-sm text-slate-500">Всего: {filteredShifts.length}</div>}
           >
             <div className="overflow-hidden rounded-xl border border-slate-200">
               <div className="grid grid-cols-[1.2fr_1fr_1fr_1fr_120px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <div>Opened</div>
-                <div>Status</div>
-                <div>Opened by</div>
-                <div>Participants</div>
-                <div>Action</div>
+                <div>Открыта</div>
+                <div>Статус</div>
+                <div>Открыл</div>
+                <div>Участники</div>
+                <div>Действие</div>
               </div>
 
               {filteredShifts.map((shift) => (
@@ -608,7 +588,7 @@ export default function StaffAdminPage() {
                       onClick={() => void openShiftDetails(shift.id)}
                       className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
                     >
-                      View
+                      Открыть
                     </button>
                   </div>
                 </div>
@@ -623,16 +603,16 @@ export default function StaffAdminPage() {
 
         {!loading && tab === "ratings" && (
           <SectionCard
-            title="Ratings"
+            title="Оценки"
             subtitle="Отзывы по столам и пользователям"
             right={<div className="text-sm text-slate-500">Всего: {filteredRatings.length}</div>}
           >
             <div className="overflow-hidden rounded-xl border border-slate-200">
               <div className="grid grid-cols-[120px_120px_1fr_180px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <div>Table</div>
-                <div>Overall</div>
-                <div>Comment</div>
-                <div>Date</div>
+                <div>Стол</div>
+                <div>Общая</div>
+                <div>Комментарий</div>
+                <div>Дата</div>
               </div>
 
               {filteredRatings.map((r) => (
@@ -656,16 +636,16 @@ export default function StaffAdminPage() {
 
         {!loading && tab === "users" && (
           <SectionCard
-            title="Users"
+            title="Пользователи"
             subtitle="Зарегистрированные пользователи"
             right={<div className="text-sm text-slate-500">Всего: {filteredUsers.length}</div>}
           >
             <div className="overflow-hidden rounded-xl border border-slate-200">
               <div className="grid grid-cols-[1fr_1fr_1fr_180px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <div>Name</div>
-                <div>Phone</div>
+                <div>Имя</div>
+                <div>Телефон</div>
                 <div>Email</div>
-                <div>Created</div>
+                <div>Создан</div>
               </div>
 
               {filteredUsers.map((u) => (
@@ -689,35 +669,30 @@ export default function StaffAdminPage() {
 
         {!loading && tab === "staff" && (
           <SectionCard
-            title="Staff performance"
-            subtitle="Эффективность персонала по сменам и оплатам"
+            title="Персонал"
+            subtitle="Сколько смен отработано"
             right={<div className="text-sm text-slate-500">Всего: {filteredStaff.length}</div>}
           >
             <div className="overflow-hidden rounded-xl border border-slate-200">
-              <div className="grid grid-cols-[1fr_140px_140px_180px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <div>User</div>
-                <div>Shifts</div>
-                <div>Payments</div>
-                <div>Revenue</div>
+              <div className="grid grid-cols-[1fr_180px_180px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <div>Сотрудник</div>
+                <div>Роль</div>
+                <div>Смен отработано</div>
               </div>
 
               {filteredStaff.map((s) => (
                 <div
                   key={s.id}
-                  className="grid grid-cols-[1fr_140px_140px_180px] border-t border-slate-200 px-4 py-3 text-sm text-slate-700"
+                  className="grid grid-cols-[1fr_180px_180px] border-t border-slate-200 px-4 py-3 text-sm text-slate-700"
                 >
-                  <div>
-                    <div className="font-medium text-slate-900">{s.username}</div>
-                    <div className="text-xs text-slate-400">{s.role}</div>
-                  </div>
+                  <div className="font-medium text-slate-900">{s.username}</div>
+                  <div>{s.role}</div>
                   <div>{s.shiftsJoined}</div>
-                  <div>{s.confirmedPaymentsCount}</div>
-                  <div>{s.confirmedPaymentsSumCzk} Kč</div>
                 </div>
               ))}
 
               {filteredStaff.length === 0 ? (
-                <div className="px-4 py-6 text-sm text-slate-500">Нет staff данных.</div>
+                <div className="px-4 py-6 text-sm text-slate-500">Нет данных по персоналу.</div>
               ) : null}
             </div>
           </SectionCard>

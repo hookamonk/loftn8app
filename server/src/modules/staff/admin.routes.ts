@@ -40,7 +40,7 @@ function dateWhere(field: string, from?: Date) {
   return { [field]: { gte: from } };
 }
 
-// summary
+// ОБЩАЯ СВОДКА
 staffAdminRouter.get(
   "/summary",
   asyncHandler(async (req, res) => {
@@ -53,8 +53,8 @@ staffAdminRouter.get(
       ordersCount,
       callsCount,
       ratingsCount,
-      confirmedPaymentsCount,
-      paymentSumAgg,
+      paymentsCount,
+      revenueAgg,
       avgRatings,
       shiftsTotal,
       openShift,
@@ -137,8 +137,8 @@ staffAdminRouter.get(
         ordersCount,
         callsCount,
         ratingsCount,
-        confirmedPaymentsCount,
-        totalRevenueCzk: paymentSumAgg._sum.amountCzk ?? 0,
+        paymentsCount,
+        totalRevenueCzk: revenueAgg._sum.amountCzk ?? 0,
         avgOverall: avgRatings._avg.overall ?? null,
         avgFood: avgRatings._avg.food ?? null,
         avgDrinks: avgRatings._avg.drinks ?? null,
@@ -150,7 +150,7 @@ staffAdminRouter.get(
   })
 );
 
-// shifts list
+// СПИСОК СМЕН
 staffAdminRouter.get(
   "/shifts",
   asyncHandler(async (req, res) => {
@@ -195,7 +195,7 @@ staffAdminRouter.get(
   })
 );
 
-// shift detail
+// ДЕТАЛИ СМЕНЫ
 staffAdminRouter.get(
   "/shifts/:id",
   asyncHandler(async (req, res) => {
@@ -232,7 +232,7 @@ staffAdminRouter.get(
       callsCount,
       ratingsCount,
       paymentsCount,
-      paymentSumAgg,
+      revenueAgg,
       avgRatings,
       registrationsCount,
     ] = await Promise.all([
@@ -292,7 +292,7 @@ staffAdminRouter.get(
         callsCount,
         ratingsCount,
         paymentsCount,
-        revenueCzk: paymentSumAgg._sum.amountCzk ?? 0,
+        revenueCzk: revenueAgg._sum.amountCzk ?? 0,
         avgOverall: avgRatings._avg.overall ?? null,
         avgFood: avgRatings._avg.food ?? null,
         avgDrinks: avgRatings._avg.drinks ?? null,
@@ -303,7 +303,7 @@ staffAdminRouter.get(
   })
 );
 
-// ratings
+// ОЦЕНКИ
 staffAdminRouter.get(
   "/ratings",
   asyncHandler(async (req, res) => {
@@ -338,7 +338,7 @@ staffAdminRouter.get(
   })
 );
 
-// users
+// ПОЛЬЗОВАТЕЛИ
 staffAdminRouter.get(
   "/users",
   asyncHandler(async (req, res) => {
@@ -372,7 +372,7 @@ staffAdminRouter.get(
   })
 );
 
-// staff performance
+// ПЕРСОНАЛ
 staffAdminRouter.get(
   "/staff-performance",
   asyncHandler(async (req, res) => {
@@ -393,16 +393,7 @@ staffAdminRouter.get(
 
     const result = await Promise.all(
       staff.map(async (s) => {
-        const [confirmedPayments, shiftEntries] = await Promise.all([
-          prisma.paymentConfirmation.aggregate({
-            where: {
-              venueId,
-              staffId: s.id,
-              ...dateWhere("createdAt", from),
-            },
-            _count: true,
-            _sum: { amountCzk: true },
-          }),
+        const [shiftEntries] = await Promise.all([
           prisma.shiftParticipant.count({
             where: {
               staffId: s.id,
@@ -416,9 +407,7 @@ staffAdminRouter.get(
 
         return {
           ...s,
-          shiftsJoined: confirmedPayments._count ? shiftEntries : shiftEntries,
-          confirmedPaymentsCount: confirmedPayments._count,
-          confirmedPaymentsSumCzk: confirmedPayments._sum.amountCzk ?? 0,
+          shiftsJoined: shiftEntries,
         };
       })
     );

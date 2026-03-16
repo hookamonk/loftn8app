@@ -57,7 +57,7 @@ async function tryPaths<T>(paths: string[], init?: RequestInit): Promise<ApiResu
   return last ?? { ok: false, error: "HTTP_404", status: 404 };
 }
 
-// --------- AUTH ----------
+// AUTH
 export async function staffLogin(
   username: string,
   password: string
@@ -94,7 +94,7 @@ export async function staffLogout(): Promise<ApiResult<{ ok: true }>> {
   });
 }
 
-// --------- SHIFT ----------
+// SHIFT
 export type ShiftParticipant = {
   id: string;
   staffId: string;
@@ -150,7 +150,7 @@ export async function closeShift(): Promise<ApiResult<{ shiftId: string; closedA
   );
 }
 
-// --------- DASHBOARD ----------
+// DASHBOARD
 export type StaffSummary = {
   newOrders: number;
   newCalls: number;
@@ -272,14 +272,14 @@ export async function confirmPayment(id: string, amountCzk: number): Promise<Api
   );
 }
 
-// --------- ADMIN ----------
+// ADMIN
 export type AdminSummary = {
   range: AdminRange;
   usersCount: number;
   ordersCount: number;
   callsCount: number;
   ratingsCount: number;
-  confirmedPaymentsCount: number;
+  paymentsCount: number;
   totalRevenueCzk: number;
   avgOverall: number | null;
   avgFood: number | null;
@@ -377,8 +377,6 @@ export type AdminStaffPerformanceItem = {
   role: StaffRole;
   createdAt: string;
   shiftsJoined: number;
-  confirmedPaymentsCount: number;
-  confirmedPaymentsSumCzk: number;
 };
 
 export async function getAdminSummary(range: AdminRange = "all"): Promise<ApiResult<{ summary: AdminSummary }>> {
