@@ -10,8 +10,15 @@ function normalizeToCode(raw: string) {
     .trim()
     .toUpperCase()
     .replace(/\s+/g, "");
+
+  if (!v) return v;
+
   if (/^\d+$/.test(v)) return `T${v}`;
-  if (v.startsWith("T") && /^\d+$/.test(v.slice(1))) return v;
+  if (/^T\d+$/.test(v)) return v;
+
+  if (v === "VIP") return "VIP";
+  if (v === "TVIP" || v === "T-VIP") return "VIP";
+
   return v;
 }
 

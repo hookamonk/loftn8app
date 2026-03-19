@@ -3,39 +3,55 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 
+function normalizeTableCode(raw: string): string | null {
+  const v = String(raw || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+
+  if (!v) return null;
+
+  // 1 -> T1
+  if (/^\d+$/.test(v)) return `T${v}`;
+
+  // T1
+  if (/^T\d+$/.test(v)) return v;
+
+  // VIP variants
+  if (v === "VIP") return "VIP";
+  if (v === "TVIP" || v === "T-VIP") return "VIP";
+
+  // allow custom table codes like LOUNGE, BAR1, VIP2 if needed later
+  if (/^[A-Z0-9_-]+$/.test(v)) return v;
+
+  return null;
+}
+
 function extractTableCode(rawInput: string): string | null {
   const raw = String(rawInput || "").trim();
 
   try {
     const url = new URL(raw);
 
-    const pathMatch = url.pathname.match(/\/t\/(T?\d+)$/i);
+    const pathMatch = url.pathname.match(/\/t\/([^/]+)$/i);
     if (pathMatch?.[1]) {
-      const v = pathMatch[1].toUpperCase();
-      return v.startsWith("T") ? v : `T${v}`;
+      return normalizeTableCode(pathMatch[1]);
     }
 
     const qp = url.searchParams.get("table");
     if (qp) {
-      const v = qp.trim().toUpperCase().replace(/\s+/g, "");
-      if (/^\d+$/.test(v)) return `T${v}`;
-      if (/^T\d+$/.test(v)) return v;
+      return normalizeTableCode(qp);
     }
   } catch {}
 
-  if (/^\/t\/T?\d+$/i.test(raw)) {
-    const m = raw.match(/\/t\/(T?\d+)$/i);
+  if (/^\/t\/[^/]+$/i.test(raw)) {
+    const m = raw.match(/\/t\/([^/]+)$/i);
     if (m?.[1]) {
-      const v = m[1].toUpperCase();
-      return v.startsWith("T") ? v : `T${v}`;
+      return normalizeTableCode(m[1]);
     }
   }
 
-  const compact = raw.toUpperCase().replace(/\s+/g, "");
-  if (/^T\d+$/.test(compact)) return compact;
-  if (/^\d+$/.test(compact)) return `T${compact}`;
-
-  return null;
+  return normalizeTableCode(raw);
 }
 
 const SCANNER_ID = "loft-table-qr-reader";
@@ -90,7 +106,7 @@ export default function TablePage() {
     const code = extractTableCode(decodedText);
 
     if (!code) {
-      setScanErr("QR was scanned, but the format was not recognized. It is better to use a short QR like T1, T2, T3.");
+      setScanErr("QR was scanned, but the format was not recognized.");
       return;
     }
 
@@ -208,7 +224,7 @@ export default function TablePage() {
               </div>
             ) : (
               <div className="mt-3 text-xs text-white/60">
-                Point the camera at the QR code on the table. Short QR codes work best: T1, T2, T3.
+                Point the camera at the QR code on the table.
               </div>
             )}
 
@@ -256,7 +272,7 @@ export default function TablePage() {
                 setErr(null);
                 setTable(e.target.value);
               }}
-              placeholder="For example: 3"
+              placeholder="For example: 3 or VIP"
               className="h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
               inputMode="text"
             />
@@ -289,4 +305,4 @@ export default function TablePage() {
       </div>
     </main>
   );
-} 
+}
