@@ -29,13 +29,24 @@ export async function guestSessionAuth(req: Request, _res: Response, next: NextF
 
   req.guestSession = session;
 
-  // optional user (guest can be anonymous)
+  // optional user
   const uid = (req.cookies?.uid as string | undefined) ?? undefined;
   if (uid) {
     try {
       const userPayload = jwt.verify(uid, env.JWT_USER_SECRET) as UserPayload;
       const user = await prisma.user.findUnique({ where: { id: userPayload.userId } });
-      if (user) req.user = user;
+      if (user) {
+        req.user = user;
+
+        if (session.userId !== user.id) {
+          const syncedSession = await prisma.guestSession.update({
+            where: { id: session.id },
+            data: { userId: user.id },
+            include: { table: true },
+          });
+          req.guestSession = syncedSession;
+        }
+      }
     } catch {
       
     }

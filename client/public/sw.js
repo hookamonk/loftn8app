@@ -13,6 +13,12 @@ self.addEventListener("push", (event) => {
     url: "/staff/summary",
     tag: null,
     ts: null,
+    kind: "CALL_CREATED",
+    message: null,
+    tableCode: null,
+    vibrate: [320, 140, 320, 140, 420],
+    requireInteraction: true,
+    renotify: true,
   };
 
   try {  
@@ -23,17 +29,31 @@ self.addEventListener("push", (event) => {
   const tag = payload.tag || `evt:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
   const ts = payload.ts || Date.now();
   const url = payload.url || "/staff/summary";
+  const vibrate =
+    Array.isArray(payload.vibrate) && payload.vibrate.length > 0
+      ? payload.vibrate
+      : [320, 140, 320, 140, 420];
 
   const options = {
     body: payload.body || "",
-    data: { url, tag, ts },
+    data: {
+      url,
+      tag,
+      ts,
+      kind: payload.kind || "CALL_CREATED",
+      message: payload.message || null,
+      tableCode: payload.tableCode || null,
+      vibrate,
+    },
     tag,
-    renotify: true,
-    requireInteraction: false,
-    vibrate: [160, 80, 160],
+    renotify: payload.renotify !== false,
+    requireInteraction: payload.requireInteraction !== false,
+    vibrate,
+    silent: false,
     timestamp: ts,
-    badge: "/icon.png",
-    icon: "/icon.png",
+    badge: "/logo.svg",
+    icon: "/logo.svg",
+    actions: [{ action: "open", title: "Open" }],
   };
 
   event.waitUntil(
@@ -54,6 +74,10 @@ self.addEventListener("push", (event) => {
             url,
             tag,
             ts,
+            kind: payload.kind || "CALL_CREATED",
+            message: payload.message || null,
+            tableCode: payload.tableCode || null,
+            vibrate,
           },
         });
       }
@@ -65,6 +89,15 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
   const url = (event.notification.data && event.notification.data.url) || "/staff/summary";
+  const payload = {
+    url,
+    tag: event.notification.data?.tag || null,
+    ts: Date.now(),
+    kind: event.notification.data?.kind || "CALL_CREATED",
+    message: event.notification.data?.message || null,
+    tableCode: event.notification.data?.tableCode || null,
+    vibrate: event.notification.data?.vibrate || [320, 140, 320, 140, 420],
+  };
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientsArr) => {
@@ -73,10 +106,7 @@ self.addEventListener("notificationclick", (event) => {
           c.focus();
           c.postMessage({
             type: "STAFF_PUSH",
-            payload: {
-              url,
-              ts: Date.now(),
-            },
+            payload,
           });
           return;
         }

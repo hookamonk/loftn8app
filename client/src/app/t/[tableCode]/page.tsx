@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useSession } from "@/providers/session";
+import type { AuthMeResponse } from "@/types";
 
 function normalizeToCode(raw: string) {
   const v = String(raw || "")
@@ -40,7 +41,12 @@ export default function TableEntry() {
         });
 
         setTableCode(tableCode);
-        router.replace("/menu");
+
+        const me = await api<AuthMeResponse>("/auth/guest/me").catch(() => ({
+          authenticated: false,
+        } as AuthMeResponse));
+
+        router.replace(me.authenticated ? "/menu" : "/auth");
       } catch (e: any) {
         setErr(e?.message ?? "Failed to create session");
       }

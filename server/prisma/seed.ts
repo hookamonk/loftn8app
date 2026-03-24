@@ -75,7 +75,7 @@ async function main() {
   });
 
   // ===== 1) Tables =====
-  const tablesCount = 20;
+  const tablesCount = 17;
   for (let i = 1; i <= tablesCount; i++) {
     const code = `T${i}`;
     await prisma.table.upsert({
@@ -84,6 +84,12 @@ async function main() {
       create: { venueId: venue.id, code, label: `Table ${i}` },
     });
   }
+
+  await prisma.table.upsert({
+    where: { code: "VIP" },
+    update: { venueId: venue.id, label: "VIP" },
+    create: { venueId: venue.id, code: "VIP", label: "VIP" },
+  });
 
   // ===== 2) Categories structure =====
   const DISHES: Array<[string, number]> = [

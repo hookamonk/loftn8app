@@ -34,24 +34,109 @@ function setCookie(res: any, name: string, value: string, maxAgeSeconds: number)
   });
 }
 
+function normalizeTableCode(raw: string) {
+  const v = String(raw || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+
+  if (!v) return "";
+  if (/^\d+$/.test(v)) return `T${v}`;
+  if (/^T\d+$/.test(v)) return v;
+  if (v === "TVIP" || v === "T-VIP") return "VIP";
+  return v;
+}
+
+function isKnownPilotTableCode(code: string) {
+  if (code === "VIP") return true;
+  if (!/^T\d+$/.test(code)) return false;
+  const n = Number(code.slice(1));
+  return Number.isInteger(n) && n >= 1 && n <= 17;
+}
+
+async function resolveTableByCode(rawTableCode: string) {
+  const tableCode = normalizeTableCode(rawTableCode);
+  if (!tableCode) return null;
+
+  const existing = await prisma.table.findUnique({
+    where: { code: tableCode },
+    select: { id: true, code: true, label: true, venueId: true },
+  });
+  if (existing) return existing;
+
+  if (!isKnownPilotTableCode(tableCode)) return null;
+
+  const venue = await prisma.venue.findUnique({
+    where: { slug: "pilot" },
+    select: { id: true },
+  });
+  if (!venue) return null;
+
+  const label = tableCode === "VIP" ? "VIP" : `Table ${Number(tableCode.slice(1))}`;
+
+  return prisma.table.upsert({
+    where: { code: tableCode },
+    update: {
+      venueId: venue.id,
+      label,
+    },
+    create: {
+      venueId: venue.id,
+      code: tableCode,
+      label,
+    },
+    select: { id: true, code: true, label: true, venueId: true },
+  });
+}
+
+async function resolveUserFromCookie(req: any) {
+  const uid = (req.cookies?.uid as string | undefined) ?? undefined;
+  if (!uid) return null;
+
+  try {
+    const payload = jwt.verify(uid, env.JWT_USER_SECRET) as { userId: string };
+    return prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { id: true },
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function closePreviousSessionFromCookie(req: any) {
+  const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
+  if (!gsid) return;
+
+  try {
+    const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
+    await prisma.guestSession.updateMany({
+      where: {
+        id: payload.sessionId,
+        endedAt: null,
+      },
+      data: { endedAt: new Date() },
+    });
+  } catch {
+    // ignore stale cookie
+  }
+}
+
 guestRouter.post(
   "/session",
   validate(CreateSessionSchema),
   asyncHandler(async (req, res) => {
-    const { tableCode } = req.body as { tableCode: string };
+    const { tableCode: rawTableCode } = req.body as { tableCode: string };
 
-    const table = await prisma.table.findUnique({
-      where: { code: tableCode },
-      select: { id: true, code: true, label: true, venueId: true },
-    });
+    const table = await resolveTableByCode(rawTableCode);
 
     if (!table) {
       throw new HttpError(404, "TABLE_NOT_FOUND", "Table not found");
     }
 
-    // ✅ гостевое приложение работает всегда:
-    // если смена открыта — привязываем session к shift
-    // если смены нет — просто создаём session без shiftId
+    const user = await resolveUserFromCookie(req);
+    await closePreviousSessionFromCookie(req);
+
     const shift = await prisma.shift.findFirst({
       where: {
         venueId: table.venueId,
@@ -65,6 +150,7 @@ guestRouter.post(
       data: {
         tableId: table.id,
         shiftId: shift?.id ?? null,
+        userId: user?.id ?? null,
       },
     });
 

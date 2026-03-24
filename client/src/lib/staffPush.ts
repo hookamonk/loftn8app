@@ -3,6 +3,24 @@ import { primeAlerts } from "@/lib/staffAlerts";
 
 const API_BASE = "/api";
 
+function isAppleMobile() {
+  if (typeof navigator === "undefined") return false;
+
+  const ua = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  const touchMac = platform === "MacIntel" && navigator.maxTouchPoints > 1;
+
+  return /iPhone|iPad|iPod/i.test(ua) || touchMac;
+}
+
+function isStandaloneMode() {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia?.("(display-mode: standalone)")?.matches === true ||
+    (window.navigator as Navigator & { standalone?: boolean }).standalone === true
+  );
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -51,8 +69,12 @@ export async function subscribePush(sub: PushSubscription): Promise<ApiResult<{ 
 
 export async function ensurePushSubscribed(): Promise<ApiResult<{ ok: true }>> {
   if (typeof window === "undefined") return { ok: false, error: "NO_WINDOW", status: 400 };
+  if (!("Notification" in window)) return { ok: false, error: "NO_NOTIFICATION_API", status: 400 };
   if (!("serviceWorker" in navigator)) return { ok: false, error: "NO_SW", status: 400 };
   if (!("PushManager" in window)) return { ok: false, error: "NO_PUSH", status: 400 };
+  if (isAppleMobile() && !isStandaloneMode()) {
+    return { ok: false, error: "IOS_HOME_SCREEN_REQUIRED", status: 400 };
+  }
 
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
@@ -61,7 +83,8 @@ export async function ensurePushSubscribed(): Promise<ApiResult<{ ok: true }>> {
 
   await primeAlerts();
 
-  const reg = await navigator.serviceWorker.register("/sw.js");
+  const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  await reg.update().catch(() => {});
   await navigator.serviceWorker.ready;
 
   let sub = await reg.pushManager.getSubscription();

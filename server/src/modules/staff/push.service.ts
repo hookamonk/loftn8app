@@ -9,6 +9,16 @@ type PushPayload = {
   url?: string;
   tag?: string;
   ts?: number;
+  kind?:
+    | "ORDER_CREATED"
+    | "CALL_CREATED"
+    | "GUEST_MESSAGE"
+    | "PAYMENT_REQUESTED";
+  message?: string;
+  tableCode?: string;
+  vibrate?: number[];
+  requireInteraction?: boolean;
+  renotify?: boolean;
 };
 
 let configured = false;
@@ -32,6 +42,29 @@ function uniq(base: string) {
   return `${base}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
 }
 
+function trimMessage(message?: string | null, max = 120) {
+  const normalized = String(message ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+
+  if (!normalized) return null;
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function normalizeCallMessage(type: "WAITER" | "HOOKAH" | "BILL" | "HELP", message?: string | null) {
+  const trimmed = trimMessage(message, 110);
+  if (!trimmed) return null;
+
+  if (type === "BILL" && trimmed.startsWith("PAYMENT_METHOD:")) {
+    const method = trimmed.slice("PAYMENT_METHOD:".length).trim().toUpperCase();
+    if (method === "CARD") return "Карта";
+    if (method === "CASH") return "Наличные";
+  }
+
+  return trimmed;
+}
+
 async function sendToSubscriptions(
   subs: Array<{ id: string; endpoint: string; p256dh: string; auth: string }>,
   payload: PushPayload
@@ -42,6 +75,9 @@ async function sendToSubscriptions(
     ...payload,
     ts: payload.ts ?? Date.now(),
     tag: payload.tag ?? uniq("evt"),
+    renotify: payload.renotify ?? true,
+    requireInteraction: payload.requireInteraction ?? true,
+    vibrate: payload.vibrate ?? [320, 140, 320, 140, 420],
   };
 
   const json = JSON.stringify(safePayload);
@@ -151,13 +187,21 @@ export async function notifyOrderCreated(orderId: string) {
     url: "/staff/orders",
     tag: `order_new:${order.id}`,
     ts: Date.now(),
+    kind: "ORDER_CREATED",
+    tableCode,
+    vibrate: [240, 120, 240, 120, 360],
   });
 }
 
 export async function notifyCallCreated(callId: string) {
   const call = await prisma.staffCall.findUnique({
     where: { id: callId },
-    select: { id: true, type: true, table: { select: { venueId: true, code: true } } },
+    select: {
+      id: true,
+      type: true,
+      message: true,
+      table: { select: { venueId: true, code: true } },
+    },
   });
   if (!call) return;
 
@@ -179,12 +223,25 @@ export async function notifyCallCreated(callId: string) {
       ? "Запрос оплаты"
       : "Нужна помощь";
 
+  const messagePreview = normalizeCallMessage(call.type, call.message);
+  const isMessageOnly = call.type === "HELP" && !!messagePreview;
+  const title = isMessageOnly ? "Новое сообщение от гостя" : "Новый вызов";
+  const body = isMessageOnly
+    ? `Стол ${tableCode} • ${messagePreview}`
+    : messagePreview
+    ? `${kind} • Стол ${tableCode} • ${messagePreview}`
+    : `${kind} • Стол ${tableCode}`;
+
   await pushToVenueRoles(venueId, Array.from(new Set(roles)), {
-    title: "Новый вызов",
-    body: `${kind} • Стол ${tableCode}`,
+    title,
+    body,
     url: "/staff/calls",
     tag: `call_new:${call.id}`,
     ts: Date.now(),
+    kind: isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
+    message: messagePreview ?? undefined,
+    tableCode,
+    vibrate: isMessageOnly ? [420, 140, 420, 140, 560] : [320, 140, 320, 140, 420],
   });
 }
 
@@ -202,5 +259,8 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
     url: "/staff/payments",
     tag: `payment_pending:${pr.id}`,
     ts: Date.now(),
+    kind: "PAYMENT_REQUESTED",
+    tableCode: pr.table.code,
+    vibrate: [280, 120, 280, 120, 460],
   });
 }

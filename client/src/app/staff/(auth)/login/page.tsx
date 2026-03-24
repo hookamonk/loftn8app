@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { staffLogin } from "@/lib/staffApi";
 import { useStaffSession } from "@/providers/staffSession";
-import { rebindPushIfPossible } from "@/lib/staffPush";
+import { ensurePushSubscribed, rebindPushIfPossible } from "@/lib/staffPush";
 
 export default function StaffLoginPage() {
   const router = useRouter();
@@ -31,7 +31,14 @@ export default function StaffLoginPage() {
     const staff = r.data.staff;
     setStaff(staff);
 
-    // ✅ если подписка уже существует в браузере — заново привязываем к staff
+    // Сразу просим push-разрешение после логина, пока есть пользовательский жест.
+    try {
+      await ensurePushSubscribed();
+    } catch {
+      // ignore
+    }
+
+    // Если подписка уже существует в браузере — заново привязываем к staff.
     await rebindPushIfPossible();
 
     if (staff.role === "ADMIN") {

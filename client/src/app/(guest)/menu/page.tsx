@@ -299,185 +299,183 @@ function MenuPage() {
         </div>
 
         {!authLoading && !canOrder ? (
-          <div className="mt-6 grid min-h-[45vh] place-items-center">
-            <div className="w-full rounded-[28px] border border-white/10 bg-white/6 p-5 text-center backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
-              <div className="text-base font-semibold text-white">You are in guest mode</div>
-              <div className="mt-2 text-sm text-white/70">
-                Without registration, only the <b>Staff</b> section is available.
-              </div>
+          <div className="mb-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
+            <div className="text-sm font-semibold text-white">Guest mode</div>
+            <div className="mt-2 text-sm text-white/70">
+              Table is already connected. You can browse the menu and contact the staff, but ordering is available only after sign in.
+            </div>
 
-              <div className="mt-4 flex justify-center gap-2">
-                <Link
-                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white"
-                  href="/call"
-                >
-                  Staff
-                </Link>
-                <Link
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-black"
-                  href="/auth"
-                >
-                  Sign in / Register
-                </Link>
-              </div>
-
-              <div className="mt-3 text-[11px] text-white/55">Register to place orders.</div>
+            <div className="mt-3 flex gap-2">
+              <Link
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white"
+                href="/call"
+              >
+                Staff
+              </Link>
+              <Link
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-black"
+                href="/auth"
+              >
+                Sign in / Register
+              </Link>
             </div>
           </div>
-        ) : (
-          <>
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
-              <input
-                className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/40 outline-none"
-                placeholder="Search the menu…"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
+        ) : null}
 
-              {err ? (
-                <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs text-red-200">
-                  {err}
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
+          <input
+            className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/40 outline-none"
+            placeholder="Search the menu…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+
+          {err ? (
+            <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs text-red-200">
+              {err}
+            </div>
+          ) : null}
+
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            {(["DISHES", "DRINKS", "HOOKAH"] as MenuSection[])
+              .filter((s) => (groupsBySection.get(s)?.length ?? 0) > 0)
+              .map((s) => (
+                <Pill
+                  key={s}
+                  active={s === activeSection}
+                  onClick={() => {
+                    setActiveSection(s);
+                    setQ("");
+                  }}
+                >
+                  {SECTION_LABEL[s]}
+                </Pill>
+              ))}
+          </div>
+
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+            {sectionGroups.map((g) => (
+              <Pill
+                key={g.key}
+                active={g.key === activeGroupKey}
+                onClick={() => {
+                  setActiveCatId(g.cats[0]?.id ?? null);
+                  setQ("");
+                }}
+              >
+                {g.label}
+              </Pill>
+            ))}
+          </div>
+
+          {showSubDropdown && activeGroup ? (
+            <div className="mt-2">
+              <div className="relative">
+                <select
+                  value={activeCat?.id ?? ""}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    setActiveCatId(Number.isFinite(next) ? next : null);
+                    setQ("");
+                  }}
+                  className="w-full appearance-none rounded-2xl border border-white/10 bg-black/30 px-4 py-3 pr-10 text-sm text-white outline-none"
+                >
+                  {activeGroup.cats.map((c) => {
+                    const { sub } = splitCatName(c.name);
+                    return (
+                      <option key={c.id} value={c.id} className="text-black">
+                        {sub ?? c.name}
+                      </option>
+                    );
+                  })}
+                </select>
+
+                <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/60">
+                  ▾
                 </div>
-              ) : null}
-
-              <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-                {(["DISHES", "DRINKS", "HOOKAH"] as MenuSection[])
-                  .filter((s) => (groupsBySection.get(s)?.length ?? 0) > 0)
-                  .map((s) => (
-                    <Pill
-                      key={s}
-                      active={s === activeSection}
-                      onClick={() => {
-                        setActiveSection(s);
-                        setQ("");
-                      }}
-                    >
-                      {SECTION_LABEL[s]}
-                    </Pill>
-                  ))}
               </div>
+            </div>
+          ) : null}
+        </div>
 
-              <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-                {sectionGroups.map((g) => (
-                  <Pill
-                    key={g.key}
-                    active={g.key === activeGroupKey}
-                    onClick={() => {
-                      setActiveCatId(g.cats[0]?.id ?? null);
-                      setQ("");
-                    }}
-                  >
-                    {g.label}
-                  </Pill>
-                ))}
-              </div>
+        <div className="mt-4 space-y-3">
+          {isSearching ? (
+            <div className="px-1 text-xs text-white/55">Found: {filteredItems.length}</div>
+          ) : null}
 
-              {showSubDropdown && activeGroup ? (
-                <div className="mt-2">
-                  <div className="relative">
-                    <select
-                      value={activeCat?.id ?? ""}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        setActiveCatId(Number.isFinite(next) ? next : null);
-                        setQ("");
-                      }}
-                      className="w-full appearance-none rounded-2xl border border-white/10 bg-black/30 px-4 py-3 pr-10 text-sm text-white outline-none"
-                    >
-                      {activeGroup.cats.map((c) => {
-                        const { sub } = splitCatName(c.name);
-                        return (
-                          <option key={c.id} value={c.id} className="text-black">
-                            {sub ?? c.name}
-                          </option>
-                        );
-                      })}
-                    </select>
+          {filteredItems.map((i) => {
+            const qty = qtyById.get(i.id) ?? 0;
 
-                    <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/60">
-                      ▾
+            const meta =
+              isSearching && i.__catName && i.__section
+                ? `${SECTION_LABEL[i.__section]} · ${i.__catName}`
+                : null;
+
+            return (
+              <div
+                key={i.id}
+                className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]"
+              >
+                <div className="flex gap-3">
+                  <div className="relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+                    {i.imageUrl ? (
+                      <img
+                        src={i.imageUrl}
+                        alt={i.name}
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
+                    ) : null}
+
+                    {!i.imageUrl ? (
+                      <div className="grid h-full w-full place-items-center text-[10px] font-semibold tracking-[0.18em] text-white/45">
+                        LOFT №8
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    {meta ? <div className="text-[11px] text-white/55">{meta}</div> : null}
+
+                    <div className="line-clamp-2 text-[15px] font-semibold leading-5 text-white">
+                      {i.name}
+                    </div>
+
+                    {i.description ? (
+                      <div className="mt-1 line-clamp-3 text-xs leading-5 text-white/65">
+                        {i.description}
+                      </div>
+                    ) : null}
+
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <div className="text-base font-semibold text-white">{i.priceCzk} Kč</div>
+
+                      {canOrder ? (
+                        <Qty
+                          qty={qty}
+                          disabled={!canOrder}
+                          onMinus={() => onMinus(i)}
+                          onPlus={() => onPlus(i)}
+                        />
+                      ) : (
+                        <div className="text-right text-xs text-white/55">Sign in to order</div>
+                      )}
                     </div>
                   </div>
                 </div>
-              ) : null}
+              </div>
+            );
+          })}
+
+          {filteredItems.length === 0 ? (
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
+              Nothing found.
             </div>
-
-            <div className="mt-4 space-y-3">
-              {isSearching ? (
-                <div className="px-1 text-xs text-white/55">Found: {filteredItems.length}</div>
-              ) : null}
-
-              {filteredItems.map((i) => {
-                const qty = qtyById.get(i.id) ?? 0;
-
-                const meta =
-                  isSearching && i.__catName && i.__section
-                    ? `${SECTION_LABEL[i.__section]} · ${i.__catName}`
-                    : null;
-
-                return (
-                  <div
-                    key={i.id}
-                    className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]"
-                  >
-                    <div className="flex gap-3">
-                      <div className="relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
-                        {i.imageUrl ? (
-                          <img
-                            src={i.imageUrl}
-                            alt={i.name}
-                            loading="lazy"
-                            className="h-full w-full object-cover"
-                            onError={(e) => {
-                              e.currentTarget.style.display = "none";
-                            }}
-                          />
-                        ) : null}
-
-                        {!i.imageUrl ? (
-                          <div className="grid h-full w-full place-items-center text-[10px] font-semibold tracking-[0.18em] text-white/45">
-                            LOFT №8
-                          </div>
-                        ) : null}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        {meta ? <div className="text-[11px] text-white/55">{meta}</div> : null}
-
-                        <div className="line-clamp-2 text-[15px] font-semibold leading-5 text-white">
-                          {i.name}
-                        </div>
-
-                        {i.description ? (
-                          <div className="mt-1 line-clamp-3 text-xs leading-5 text-white/65">
-                            {i.description}
-                          </div>
-                        ) : null}
-
-                        <div className="mt-3 flex items-center justify-between gap-3">
-                          <div className="text-base font-semibold text-white">{i.priceCzk} Kč</div>
-
-                          <Qty
-                            qty={qty}
-                            disabled={!canOrder}
-                            onMinus={() => onMinus(i)}
-                            onPlus={() => onPlus(i)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {filteredItems.length === 0 ? (
-                <div className="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
-                  Nothing found.
-                </div>
-              ) : null}
-            </div>
-          </>
-        )}
+          ) : null}
+        </div>
       </main>
     </RequireTable>
   );

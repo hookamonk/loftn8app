@@ -53,6 +53,17 @@ function roleLabel(role?: string) {
   return role ?? "Staff";
 }
 
+function humanizePushError(error?: string | null) {
+  if (!error) return "Не удалось включить уведомления";
+  if (error.includes("IOS_HOME_SCREEN_REQUIRED")) {
+    return "На iPhone/iPad откройте приложение с экрана Домой: обычная вкладка браузера не может держать боевые web push на заблокированном экране.";
+  }
+  if (error.includes("NOT_ALLOWED")) {
+    return "Разрешение на уведомления не выдано.";
+  }
+  return error;
+}
+
 export default function StaffSummaryPage() {
   const { staff } = useStaffSession();
   const { push } = useToast();
@@ -128,11 +139,12 @@ export default function StaffSummaryPage() {
 
     const r = await ensurePushSubscribed();
     if (!r.ok) {
-      setErr(r.error || "Не удалось включить уведомления");
+      const message = humanizePushError(r.error);
+      setErr(message);
       push({
         kind: "error",
         title: "Ошибка",
-        message: r.error || "Не удалось включить уведомления",
+        message,
       });
       return;
     }

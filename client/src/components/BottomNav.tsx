@@ -124,6 +124,7 @@ export function BottomNav() {
   const nav = useMemo(() => {
     if (!loading && !isAuthed) {
       return [
+        { href: "/menu", label: "Menu", icon: "menu" as const },
         { href: "/call", label: "Staff", icon: "call" as const },
         { href: "/auth", label: "Sign in", icon: "profile" as const },
       ];
@@ -141,7 +142,12 @@ export function BottomNav() {
     <div className="fixed bottom-0 left-0 right-0 z-50 pb-4">
       <div className="mx-auto max-w-md px-4">
         <div className="rounded-[26px] border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
-          <div className={["px-1", nav.length === 2 ? "grid grid-cols-2" : "grid grid-cols-4"].join(" ")}>
+          <div
+            className={[
+              "px-1",
+              nav.length === 2 ? "grid grid-cols-2" : nav.length === 3 ? "grid grid-cols-3" : "grid grid-cols-4",
+            ].join(" ")}
+          >
             {nav.map((x) => (
               <Item key={x.href} href={x.href} label={x.label} icon={x.icon} badge={(x as any).badge} />
             ))}
