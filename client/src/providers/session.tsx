@@ -69,6 +69,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       try {
         const guestSession = await api<GuestSessionMeResponse>("/guest/me");
         if (guestSession.ok && guestSession.session) {
+          const actualCode = guestSession.session.table.code;
+          if (actualCode && actualCode !== tableCode) {
+            _setTableCode(actualCode);
+            storage.set(TABLE_KEY, actualCode);
+          }
           setSessionReady(true);
           return;
         }
@@ -80,10 +85,20 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       const code = savedCode ?? tableCode;
       if (code) {
         try {
-          await api("/guest/session", {
+          const created = await api<{
+            ok: true;
+            session: {
+              table: { code: string };
+            };
+          }>("/guest/session", {
             method: "POST",
             body: JSON.stringify({ tableCode: code }),
           });
+          const actualCode = created.session.table.code;
+          if (actualCode && actualCode !== tableCode) {
+            _setTableCode(actualCode);
+            storage.set(TABLE_KEY, actualCode);
+          }
           setSessionReady(true);
           return;
         } catch (e: any) {

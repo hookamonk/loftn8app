@@ -132,7 +132,7 @@ async function resolveGuestSessionFromCookie(req: any) {
       where: { id: payload.sessionId },
       include: {
         table: {
-          select: { id: true, code: true, label: true },
+          select: { id: true, code: true, label: true, venueId: true },
         },
         shift: {
           select: { id: true, status: true, openedAt: true, closedAt: true },
@@ -149,7 +149,7 @@ async function resolveGuestSessionFromCookie(req: any) {
         data: { userId: user.id },
         include: {
           table: {
-            select: { id: true, code: true, label: true },
+            select: { id: true, code: true, label: true, venueId: true },
           },
           shift: {
             select: { id: true, status: true, openedAt: true, closedAt: true },
@@ -162,6 +162,31 @@ async function resolveGuestSessionFromCookie(req: any) {
   } catch {
     return null;
   }
+}
+
+function toGuestSessionResponse(
+  session: {
+    id: string;
+    startedAt: Date;
+    table: { id: number; code: string; label: string | null };
+    shift?: { id: string; openedAt: Date } | { id: string; status: string; openedAt: Date; closedAt: Date | null } | null;
+  }
+) {
+  return {
+    id: session.id,
+    table: {
+      id: session.table.id,
+      code: session.table.code,
+      label: session.table.label,
+    },
+    shift: session.shift
+      ? {
+          id: session.shift.id,
+          openedAt: session.shift.openedAt,
+        }
+      : null,
+    startedAt: session.startedAt,
+  };
 }
 
 guestRouter.post(
@@ -177,8 +202,6 @@ guestRouter.post(
     }
 
     const user = await resolveUserFromCookie(req);
-    await closePreviousSessionFromCookie(req);
-
     const shift = await prisma.shift.findFirst({
       where: {
         venueId: table.venueId,
@@ -187,6 +210,61 @@ guestRouter.post(
       orderBy: { openedAt: "desc" },
       select: { id: true, openedAt: true },
     });
+
+    const existingSession = await resolveGuestSessionFromCookie(req);
+    if (existingSession && existingSession.table.id === table.id) {
+      const nextUserId = user?.id ?? existingSession.userId ?? null;
+      const nextShiftId = existingSession.shiftId ?? shift?.id ?? null;
+
+      const syncedSession =
+        nextUserId !== existingSession.userId || nextShiftId !== existingSession.shiftId
+          ? await prisma.guestSession.update({
+              where: { id: existingSession.id },
+              data: {
+                userId: nextUserId,
+                shiftId: nextShiftId,
+              },
+              include: {
+                table: {
+                  select: { id: true, code: true, label: true },
+                },
+                shift: {
+                  select: { id: true, openedAt: true },
+                },
+              },
+            })
+          : {
+              id: existingSession.id,
+              startedAt: existingSession.startedAt,
+              table: {
+                id: existingSession.table.id,
+                code: existingSession.table.code,
+                label: existingSession.table.label,
+              },
+              shift: existingSession.shift
+                ? {
+                    id: existingSession.shift.id,
+                    openedAt: existingSession.shift.openedAt,
+                  }
+                : null,
+            };
+
+      const token = jwt.sign(
+        { sessionId: existingSession.id },
+        env.JWT_GUEST_SESSION_SECRET,
+        { expiresIn: "24h" }
+      );
+
+      setCookie(res, "gsid", token, 60 * 60 * 24);
+
+      return res.json({
+        ok: true,
+        session: toGuestSessionResponse(syncedSession),
+        reused: true,
+      });
+    }
+
+    await closePreviousSessionFromCookie(req);
 
     const session = await prisma.guestSession.create({
       data: {
@@ -206,21 +284,12 @@ guestRouter.post(
 
     res.json({
       ok: true,
-      session: {
-        id: session.id,
-        table: {
-          id: table.id,
-          code: table.code,
-          label: table.label,
-        },
-        shift: shift
-          ? {
-              id: shift.id,
-              openedAt: shift.openedAt,
-            }
-          : null,
-        startedAt: session.startedAt,
-      },
+      session: toGuestSessionResponse({
+        ...session,
+        table,
+        shift,
+      }),
+      reused: false,
     });
   })
 );
@@ -237,7 +306,11 @@ guestRouter.get(
       ok: true,
       session: {
         id: session.id,
-        table: session.table,
+        table: {
+          id: session.table.id,
+          code: session.table.code,
+          label: session.table.label,
+        },
         shift: session.shift ?? null,
         startedAt: session.startedAt,
       },
