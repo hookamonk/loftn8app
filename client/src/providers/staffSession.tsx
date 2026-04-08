@@ -15,6 +15,8 @@ export type StaffSession = {
   id: string;
   role: StaffRole;
   venueId: number;
+  venueSlug?: string;
+  venueName?: string;
   username: string;
 };
 

@@ -13,7 +13,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       <AuthProvider>
         <CartProvider>
           <ToastProvider>
-            <GuestFeedProvider>{children}</GuestFeedProvider>
+            <GuestFeedProvider>
+              {children}
+            </GuestFeedProvider>
           </ToastProvider>
         </CartProvider>
       </AuthProvider>

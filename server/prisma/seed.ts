@@ -11,6 +11,158 @@ type SeedItem = {
   imageUrl?: string | null; // ✅
 };
 
+const VENUES = [
+  {
+    slug: "zizkov",
+    name: "Loft№8 Žižkov",
+    staffPrefix: "ZIZKOV",
+    legacyPrefix: "PILOT",
+    defaults: {
+      waiter: "zizkov_waiter",
+      hookah: "zizkov_hookah",
+      manager: "zizkov_manager",
+    },
+  },
+  {
+    slug: "garden",
+    name: "Loft№8 Garden",
+    staffPrefix: "GARDEN",
+    legacyPrefix: null,
+    defaults: {
+      waiter: "garden_waiter",
+      hookah: "garden_hookah",
+      manager: "garden_manager",
+    },
+  },
+  {
+    slug: "nekazanka",
+    name: "Loft№8 Nekazanka",
+    staffPrefix: "NEKAZANKA",
+    legacyPrefix: null,
+    defaults: {
+      waiter: "nekazanka_waiter",
+      hookah: "nekazanka_hookah",
+      manager: "nekazanka_manager",
+    },
+  },
+] as const;
+
+function internalTableCode(venueSlug: string, code: string) {
+  return `${venueSlug}:${String(code).trim().toUpperCase()}`;
+}
+
+async function seedVenueTables(venueId: number, venueSlug: string) {
+  for (let i = 1; i <= 17; i++) {
+    const publicCode = `T${i}`;
+    await prisma.table.upsert({
+      where: { code: internalTableCode(venueSlug, publicCode) },
+      update: { venueId, label: `Table ${i}` },
+      create: { venueId, code: internalTableCode(venueSlug, publicCode), label: `Table ${i}` },
+    });
+  }
+
+  await prisma.table.upsert({
+    where: { code: internalTableCode(venueSlug, "VIP") },
+    update: { venueId, label: "VIP" },
+    create: { venueId, code: internalTableCode(venueSlug, "VIP"), label: "VIP" },
+  });
+}
+
+async function cloneVenueMenu(baseVenueId: number, targetVenueId: number) {
+  const categories = await prisma.menuCategory.findMany({
+    where: { venueId: baseVenueId },
+    orderBy: [{ section: "asc" }, { sort: "asc" }],
+    include: {
+      items: {
+        orderBy: { sort: "asc" },
+      },
+    },
+  });
+
+  for (const category of categories) {
+    const targetCategory = await upsertCategory(
+      targetVenueId,
+      category.name,
+      category.sort,
+      category.section
+    );
+
+    await prisma.menuItem.updateMany({
+      where: { categoryId: targetCategory.id },
+      data: { isActive: false },
+    });
+
+    for (const item of category.items) {
+      await upsertItemInCategory(targetCategory.id, {
+        name: item.name,
+        description: item.description ?? undefined,
+        priceCzk: item.priceCzk,
+        sort: item.sort,
+        imageUrl: (item as any).imageUrl ?? null,
+      });
+    }
+  }
+}
+
+function envOrFallback(primary: string, fallback: string | null, defaultValue: string) {
+  return process.env[primary] || (fallback ? process.env[fallback] : undefined) || defaultValue;
+}
+
+async function seedVenueStaff(
+  venueId: number,
+  staffPrefix: string,
+  defaults: { waiter: string; hookah: string; manager: string },
+  legacyPrefix: string | null
+) {
+  const waiterUser = envOrFallback(
+    `STAFF_${staffPrefix}_WAITER_USERNAME`,
+    legacyPrefix ? `STAFF_${legacyPrefix}_WAITER_USERNAME` : null,
+    defaults.waiter
+  );
+  const waiterPass = envOrFallback(
+    `STAFF_${staffPrefix}_WAITER_PASSWORD`,
+    legacyPrefix ? `STAFF_${legacyPrefix}_WAITER_PASSWORD` : null,
+    `${defaults.waiter}_1234`
+  );
+
+  const hookahUser = envOrFallback(
+    `STAFF_${staffPrefix}_HOOKAH_USERNAME`,
+    legacyPrefix ? `STAFF_${legacyPrefix}_HOOKAH_USERNAME` : null,
+    defaults.hookah
+  );
+  const hookahPass = envOrFallback(
+    `STAFF_${staffPrefix}_HOOKAH_PASSWORD`,
+    legacyPrefix ? `STAFF_${legacyPrefix}_HOOKAH_PASSWORD` : null,
+    `${defaults.hookah}_1234`
+  );
+
+  const managerUser = envOrFallback(
+    `STAFF_${staffPrefix}_MANAGER_USERNAME`,
+    legacyPrefix ? `STAFF_${legacyPrefix}_MANAGER_USERNAME` : null,
+    defaults.manager
+  );
+  const managerPass = envOrFallback(
+    `STAFF_${staffPrefix}_MANAGER_PASSWORD`,
+    legacyPrefix ? `STAFF_${legacyPrefix}_MANAGER_PASSWORD` : null,
+    `${defaults.manager}_1234`
+  );
+
+  const staffSeed: Array<{ role: "WAITER" | "HOOKAH" | "MANAGER"; username: string; password: string }> = [
+    { role: "WAITER", username: waiterUser, password: waiterPass },
+    { role: "HOOKAH", username: hookahUser, password: hookahPass },
+    { role: "MANAGER", username: managerUser, password: managerPass },
+  ];
+
+  for (const s of staffSeed) {
+    const passwordHash = await bcrypt.hash(s.password, 10);
+    await prisma.staffUser.upsert({
+      where: { username: s.username },
+      update: { role: s.role as any, venueId, passwordHash, isActive: true },
+      create: { role: s.role as any, venueId, username: s.username, passwordHash, isActive: true },
+    });
+  }
+}
+
 async function upsertCategory(
   venueId: number,
   name: string,
@@ -69,27 +221,13 @@ async function upsertItemInCategory(categoryId: number, data: SeedItem) {
 async function main() {
   // ===== 0) Venue =====
   const venue = await prisma.venue.upsert({
-    where: { slug: "pilot" },
-    update: { name: "Loft №8 (Pilot)" },
-    create: { name: "Loft №8 (Pilot)", slug: "pilot" },
+    where: { slug: "zizkov" },
+    update: { name: "Loft№8 Žižkov" },
+    create: { name: "Loft№8 Žižkov", slug: "zizkov" },
   });
 
   // ===== 1) Tables =====
-  const tablesCount = 17;
-  for (let i = 1; i <= tablesCount; i++) {
-    const code = `T${i}`;
-    await prisma.table.upsert({
-      where: { code },
-      update: { venueId: venue.id, label: `Table ${i}` },
-      create: { venueId: venue.id, code, label: `Table ${i}` },
-    });
-  }
-
-  await prisma.table.upsert({
-    where: { code: "VIP" },
-    update: { venueId: venue.id, label: "VIP" },
-    create: { venueId: venue.id, code: "VIP", label: "VIP" },
-  });
+  await seedVenueTables(venue.id, "zizkov");
 
   // ===== 2) Categories structure =====
   const DISHES: Array<[string, number]> = [
@@ -990,31 +1128,21 @@ async function main() {
   }
 
   // ===== 5) STAFF =====
-  const waiterUser = process.env.STAFF_PILOT_WAITER_USERNAME || "pilot_waiter";
-  const waiterPass = process.env.STAFF_PILOT_WAITER_PASSWORD || "pilot_waiter_1234";
+  await seedVenueStaff(venue.id, "ZIZKOV", VENUES[0].defaults, "PILOT");
 
-  const hookahUser = process.env.STAFF_PILOT_HOOKAH_USERNAME || "pilot_hookah";
-  const hookahPass = process.env.STAFF_PILOT_HOOKAH_PASSWORD || "pilot_hookah_1234";
-
-  const managerUser = process.env.STAFF_PILOT_MANAGER_USERNAME || "pilot_manager";
-  const managerPass = process.env.STAFF_PILOT_MANAGER_PASSWORD || "pilot_manager_1234";
-
-  const staffSeed: Array<{ role: "WAITER" | "HOOKAH" | "MANAGER"; username: string; password: string }> = [
-    { role: "WAITER", username: waiterUser, password: waiterPass },
-    { role: "HOOKAH", username: hookahUser, password: hookahPass },
-    { role: "MANAGER", username: managerUser, password: managerPass },
-  ];
-
-  for (const s of staffSeed) {
-    const passwordHash = await bcrypt.hash(s.password, 10);
-    await prisma.staffUser.upsert({
-      where: { username: s.username },
-      update: { role: s.role as any, venueId: venue.id, passwordHash, isActive: true },
-      create: { role: s.role as any, venueId: venue.id, username: s.username, passwordHash, isActive: true },
+  for (const target of VENUES.slice(1)) {
+    const targetVenue = await prisma.venue.upsert({
+      where: { slug: target.slug },
+      update: { name: target.name, isActive: true },
+      create: { slug: target.slug, name: target.name, isActive: true },
     });
+
+    await seedVenueTables(targetVenue.id, target.slug);
+    await cloneVenueMenu(venue.id, targetVenue.id);
+    await seedVenueStaff(targetVenue.id, target.staffPrefix, target.defaults, target.legacyPrefix);
   }
 
-  console.log("✅ Seed done (menu sections + tables + menu items + staff)");
+  console.log("✅ Seed done (multi-venue tables + menu items + staff)");
 }
 
 main()

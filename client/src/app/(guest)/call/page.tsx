@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
-import { PaymentSheet } from "@/components/PaymentSheet";
 import { RatingSheet } from "@/components/RatingSheet";
 import { useAuth } from "@/providers/auth";
 import { useGuestFeed } from "@/providers/guestFeed";
@@ -100,17 +100,17 @@ function SmallIcon({ name }: { name: "user" | "zap" | "card" }) {
 }
 
 export default function CallPage() {
+  const router = useRouter();
   const { me, loading } = useAuth();
   const canRate = !loading && !!me?.authenticated;
   const { feed, refresh } = useGuestFeed();
 
   const [msg, setMsg] = useState("");
   const [cooldown, setCooldown] = useState(false);
-  const [payOpen, setPayOpen] = useState(false);
-  const [useLoyalty, setUseLoyalty] = useState(false);
   const [ratingOpen, setRatingOpen] = useState(false);
   const [doneFlash, setDoneFlash] = useState<Record<string, boolean>>({});
   const prevStatusesRef = useRef<Record<string, "NEW" | "ACKED" | "DONE">>({});
+  const latestPaymentSnapshotRef = useRef<{ id: string; status: "PENDING" | "CONFIRMED" | "CANCELLED" } | null>(null);
 
   const { push } = useToast();
 
@@ -118,7 +118,6 @@ export default function CallPage() {
   const latestHookah = feed?.calls.find((call) => call.type === "HOOKAH");
   const latestPayment = feed?.payments.find((payment) => payment.status === "PENDING");
   const latestMessage = feed?.calls.find((call) => call.type === "HELP");
-  const availablePointsCzk = feed?.loyalty?.availableCzk ?? 0;
 
   useEffect(() => {
     const nextStatuses: Record<string, "NEW" | "ACKED" | "DONE"> = {};
@@ -139,6 +138,33 @@ export default function CallPage() {
 
     prevStatusesRef.current = nextStatuses;
   }, [feed]);
+
+  useEffect(() => {
+    const latestPaymentEntry = (feed?.payments ?? [])[0];
+    if (!latestPaymentEntry) {
+      latestPaymentSnapshotRef.current = null;
+      return;
+    }
+
+    const prev = latestPaymentSnapshotRef.current;
+    if (
+      prev &&
+      prev.id === latestPaymentEntry.id &&
+      prev.status === "PENDING" &&
+      latestPaymentEntry.status === "CANCELLED"
+    ) {
+      push({
+        kind: "info",
+        title: "Payment request cancelled",
+        message: "Please choose cashback or the payment method again.",
+      });
+    }
+
+    latestPaymentSnapshotRef.current = {
+      id: latestPaymentEntry.id,
+      status: latestPaymentEntry.status,
+    };
+  }, [feed?.payments, push]);
 
   const waiterStatus = doneFlash.WAITER ? "Done" : requestStatusText(latestWaiter?.status);
   const hookahStatus = doneFlash.HOOKAH ? "Done" : requestStatusText(latestHookah?.status);
@@ -163,34 +189,6 @@ export default function CallPage() {
       });
 
       setMsg("");
-    } catch (e: any) {
-      push({
-        kind: "error",
-        title: "Error",
-        message: e?.message ?? "Failed",
-      });
-    } finally {
-      window.setTimeout(() => setCooldown(false), 1400);
-    }
-  };
-
-  const requestPayment = async (method: "CARD" | "CASH") => {
-    setPayOpen(false);
-    if (cooldown) return;
-    setCooldown(true);
-
-    try {
-      await api("/payments/request", {
-        method: "POST",
-        body: JSON.stringify({ method, useLoyalty: availablePointsCzk > 0 ? useLoyalty : false }),
-      });
-      await refresh();
-
-      push({
-        kind: "success",
-        title: "Payment requested",
-        message: method === "CARD" ? "A staff member will come with the terminal." : "A staff member will come for cash payment.",
-      });
     } catch (e: any) {
       push({
         kind: "error",
@@ -276,10 +274,10 @@ export default function CallPage() {
           <ActionCard
             disabled={cooldown}
             title="Payment"
-            subtitle="Card / Cash"
+            subtitle="Choose items and payment method in Cart"
             statusText={paymentStatus}
             icon={<SmallIcon name="card" />}
-            onClick={() => setPayOpen(true)}
+            onClick={() => router.push("/cart")}
           />
         </div>
 
@@ -313,15 +311,6 @@ export default function CallPage() {
             </div>
           ) : null}
         </div>
-
-        <PaymentSheet
-          open={payOpen}
-          onClose={() => setPayOpen(false)}
-          onPick={requestPayment}
-          availablePointsCzk={availablePointsCzk}
-          useLoyalty={useLoyalty}
-          onToggleLoyalty={setUseLoyalty}
-        />
 
         <RatingSheet
           open={ratingOpen}

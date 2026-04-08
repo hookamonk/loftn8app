@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
@@ -45,14 +45,36 @@ export type GuestFeedCall = {
 
 export type GuestFeedPayment = {
   id: string;
+  sessionId: string | null;
+  isMine: boolean;
   method: "CARD" | "CASH";
   methodLabel: string;
   useLoyalty: boolean;
   status: "PENDING" | "CONFIRMED" | "CANCELLED";
   createdAt: string;
   confirmedAt: string | null;
+  billTotalCzk: number | null;
   amountCzk: number | null;
   loyaltyAppliedCzk: number;
+  items: Array<{
+    orderItemId: string;
+    menuItemId: number;
+    name: string;
+    qty: number;
+    unitPriceCzk: number;
+    totalCzk: number;
+    comment?: string;
+  }>;
+  statusTitle: string;
+  statusDescription: string;
+  statusTone: FeedTone;
+};
+
+export type GuestFeedOrderRequest = {
+  id: string;
+  status: "NEW" | "ACKED" | "DONE";
+  createdAt: string;
+  updatedAt: string;
   statusTitle: string;
   statusDescription: string;
   statusTone: FeedTone;
@@ -76,6 +98,7 @@ export type GuestFeedHistory = {
 };
 
 export type GuestFeed = {
+  currentSessionId: string;
   table: { id: number; code: string; label: string | null };
   totals: {
     orderedTotalCzk: number;
@@ -88,6 +111,7 @@ export type GuestFeed = {
     nextAvailableAt: string | null;
     cashbackPercent: number;
   };
+  orderRequest: GuestFeedOrderRequest | null;
   orders: GuestFeedOrder[];
   history: GuestFeedHistory[];
   calls: GuestFeedCall[];
@@ -103,14 +127,15 @@ type GuestFeedState = {
 const Ctx = createContext<GuestFeedState | null>(null);
 
 function isGuestSurface(pathname: string) {
-  return pathname === "/cart" || pathname === "/call" || pathname === "/profile";
+  return pathname === "/menu" || pathname === "/cart" || pathname === "/call" || pathname === "/profile";
 }
 
 export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { sessionReady } = useSession();
+  const { sessionReady, clearSession } = useSession();
   const [feed, setFeed] = useState<GuestFeed | null>(null);
   const [loading, setLoading] = useState(false);
+  const inFlightRef = useRef<Promise<void> | null>(null);
 
   const enabled = sessionReady && isGuestSurface(pathname);
 
@@ -120,37 +145,64 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const silent = opts?.silent ?? false;
-    if (!silent) setLoading(true);
-
-    try {
-      const next = await api<{
-        ok: true;
-        table: GuestFeed["table"];
-        totals: GuestFeed["totals"];
-        loyalty: GuestFeed["loyalty"];
-        orders: GuestFeed["orders"];
-        history: GuestFeed["history"];
-        calls: GuestFeed["calls"];
-        payments: GuestFeed["payments"];
-      }>("/guest/feed");
-
-      const nextFeed: GuestFeed = {
-        table: next.table,
-        totals: next.totals,
-        loyalty: next.loyalty,
-        orders: next.orders,
-        history: next.history,
-        calls: next.calls,
-        payments: next.payments,
-      };
-
-      setFeed(nextFeed);
-    } catch {
-      setFeed(null);
-    } finally {
-      if (!silent) setLoading(false);
+    if (inFlightRef.current) {
+      await inFlightRef.current;
+      return;
     }
+
+    const silent = opts?.silent ?? false;
+
+    const run = (async () => {
+      if (!silent) setLoading(true);
+
+      try {
+        const next = await api<{
+          ok: true;
+          currentSessionId: string;
+          table: GuestFeed["table"];
+          totals: GuestFeed["totals"];
+          loyalty: GuestFeed["loyalty"];
+          orderRequest: GuestFeed["orderRequest"];
+          orders: GuestFeed["orders"];
+          history: GuestFeed["history"];
+          calls: GuestFeed["calls"];
+          payments: GuestFeed["payments"];
+        }>("/guest/feed");
+
+        const nextFeed: GuestFeed = {
+          currentSessionId: next.currentSessionId,
+          table: next.table,
+          totals: next.totals,
+          loyalty: next.loyalty,
+          orderRequest: next.orderRequest,
+          orders: next.orders,
+          history: next.history,
+          calls: next.calls,
+          payments: next.payments,
+        };
+
+        setFeed(nextFeed);
+      } catch (e: any) {
+        const message = String(e?.message ?? "");
+        const sessionExpired =
+          message.includes("Guest session is required") ||
+          message.includes("Invalid guest session token") ||
+          message.includes("Session not found or ended");
+
+        if (sessionExpired) {
+          setFeed(null);
+          clearSession();
+        } else if (!silent) {
+          setFeed(null);
+        }
+      } finally {
+        if (!silent) setLoading(false);
+        inFlightRef.current = null;
+      }
+    })();
+
+    inFlightRef.current = run;
+    await run;
   };
 
   const { tick } = usePolling(() => refresh({ silent: true }), {

@@ -65,7 +65,14 @@ export async function staffLogin(
 ): Promise<ApiResult<{ staff: StaffSession }>> {
   const r = await tryPaths<{
     ok: true;
-    staff: { id: string; role: StaffRole; venueId: number; username: string };
+    staff: {
+      id: string;
+      role: StaffRole;
+      venueId: number;
+      venueSlug?: string;
+      venueName?: string;
+      username: string;
+    };
   }>(["/staff/auth/login", "/staff/login"], {
     method: "POST",
     body: JSON.stringify({ username, password }),
@@ -78,7 +85,16 @@ export async function staffLogin(
 export async function getStaffMe(): Promise<ApiResult<{ staff: StaffSession }>> {
   const r = await tryPaths<{
     ok: true;
-    staff: { id: string; role: StaffRole; venueId: number; username: string } | null;
+    staff:
+      | {
+          id: string;
+          role: StaffRole;
+          venueId: number;
+          venueSlug?: string;
+          venueName?: string;
+          username: string;
+        }
+      | null;
   }>(["/staff/auth/me"], {
     method: "GET",
   });
@@ -208,6 +224,14 @@ export type StaffOrder = {
   }>;
 };
 
+export type StaffOrderRequest = {
+  id: string;
+  status: CallStatus;
+  createdAt: string;
+  table: { id: number; code: string; label: string | null };
+  session: { id: string; user: { id: string; name: string; phone: string } | null };
+};
+
 export async function listOrders(status: OrderStatus): Promise<ApiResult<{ orders: StaffOrder[] }>> {
   return tryPaths<{ ok: true; orders: StaffOrder[] }>(
     [`/staff/dashboard/orders?status=${status}`, `/staff/orders?status=${status}`],
@@ -219,6 +243,33 @@ export async function updateOrderStatus(id: string, status: OrderStatus): Promis
   return tryPaths<{ ok: true }>(
     [`/staff/dashboard/orders/${id}/status`, `/staff/orders/${id}/status`],
     { method: "PATCH", body: JSON.stringify({ status }) }
+  );
+}
+
+export async function listOrderRequests(): Promise<ApiResult<{ requests: StaffOrderRequest[] }>> {
+  return tryPaths<{ ok: true; requests: StaffOrderRequest[] }>(
+    ["/staff/dashboard/order-requests"],
+    { method: "GET" }
+  ).then((r) => (r.ok ? { ok: true, data: { requests: r.data.requests } } : r));
+}
+
+export async function connectOrderRequest(id: string): Promise<ApiResult<{ request: StaffOrderRequest }>> {
+  return tryPaths<{ ok: true; request: StaffOrderRequest }>(
+    [`/staff/dashboard/order-requests/${id}/connect`],
+    { method: "POST", body: JSON.stringify({}) }
+  ).then((r) => (r.ok ? { ok: true, data: { request: r.data.request } } : r));
+}
+
+export async function createTableOrder(payload: {
+  tableId: number;
+  sessionId: string;
+  requestId?: string;
+  comment?: string;
+  items: Array<{ menuItemId: number; qty: number; comment?: string }>;
+}): Promise<ApiResult<any>> {
+  return tryPaths<any>(
+    ["/staff/dashboard/table-orders"],
+    { method: "POST", body: JSON.stringify(payload) }
   );
 }
 
@@ -262,6 +313,15 @@ export type StaffPayment = {
     userId: string | null;
     user: { id: string; name: string; phone: string } | null;
   };
+  items: Array<{
+    orderItemId: string;
+    menuItemId: number;
+    name: string;
+    qty: number;
+    unitPriceCzk: number;
+    totalCzk: number;
+    comment?: string;
+  }>;
 };
 
 export async function listPayments(status: PaymentStatus): Promise<ApiResult<{ payments: StaffPayment[] }>> {
@@ -274,6 +334,13 @@ export async function listPayments(status: PaymentStatus): Promise<ApiResult<{ p
 export async function confirmPayment(id: string): Promise<ApiResult<any>> {
   return tryPaths<any>(
     [`/staff/dashboard/payments/${id}/confirm`, `/staff/payments/${id}/confirm`],
+    { method: "POST", body: JSON.stringify({}) }
+  );
+}
+
+export async function cancelPayment(id: string): Promise<ApiResult<any>> {
+  return tryPaths<any>(
+    [`/staff/dashboard/payments/${id}/cancel`, `/staff/payments/${id}/cancel`],
     { method: "POST", body: JSON.stringify({}) }
   );
 }

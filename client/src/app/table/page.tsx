@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
+import { getVenueName, getVenueSlug, setVenueSlug } from "@/lib/venue";
 
 function normalizeTableCode(raw: string): string | null {
   const v = String(raw || "")
@@ -57,6 +58,7 @@ function extractTableCode(rawInput: string): string | null {
 const SCANNER_ID = "loft-table-qr-reader";
 
 export default function TablePage() {
+  const venueName = getVenueName();
   const [table, setTable] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
@@ -71,6 +73,7 @@ export default function TablePage() {
   const canGo = useMemo(() => !!extractTableCode(table), [table]);
 
   const goToTable = (code: string) => {
+    setVenueSlug(getVenueSlug());
     window.location.href = `/t/${encodeURIComponent(code)}`;
   };
 
@@ -257,7 +260,7 @@ export default function TablePage() {
 
       <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
         <div className="mb-4">
-          <div className="text-[11px] tracking-[0.28em] text-white/55">LOFT №8</div>
+          <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName.toUpperCase()}</div>
           <h1 className="mt-1 text-2xl font-bold text-white">Select table</h1>
           <div className="mt-1 text-xs text-white/60">Enter the table number or scan the QR code</div>
         </div>

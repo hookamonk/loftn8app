@@ -43,7 +43,14 @@ export function summarizeLoyalty(transactions: LoyaltyLike[], now = new Date()) 
 }
 
 export function effectiveAvailableAt(txn: LoyaltyLike) {
-  return new Date(txn.availableAt);
+  const rawAvailableAt = new Date(txn.availableAt);
+
+  if (!txn.createdAt) {
+    return rawAvailableAt;
+  }
+
+  const minAvailableAt = nextPragueMidnight(new Date(txn.createdAt));
+  return rawAvailableAt.getTime() >= minAvailableAt.getTime() ? rawAvailableAt : minAvailableAt;
 }
 
 function toZonedDate(date: Date, timeZone: string) {

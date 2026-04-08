@@ -1,13 +1,12 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import type { MenuResponse, MenuCategory, MenuItem, MenuSection } from "@/types";
-import { useCart } from "@/providers/cart";
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
-import { useAuth } from "@/providers/auth";
+import { useGuestFeed } from "@/providers/guestFeed";
 
 function Pill({
   active,
@@ -34,63 +33,31 @@ function Pill({
   );
 }
 
-function Qty({
-  qty,
+function OrderButton({
   disabled,
-  onMinus,
-  onPlus,
+  active,
+  onClick,
 }: {
-  qty: number;
   disabled?: boolean;
-  onMinus: () => void;
-  onPlus: () => void;
+  active?: boolean;
+  onClick: () => void;
 }) {
   return (
-    <div className="w-[112px] shrink-0">
-      {qty === 0 ? (
-        <button
-          type="button"
-          disabled={disabled}
-          className={[
-            "h-10 w-full rounded-2xl px-4 text-sm font-semibold transition",
-            disabled ? "bg-white/30 text-black/60" : "bg-white text-black hover:bg-white/90",
-          ].join(" ")}
-          onClick={onPlus}
-        >
-          Add
-        </button>
-      ) : (
-        <div className="flex h-10 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-1.5">
-          <button
-            type="button"
-            disabled={disabled}
-            className={[
-              "grid h-8 w-8 place-items-center rounded-xl border border-white/10 bg-black/30 text-base text-white transition",
-              disabled ? "opacity-40" : "hover:bg-black/40",
-            ].join(" ")}
-            onClick={onMinus}
-            aria-label="Decrease"
-          >
-            −
-          </button>
-
-          <div className="min-w-[20px] text-center text-sm font-semibold text-white">{qty}</div>
-
-          <button
-            type="button"
-            disabled={disabled}
-            className={[
-              "grid h-8 w-8 place-items-center rounded-xl border border-white/10 bg-black/30 text-base text-white transition",
-              disabled ? "opacity-40" : "hover:bg-black/40",
-            ].join(" ")}
-            onClick={onPlus}
-            aria-label="Increase"
-          >
-            +
-          </button>
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      disabled={disabled}
+      className={[
+        "h-10 w-[112px] shrink-0 rounded-2xl px-4 text-sm font-semibold transition",
+        active
+          ? "border border-emerald-400/20 bg-emerald-500/15 text-emerald-100"
+          : disabled
+          ? "bg-white/10 text-white/35"
+          : "bg-white text-black hover:bg-white/90",
+      ].join(" ")}
+      onClick={onClick}
+    >
+      {active ? "Requested" : "Order"}
+    </button>
   );
 }
 
@@ -129,23 +96,24 @@ export default function Page() {
 }
 
 function MenuPage() {
+  const router = useRouter();
   const [data, setData] = useState<MenuResponse | null>(null);
   const [activeSection, setActiveSection] = useState<MenuSection>("DISHES");
   const [activeCatId, setActiveCatId] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [requesting, setRequesting] = useState(false);
+  const [requestedItemId, setRequestedItemId] = useState<number | null>(null);
 
-  const { items, add, dec, clear } = useCart();
   const { push } = useToast();
-  const { me, loading: authLoading } = useAuth();
+  const { feed, refresh } = useGuestFeed();
 
-  const canOrder = !!me?.authenticated;
-
-  useEffect(() => {
-    if (authLoading) return;
-    if (!canOrder) clear();
-  }, [authLoading, canOrder, clear]);
-
+  const latestOrderRequest = feed?.orderRequest ?? null;
+  const activeOrderRequest =
+    latestOrderRequest && (latestOrderRequest.status === "NEW" || latestOrderRequest.status === "ACKED")
+      ? latestOrderRequest
+      : null;
+  const orderRequestActive = Boolean(activeOrderRequest);
   useEffect(() => {
     const load = async () => {
       try {
@@ -230,12 +198,6 @@ function MenuPage() {
     setActiveCatId(groups[0].cats[0]?.id ?? null);
   }, [activeSection, groupsBySection, activeCatId]);
 
-  const qtyById = useMemo(() => {
-    const map = new Map<number, number>();
-    for (const it of items) map.set(it.menuItemId, it.qty);
-    return map;
-  }, [items]);
-
   const filteredItems = useMemo<SearchItem[]>(() => {
     const query = q.trim().toLowerCase();
 
@@ -262,29 +224,36 @@ function MenuPage() {
 
   const isSearching = q.trim().length > 0;
 
-  const needAuthToast = () => {
-    push({
-      kind: "info",
-      title: "Account required",
-      message: "To place an order, please sign in or register.",
-      action: { label: "Sign in", href: "/auth" },
-    });
-  };
+  const requestOrder = async (item?: MenuItem) => {
+    if (orderRequestActive || requesting) return;
+    setRequestedItemId(item?.id ?? null);
+    setRequesting(true);
 
-  const onPlus = (i: MenuItem) => {
-    if (!canOrder) return needAuthToast();
-    add(i);
-    push({
-      kind: "success",
-      title: "Added",
-      message: i.name,
-      action: { label: "Cart", href: "/cart" },
-    });
-  };
+    try {
+      await api("/orders/request", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      await refresh();
 
-  const onMinus = (i: MenuItem) => {
-    if (!canOrder) return;
-    dec(i.id);
+      push({
+        kind: "success",
+        title: "Order requested",
+        message: item
+          ? `${item.name}: a waiter is on the way to your table.`
+          : "A waiter is on the way to your table.",
+      });
+      router.push("/cart");
+    } catch (e: any) {
+      push({
+        kind: "error",
+        title: "Request error",
+        message: e?.message ?? "Failed",
+      });
+      setRequestedItemId(null);
+    } finally {
+      setRequesting(false);
+    }
   };
 
   const showSubDropdown = (activeGroup?.cats?.length ?? 0) > 1;
@@ -295,32 +264,8 @@ function MenuPage() {
         <div className="mb-4">
           <div className="text-[11px] tracking-[0.28em] text-white/55">LOFT №8</div>
           <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
-          <div className="mt-1 text-xs text-white/60">Order in 1–2 taps</div>
+          <div className="mt-1 text-xs text-white/60">Browse the menu</div>
         </div>
-
-        {!authLoading && !canOrder ? (
-          <div className="mb-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
-            <div className="text-sm font-semibold text-white">Guest mode</div>
-            <div className="mt-2 text-sm text-white/70">
-              Table is already connected. You can browse the menu and contact the staff, but ordering is available only after sign in.
-            </div>
-
-            <div className="mt-3 flex gap-2">
-              <Link
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white"
-                href="/call"
-              >
-                Staff
-              </Link>
-              <Link
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-black"
-                href="/auth"
-              >
-                Sign in / Register
-              </Link>
-            </div>
-          </div>
-        ) : null}
 
         <div className="rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
           <input
@@ -404,8 +349,6 @@ function MenuPage() {
           ) : null}
 
           {filteredItems.map((i) => {
-            const qty = qtyById.get(i.id) ?? 0;
-
             const meta =
               isSearching && i.__catName && i.__section
                 ? `${SECTION_LABEL[i.__section]} · ${i.__catName}`
@@ -452,17 +395,11 @@ function MenuPage() {
 
                     <div className="mt-3 flex items-center justify-between gap-3">
                       <div className="text-base font-semibold text-white">{i.priceCzk} Kč</div>
-
-                      {canOrder ? (
-                        <Qty
-                          qty={qty}
-                          disabled={!canOrder}
-                          onMinus={() => onMinus(i)}
-                          onPlus={() => onPlus(i)}
-                        />
-                      ) : (
-                        <div className="text-right text-xs text-white/55">Sign in to order</div>
-                      )}
+                      <OrderButton
+                        active={requestedItemId === i.id && requesting}
+                        disabled={requesting || orderRequestActive}
+                        onClick={() => void requestOrder(i)}
+                      />
                     </div>
                   </div>
                 </div>

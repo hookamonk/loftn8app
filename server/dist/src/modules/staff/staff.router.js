@@ -1,0 +1,15 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.staffRouter = void 0;
+const express_1 = require("express");
+const staffAuth_routes_1 = require("./staffAuth.routes");
+const staffDashboard_routes_1 = require("./staffDashboard.routes");
+const push_routes_1 = require("./push.routes");
+const shift_routes_1 = require("./shift.routes");
+const admin_routes_1 = require("./admin.routes");
+exports.staffRouter = (0, express_1.Router)();
+exports.staffRouter.use("/auth", staffAuth_routes_1.staffAuthRouter);
+exports.staffRouter.use("/dashboard", staffDashboard_routes_1.staffDashboardRouter);
+exports.staffRouter.use("/push", push_routes_1.staffPushRouter);
+exports.staffRouter.use("/shift", shift_routes_1.staffShiftRouter);
+exports.staffRouter.use("/admin", admin_routes_1.staffAdminRouter);

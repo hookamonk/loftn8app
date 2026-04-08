@@ -1,25 +1,31 @@
 "use client";
 
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { listOrders, updateOrderStatus, type StaffOrder, type OrderStatus } from "@/lib/staffApi";
+import {
+  listOrders,
+  listOrderRequests,
+  connectOrderRequest,
+  updateOrderStatus,
+  type StaffOrder,
+  type StaffOrderRequest,
+  type OrderStatus,
+} from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { attachStaffRealtime } from "@/lib/staffRealtime";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useToast } from "@/providers/toast";
 
-const STATUSES: OrderStatus[] = ["NEW", "ACCEPTED", "IN_PROGRESS", "DELIVERED", "CANCELLED"];
+const STATUSES: OrderStatus[] = ["IN_PROGRESS", "DELIVERED", "CANCELLED"];
 
 function statusLabel(s: OrderStatus) {
-  if (s === "NEW") return "New";
-  if (s === "ACCEPTED") return "Accepted";
+  if (s === "NEW") return "Preparing";
   if (s === "IN_PROGRESS") return "Preparing";
   if (s === "DELIVERED") return "Ready";
   return "Cancelled";
 }
 
 function nextAction(s: OrderStatus) {
-  if (s === "NEW") return { status: "IN_PROGRESS" as OrderStatus, label: "Start preparing" };
-  if (s === "ACCEPTED") return { status: "IN_PROGRESS" as OrderStatus, label: "Start preparing" };
   if (s === "IN_PROGRESS") return { status: "DELIVERED" as OrderStatus, label: "Mark as ready" };
   return null;
 }
@@ -34,8 +40,15 @@ const btnGhost =
   "rounded-2xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white";
 
 export default function StaffOrdersPage() {
-  const [status, setStatus] = useState<OrderStatus>("NEW");
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialStatus = (() => {
+    const raw = searchParams.get("status");
+    return STATUSES.includes(raw as OrderStatus) ? (raw as OrderStatus) : "IN_PROGRESS";
+  })();
+  const [status, setStatus] = useState<OrderStatus>(initialStatus);
   const [orders, setOrders] = useState<StaffOrder[]>([]);
+  const [requests, setRequests] = useState<StaffOrderRequest[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [last, setLast] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,16 +60,17 @@ export default function StaffOrdersPage() {
     if (!silent) setLoading(true);
     setErr(null);
 
-    const r = await listOrders(status);
+    const [ordersResult, requestsResult] = await Promise.all([listOrders(status), listOrderRequests()]);
 
     if (!silent) setLoading(false);
 
-    if (!r.ok) {
-      setErr(r.error);
+    if (!ordersResult.ok) {
+      setErr(ordersResult.error);
       return;
     }
 
-    setOrders(r.data.orders);
+    setOrders(ordersResult.data.orders);
+    setRequests(requestsResult.ok ? requestsResult.data.requests : []);
     setLast(Date.now());
   };
 
@@ -76,6 +90,16 @@ export default function StaffOrdersPage() {
     void load({ silent: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
+
+  useEffect(() => {
+    const raw = searchParams.get("status");
+    if (raw && STATUSES.includes(raw as OrderStatus) && raw !== status) {
+      setStatus(raw as OrderStatus);
+    } else if (raw === "NEW" && status !== "IN_PROGRESS") {
+      setStatus("IN_PROGRESS");
+      router.replace("/staff/orders?status=IN_PROGRESS");
+    }
+  }, [searchParams, status, router]);
 
   useStaffPushEvents(() => {
     void tick();
@@ -98,6 +122,24 @@ export default function StaffOrdersPage() {
 
     push({ kind: "success", title: "Готово", message: okText });
     await load({ silent: false });
+  };
+
+  const connectToTable = async (request: StaffOrderRequest) => {
+    setBusyId(request.id);
+    const result = await connectOrderRequest(request.id);
+    setBusyId(null);
+
+    if (!result.ok) {
+      push({ kind: "error", title: "Error", message: result.error });
+      return;
+    }
+
+    const connected = result.data.request;
+    router.push(
+      `/staff/orders/create?requestId=${encodeURIComponent(connected.id)}&tableId=${connected.table.id}&tableCode=${encodeURIComponent(
+        connected.table.code
+      )}&sessionId=${encodeURIComponent(connected.session.id)}`
+    );
   };
 
   return (
@@ -130,7 +172,10 @@ export default function StaffOrdersPage() {
                   ? "border-white/20 bg-white text-black"
                   : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
               ].join(" ")}
-              onClick={() => setStatus(s)}
+              onClick={() => {
+                setStatus(s);
+                router.replace(`/staff/orders?status=${s}`);
+              }}
             >
               {statusLabel(s)}
             </button>
@@ -146,6 +191,58 @@ export default function StaffOrdersPage() {
 
       {loading ? <div className="mt-4 text-sm text-white/60">Loading…</div> : null}
 
+      <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-white">Order requests</div>
+            <div className="mt-1 text-xs text-white/55">Tables waiting for a staff member to take the order</div>
+          </div>
+          <div className="rounded-full border border-white/10 bg-white/8 px-3 py-1 text-[11px] font-semibold text-white/75">
+            {requests.length}
+          </div>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          {requests.map((request) => (
+            <div
+              key={request.id}
+              className="rounded-2xl border border-white/10 bg-black/20 p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-white">
+                    Table {request.table.code}
+                    {request.table.label ? ` • ${request.table.label}` : ""}
+                  </div>
+                  <div className="mt-1 text-xs text-white/55">
+                    {new Date(request.createdAt).toLocaleTimeString()} • {request.status === "ACKED" ? "On the way" : "Requested"}
+                  </div>
+                  <div className="mt-2 text-sm text-white/70">
+                    {request.session.user
+                      ? `${request.session.user.name} • ${request.session.user.phone}`
+                      : "Guest without account"}
+                  </div>
+                </div>
+
+                <button
+                  className={btnPrimary}
+                  disabled={busyId === request.id}
+                  onClick={() => void connectToTable(request)}
+                >
+                  {busyId === request.id ? "Connecting…" : "Connect to table"}
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {!loading && requests.length === 0 ? (
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
+              No active order requests right now.
+            </div>
+          ) : null}
+        </div>
+      </div>
+
       <div className="mt-4 space-y-3">
         {orders.map((o) => {
           const action = nextAction(o.status);
@@ -160,7 +257,7 @@ export default function StaffOrdersPage() {
                   </div>
 
                   <div className="mt-1 text-lg font-semibold text-white">
-                    Стол {o.table.code}
+                    Table {o.table.code}
                     {o.table.label ? ` • ${o.table.label}` : ""}
                   </div>
 

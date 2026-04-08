@@ -17,6 +17,7 @@ type GuestSessionMeResponse =
       session: {
         id: string;
         table: { id: number; code: string; label: string | null };
+        venue?: { id: number | null; slug: string | null; name: string | null } | null;
         shift: { id: string; status: string; openedAt: string; closedAt: string | null } | null;
         startedAt: string;
       };
@@ -24,11 +25,13 @@ type GuestSessionMeResponse =
   | {
       ok: false;
       session: null;
+      expired?: boolean;
     };
 
 type SessionState = {
   tableCode: string | null;
   setTableCode: (code: string | null) => void;
+  clearSession: () => void;
   sessionReady: boolean;
   sessionError: string | null;
   restoreSession: () => Promise<void>;
@@ -51,6 +54,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setSessionError(null);
     if (code) storage.set(TABLE_KEY, code);
     else storage.del(TABLE_KEY);
+  };
+
+  const clearSession = () => {
+    _setTableCode(null);
+    setSessionReady(false);
+    setSessionError("No table selected");
+    storage.del(TABLE_KEY);
   };
 
   const restoreSession = async () => {
@@ -77,6 +87,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           setSessionReady(true);
           return;
         }
+        if (guestSession.expired) {
+          clearSession();
+          return;
+        }
       } catch {
         // ignore
       }
@@ -89,6 +103,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             ok: true;
             session: {
               table: { code: string };
+              venue?: { slug: string | null } | null;
             };
           }>("/guest/session", {
             method: "POST",
@@ -136,6 +151,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     () => ({
       tableCode,
       setTableCode,
+      clearSession,
       sessionReady,
       sessionError,
       restoreSession,

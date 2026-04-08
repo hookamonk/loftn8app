@@ -1,4 +1,3 @@
-
 const API = "/api";
 
 type FetchOptions = Omit<RequestInit, "headers"> & {

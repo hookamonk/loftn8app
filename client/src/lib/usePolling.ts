@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type PollingOptions = {
   enabled?: boolean;
@@ -26,38 +26,56 @@ export function usePolling(
   fnRef.current = fn;
 
   const timerRef = useRef<number | null>(null);
+  const inFlightRef = useRef(false);
+  const rerunRequestedRef = useRef(false);
   const [isRunning, setIsRunning] = useState(false);
 
-  const clear = () => {
+  const clear = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-  };
+  }, []);
 
-  const getNextDelay = () => {
+  const getNextDelay = useCallback(() => {
     const visible = typeof document !== "undefined" ? document.visibilityState === "visible" : true;
     const online = typeof navigator !== "undefined" ? navigator.onLine : true;
     return visible && online ? activeMs : idleMs;
-  };
+  }, [activeMs, idleMs]);
 
-  const schedule = (ms: number) => {
+  const schedule = useCallback((ms: number) => {
     clear();
     const jitter = Math.floor(Math.random() * jitterMs);
     timerRef.current = window.setTimeout(() => {
       void tick();
     }, ms + jitter);
-  };
+  }, [clear, jitterMs]);
 
-  async function tick() {
+  const tick = useCallback(async () => {
     if (!enabled) return;
+    if (inFlightRef.current) {
+      rerunRequestedRef.current = true;
+      return;
+    }
+
+    inFlightRef.current = true;
 
     try {
       await fnRef.current();
     } finally {
+      inFlightRef.current = false;
+
+      if (!enabled) return;
+
+      if (rerunRequestedRef.current) {
+        rerunRequestedRef.current = false;
+        schedule(150);
+        return;
+      }
+
       schedule(getNextDelay());
     }
-  }
+  }, [enabled, getNextDelay, schedule]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -86,7 +104,7 @@ export function usePolling(
       window.removeEventListener("online", onOnline);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, activeMs, idleMs, immediate]);
+  }, [enabled, activeMs, idleMs, immediate, tick, clear]);
 
   return { tick, isRunning, stop: clear };
 }

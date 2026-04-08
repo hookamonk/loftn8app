@@ -25,7 +25,6 @@ async function attachSessionToActiveShiftIfNeeded(sessionId: string) {
   });
 
   if (!session) throw new HttpError(401, "SESSION_INVALID", "Session invalid");
-  if (session.shiftId) return session;
 
   const activeShift = await prisma.shift.findFirst({
     where: {
@@ -37,6 +36,7 @@ async function attachSessionToActiveShiftIfNeeded(sessionId: string) {
   });
 
   if (!activeShift) return session;
+  if (session.shiftId === activeShift.id) return session;
 
   await prisma.guestSession.update({
     where: { id: session.id },

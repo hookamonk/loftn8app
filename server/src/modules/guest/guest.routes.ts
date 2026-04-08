@@ -9,11 +9,19 @@ import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
 import { guestSessionAuth } from "../../middleware/auth/guestSession";
 import { summarizeLoyalty } from "../../utils/loyalty";
+import { isOrderRequestMessage, ORDER_REQUEST_MARKER } from "../orders/orderRequest";
+import { latestLegacyPaymentCutoff, paidQtyByOrderItemId, parsePaymentItemsJson } from "../payments/paymentAllocation";
+import { expireGuestSessionIfInactiveAfterPayment } from "./sessionExpiry";
+import {
+  publicTableCode,
+  venueNameBySlug,
+} from "../../config/venues";
 
 export const guestRouter = Router();
 
 const CreateSessionSchema = z.object({
   tableCode: z.string().min(1),
+  venueSlug: z.string().min(1).optional(),
 });
 
 const CreateRatingSchema = z.object({
@@ -32,6 +40,17 @@ function setCookie(res: any, name: string, value: string, maxAgeSeconds: number)
     secure: isProd,
     domain: env.COOKIE_DOMAIN || undefined,
     maxAge: maxAgeSeconds * 1000,
+    path: "/",
+  });
+}
+
+function clearCookie(res: any, name: string) {
+  const isProd = env.NODE_ENV === "production";
+
+  res.clearCookie(name, {
+    sameSite: isProd ? "none" : "lax",
+    secure: isProd,
+    domain: env.COOKIE_DOMAIN || undefined,
     path: "/",
   });
 }
@@ -56,23 +75,49 @@ function isKnownPilotTableCode(code: string) {
   return Number.isInteger(n) && n >= 1 && n <= 17;
 }
 
+async function resolveVenue() {
+  const exact = await prisma.venue.findFirst({
+    where: {
+      slug: { in: ["pilot", "zizkov"] },
+      isActive: true,
+    },
+    orderBy: { id: "asc" },
+    select: { id: true, slug: true, name: true },
+  });
+
+  if (exact) return exact;
+
+  return prisma.venue.create({
+    data: {
+      slug: "pilot",
+      name: venueNameBySlug("pilot"),
+      isActive: true,
+    },
+    select: { id: true, slug: true, name: true },
+  });
+}
+
 async function resolveTableByCode(rawTableCode: string) {
   const tableCode = normalizeTableCode(rawTableCode);
   if (!tableCode) return null;
 
-  const existing = await prisma.table.findUnique({
-    where: { code: tableCode },
-    select: { id: true, code: true, label: true, venueId: true },
+  const legacyCodes = Array.from(new Set([tableCode, `pilot:${tableCode}`, `zizkov:${tableCode}`]));
+
+  const existing = await prisma.table.findFirst({
+    where: { code: { in: legacyCodes } },
+    select: {
+      id: true,
+      code: true,
+      label: true,
+      venueId: true,
+      venue: { select: { slug: true, name: true } },
+    },
   });
   if (existing) return existing;
 
   if (!isKnownPilotTableCode(tableCode)) return null;
 
-  const venue = await prisma.venue.findUnique({
-    where: { slug: "pilot" },
-    select: { id: true },
-  });
-  if (!venue) return null;
+  const venue = await resolveVenue();
 
   const label = tableCode === "VIP" ? "VIP" : `Table ${Number(tableCode.slice(1))}`;
 
@@ -87,7 +132,13 @@ async function resolveTableByCode(rawTableCode: string) {
       code: tableCode,
       label,
     },
-    select: { id: true, code: true, label: true, venueId: true },
+    select: {
+      id: true,
+      code: true,
+      label: true,
+      venueId: true,
+      venue: { select: { slug: true, name: true } },
+    },
   });
 }
 
@@ -125,6 +176,7 @@ async function closePreviousSessionFromCookie(req: any) {
 }
 
 async function resolveGuestSessionFromCookie(req: any) {
+  req.__guestSessionExpired = false;
   const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
   if (!gsid) return null;
 
@@ -134,7 +186,13 @@ async function resolveGuestSessionFromCookie(req: any) {
       where: { id: payload.sessionId },
       include: {
         table: {
-          select: { id: true, code: true, label: true, venueId: true },
+          select: {
+            id: true,
+            code: true,
+            label: true,
+            venueId: true,
+            venue: { select: { slug: true, name: true } },
+          },
         },
         shift: {
           select: { id: true, status: true, openedAt: true, closedAt: true },
@@ -142,7 +200,16 @@ async function resolveGuestSessionFromCookie(req: any) {
       },
     });
 
-    if (!session || session.endedAt) return null;
+    if (!session || session.endedAt) {
+      req.__guestSessionExpired = true;
+      return null;
+    }
+
+    const expiry = await expireGuestSessionIfInactiveAfterPayment(session.id);
+    if (expiry.expired) {
+      req.__guestSessionExpired = true;
+      return null;
+    }
 
     const user = await resolveUserFromCookie(req);
     if (user && session.userId !== user.id) {
@@ -151,7 +218,13 @@ async function resolveGuestSessionFromCookie(req: any) {
         data: { userId: user.id },
         include: {
           table: {
-            select: { id: true, code: true, label: true, venueId: true },
+            select: {
+              id: true,
+              code: true,
+              label: true,
+              venueId: true,
+              venue: { select: { slug: true, name: true } },
+            },
           },
           shift: {
             select: { id: true, status: true, openedAt: true, closedAt: true },
@@ -178,8 +251,13 @@ function toGuestSessionResponse(
     id: session.id,
     table: {
       id: session.table.id,
-      code: session.table.code,
+      code: publicTableCode(session.table.code),
       label: session.table.label,
+    },
+    venue: {
+      id: (session.table as any).venueId ?? null,
+      slug: (session.table as any).venue?.slug ?? null,
+      name: (session.table as any).venue?.name ?? null,
     },
     shift: session.shift
       ? {
@@ -309,8 +387,32 @@ function paymentStatusView(
 
   return {
     title: "Payment cancelled",
-    description: "This payment request was cancelled.",
-    tone: "error" as const,
+    description: "The staff cancelled this payment request. Please choose the payment method again.",
+    tone: "info" as const,
+  };
+}
+
+function orderRequestStatusView(status: CallStatus) {
+  if (status === "NEW") {
+    return {
+      title: "Order requested",
+      description: "The staff can already see that your table wants to order.",
+      tone: "info" as const,
+    };
+  }
+
+  if (status === "ACKED") {
+    return {
+      title: "On the way",
+      description: "A staff member is coming to your table to take the order.",
+      tone: "success" as const,
+    };
+  }
+
+  return {
+    title: "Taken by staff",
+    description: "The order is now being entered by the staff.",
+    tone: "success" as const,
   };
 }
 
@@ -318,7 +420,10 @@ guestRouter.post(
   "/session",
   validate(CreateSessionSchema),
   asyncHandler(async (req, res) => {
-    const { tableCode: rawTableCode } = req.body as { tableCode: string };
+    const { tableCode: rawTableCode, venueSlug } = req.body as {
+      tableCode: string;
+      venueSlug?: string;
+    };
 
     const table = await resolveTableByCode(rawTableCode);
 
@@ -351,7 +456,13 @@ guestRouter.post(
               },
               include: {
                 table: {
-                  select: { id: true, code: true, label: true },
+                  select: {
+                    id: true,
+                    code: true,
+                    label: true,
+                    venueId: true,
+                    venue: { select: { slug: true, name: true } },
+                  },
                 },
                 shift: {
                   select: { id: true, openedAt: true },
@@ -363,8 +474,10 @@ guestRouter.post(
               startedAt: existingSession.startedAt,
               table: {
                 id: existingSession.table.id,
-                code: existingSession.table.code,
+                code: publicTableCode(existingSession.table.code),
                 label: existingSession.table.label,
+                venueId: existingSession.table.venueId,
+                venue: existingSession.table.venue,
               },
               shift: existingSession.shift
                 ? {
@@ -424,7 +537,10 @@ guestRouter.get(
   asyncHandler(async (req, res) => {
     const session = await resolveGuestSessionFromCookie(req);
     if (!session) {
-      return res.json({ ok: false, session: null });
+      if ((req as any).__guestSessionExpired) {
+        clearCookie(res, "gsid");
+      }
+      return res.json({ ok: false, session: null, expired: Boolean((req as any).__guestSessionExpired) });
     }
 
     res.json({
@@ -433,8 +549,13 @@ guestRouter.get(
         id: session.id,
         table: {
           id: session.table.id,
-          code: session.table.code,
+          code: publicTableCode(session.table.code),
           label: session.table.label,
+        },
+        venue: {
+          id: (session.table as any).venueId ?? null,
+          slug: (session.table as any).venue?.slug ?? null,
+          name: (session.table as any).venue?.name ?? null,
         },
         shift: session.shift ?? null,
         startedAt: session.startedAt,
@@ -449,9 +570,9 @@ guestRouter.get(
   asyncHandler(async (req, res) => {
     const session = req.guestSession!;
 
-    const [orders, calls, payments, loyaltyTransactions] = await Promise.all([
+    const [orders, calls, payments, loyaltyTransactions, orderRequest] = await Promise.all([
       prisma.order.findMany({
-        where: { sessionId: session.id },
+        where: { tableId: session.tableId },
         orderBy: { createdAt: "desc" },
         include: {
           items: {
@@ -468,11 +589,17 @@ guestRouter.get(
         orderBy: { createdAt: "desc" },
       }),
       (prisma as any).paymentRequest.findMany({
-        where: { sessionId: session.id },
+        where: { tableId: session.tableId },
         orderBy: { createdAt: "desc" },
         include: {
+          session: {
+            select: {
+              id: true,
+              userId: true,
+            },
+          },
           confirmation: {
-            select: { amountCzk: true, loyaltyAppliedCzk: true, createdAt: true },
+            select: { amountCzk: true, billTotalCzk: true, loyaltyAppliedCzk: true, itemsJson: true, createdAt: true },
           },
         },
       }),
@@ -482,9 +609,47 @@ guestRouter.get(
             orderBy: { createdAt: "desc" },
           })
         : Promise.resolve([]),
+      prisma.staffCall.findFirst({
+        where: {
+          tableId: session.tableId,
+          type: "HELP",
+          message: ORDER_REQUEST_MARKER,
+        },
+        orderBy: { createdAt: "desc" },
+      }),
     ]);
 
-    const toFeedOrder = (order: (typeof orders)[number]) => {
+    const legacyCutoff = latestLegacyPaymentCutoff(payments as any[]);
+    const paidQtyMap = paidQtyByOrderItemId(payments as any[]);
+
+    const remainingOrders = orders
+      .filter((order) => {
+        if (!legacyCutoff) return true;
+        return new Date(order.createdAt).getTime() > legacyCutoff;
+      })
+      .map((order) => ({
+        ...order,
+        items: order.items
+          .map((item) => {
+            const remainingQty = Math.max(item.qty - (paidQtyMap.get(item.id) ?? 0), 0);
+            if (remainingQty <= 0) return null;
+
+            return {
+              ...item,
+              qty: remainingQty,
+            };
+          })
+          .filter(
+            (
+              item
+            ): item is typeof order.items[number] & {
+              qty: number;
+            } => Boolean(item)
+          ),
+      }))
+      .filter((order) => order.items.length > 0);
+
+    const toFeedOrder = (order: (typeof remainingOrders)[number]) => {
       const totalCzk = order.items.reduce((sum, item) => sum + item.priceCzk * item.qty, 0);
       const view = orderStatusView(order.status);
 
@@ -510,9 +675,12 @@ guestRouter.get(
       };
     };
 
-    const settledOrderIds = new Set<string>();
     const history = [...(payments as any[])]
       .filter((payment: any) => payment.status === "CONFIRMED")
+      .filter((payment: any) => {
+        if (session.userId) return payment.session?.userId === session.userId;
+        return payment.session?.id === session.id;
+      })
       .sort((a: any, b: any) => {
         const left = new Date(a.confirmedAt ?? a.createdAt).getTime();
         const right = new Date(b.confirmedAt ?? b.createdAt).getTime();
@@ -520,17 +688,7 @@ guestRouter.get(
       })
       .map((payment: any) => {
         const closedAt = payment.confirmedAt ?? payment.confirmation?.createdAt ?? payment.createdAt;
-        const closedAtTs = new Date(closedAt).getTime();
-
-        const scopedOrders = [...orders]
-          .filter((order) => !settledOrderIds.has(order.id) && new Date(order.createdAt).getTime() < closedAtTs)
-          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-
-        for (const order of scopedOrders) {
-          settledOrderIds.add(order.id);
-        }
-
-        const paidOrders = scopedOrders.filter((order) => order.status !== "CANCELLED");
+        const snapshotItems = parsePaymentItemsJson(payment.confirmation?.itemsJson ?? payment.itemsJson);
         const itemMap = new Map<
           string,
           {
@@ -542,49 +700,43 @@ guestRouter.get(
           }
         >();
 
-        for (const order of paidOrders) {
-          for (const item of order.items) {
-            const key = `${item.menuItem.id}:${item.comment ?? ""}`;
-            const existing = itemMap.get(key);
+        for (const item of snapshotItems) {
+          const key = `${item.menuItemId}:${item.comment ?? ""}`;
+          const existing = itemMap.get(key);
 
-            if (existing) {
-              existing.qty += item.qty;
-              existing.totalCzk += item.priceCzk * item.qty;
-              continue;
-            }
-
-            itemMap.set(key, {
-              key,
-              name: item.menuItem.name,
-              qty: item.qty,
-              totalCzk: item.priceCzk * item.qty,
-              comment: item.comment ?? undefined,
-            });
+          if (existing) {
+            existing.qty += item.qty;
+            existing.totalCzk += item.totalCzk;
+            continue;
           }
-        }
 
-        const fallbackAmountCzk = paidOrders.reduce(
-          (sum, order) => sum + order.items.reduce((inner, item) => inner + item.priceCzk * item.qty, 0),
-          0
-        );
+          itemMap.set(key, {
+            key,
+            name: item.name,
+            qty: item.qty,
+            totalCzk: item.totalCzk,
+            comment: item.comment ?? undefined,
+          });
+        }
 
         return {
           id: payment.id,
           method: payment.method,
           methodLabel: paymentMethodLabel(payment.method),
-          amountCzk: payment.confirmation?.amountCzk ?? fallbackAmountCzk,
+          amountCzk: payment.confirmation?.amountCzk ?? payment.billTotalCzk ?? 0,
           closedAt,
-          orderCount: paidOrders.length,
+          orderCount: 1,
           itemCount: Array.from(itemMap.values()).reduce((sum, item) => sum + item.qty, 0),
           items: Array.from(itemMap.values()),
         };
       })
       .filter((entry) => entry.itemCount > 0 || entry.amountCzk > 0);
 
-    const activeOrders = orders.filter((order) => !settledOrderIds.has(order.id));
-    const feedOrders = activeOrders.map(toFeedOrder);
+    const feedOrders = remainingOrders.map(toFeedOrder);
 
-    const feedCalls = calls.map((call) => {
+    const visibleCalls = calls.filter((call) => !isOrderRequestMessage(call.message));
+
+    const feedCalls = visibleCalls.map((call) => {
       const view = callStatusView(call.type, call.status, call.message);
 
       return {
@@ -604,17 +756,22 @@ guestRouter.get(
     const feedPayments = (payments as any[]).map((payment: any) => {
       const amountCzk = payment.confirmation?.amountCzk ?? null;
       const view = paymentStatusView(payment.method, payment.status, amountCzk);
+      const isMine = payment.session?.id === session.id;
 
       return {
         id: payment.id,
+        sessionId: payment.session?.id ?? null,
+        isMine,
         method: payment.method,
         methodLabel: paymentMethodLabel(payment.method),
         useLoyalty: Boolean((payment as any).useLoyalty),
         status: payment.status,
         createdAt: payment.createdAt,
         confirmedAt: payment.confirmedAt,
+        billTotalCzk: payment.confirmation?.billTotalCzk ?? payment.billTotalCzk ?? null,
         amountCzk,
         loyaltyAppliedCzk: payment.confirmation?.loyaltyAppliedCzk ?? (payment as any).loyaltyAppliedCzk ?? 0,
+        items: parsePaymentItemsJson(payment.confirmation?.itemsJson ?? payment.itemsJson),
         statusTitle: view.title,
         statusDescription: view.description,
         statusTone: view.tone,
@@ -631,12 +788,23 @@ guestRouter.get(
     const redeemedLoyaltyCzk = 0;
     const loyalty = summarizeLoyalty(loyaltyTransactions as any[]);
 
+    const orderRequestView =
+      orderRequest && isOrderRequestMessage(orderRequest.message)
+        ? orderRequestStatusView(orderRequest.status)
+        : null;
+
     res.json({
       ok: true,
+      currentSessionId: session.id,
       table: {
         id: session.table.id,
-        code: session.table.code,
+        code: publicTableCode(session.table.code),
         label: session.table.label,
+      },
+      venue: {
+        id: (session.table as any).venueId ?? null,
+        slug: (session.table as any).venue?.slug ?? null,
+        name: (session.table as any).venue?.name ?? null,
       },
       totals: {
         orderedTotalCzk,
@@ -649,10 +817,48 @@ guestRouter.get(
         nextAvailableAt: loyalty.nextAvailableAt,
         cashbackPercent: 10,
       },
+      orderRequest:
+        orderRequest && orderRequestView
+          ? {
+              id: orderRequest.id,
+              status: orderRequest.status,
+              createdAt: orderRequest.createdAt,
+              updatedAt: orderRequest.updatedAt,
+              statusTitle: orderRequestView.title,
+              statusDescription: orderRequestView.description,
+              statusTone: orderRequestView.tone,
+            }
+          : null,
       orders: feedOrders,
       history,
       calls: feedCalls,
       payments: feedPayments,
+    });
+  })
+);
+
+guestRouter.post(
+  "/session/leave",
+  guestSessionAuth,
+  asyncHandler(async (req, res) => {
+    const session = req.guestSession!;
+    const now = new Date();
+
+    await prisma.guestSession.updateMany({
+      where: {
+        id: session.id,
+        endedAt: null,
+      },
+      data: {
+        endedAt: now,
+      },
+    });
+
+    clearCookie(res, "gsid");
+
+    res.json({
+      ok: true,
+      leftAt: now,
     });
   })
 );

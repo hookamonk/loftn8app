@@ -2,6 +2,8 @@ import webpush from "web-push";
 import { prisma } from "../../db/prisma";
 import type { StaffRole, MenuSection } from "@prisma/client";
 import { env } from "../../config/env";
+import { isOrderRequestMessage } from "../orders/orderRequest";
+import { publicTableCode } from "../../config/venues";
 
 type PushPayload = {
   title: string;
@@ -171,7 +173,7 @@ export async function notifyOrderCreated(orderId: string) {
   if (!order) return;
 
   const venueId = order.table.venueId;
-  const tableCode = order.table.code;
+  const tableCode = publicTableCode(order.table.code);
 
   const sections = order.items.map((it) => it.menuItem.category.section as MenuSection);
   const hasHookah = sections.includes("HOOKAH");
@@ -206,12 +208,13 @@ export async function notifyCallCreated(callId: string) {
   if (!call) return;
 
   const venueId = call.table.venueId;
-  const tableCode = call.table.code;
+  const tableCode = publicTableCode(call.table.code);
+  const isOrderRequest = call.type === "HELP" && isOrderRequestMessage(call.message);
 
   const roles: StaffRole[] = ["MANAGER"];
   if (call.type === "HOOKAH") roles.push("HOOKAH");
   if (call.type === "WAITER") roles.push("WAITER");
-  if (call.type === "HELP") roles.push("WAITER", "HOOKAH");
+  if (call.type === "HELP") roles.push(isOrderRequest ? "WAITER" : "WAITER", isOrderRequest ? "MANAGER" : "HOOKAH");
   if (call.type === "BILL") roles.push("WAITER");
 
   const kind =
@@ -225,8 +228,10 @@ export async function notifyCallCreated(callId: string) {
 
   const messagePreview = normalizeCallMessage(call.type, call.message);
   const isMessageOnly = call.type === "HELP" && !!messagePreview;
-  const title = isMessageOnly ? "Новое сообщение от гостя" : "Новый вызов";
-  const body = isMessageOnly
+  const title = isOrderRequest ? "Order requested" : isMessageOnly ? "Новое сообщение от гостя" : "Новый вызов";
+  const body = isOrderRequest
+    ? `Table ${tableCode} wants to place an order`
+    : isMessageOnly
     ? `Стол ${tableCode} • ${messagePreview}`
     : messagePreview
     ? `${kind} • Стол ${tableCode} • ${messagePreview}`
@@ -255,12 +260,12 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
 
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
     title: "Запрос оплаты",
-    body: `${pr.method === "CARD" ? "Карта" : "Наличные"} • Стол ${pr.table.code}`,
+    body: `${pr.method === "CARD" ? "Карта" : "Наличные"} • Стол ${publicTableCode(pr.table.code)}`,
     url: "/staff/payments",
     tag: `payment_pending:${pr.id}`,
     ts: Date.now(),
     kind: "PAYMENT_REQUESTED",
-    tableCode: pr.table.code,
+    tableCode: publicTableCode(pr.table.code),
     vibrate: [280, 120, 280, 120, 460],
   });
 }

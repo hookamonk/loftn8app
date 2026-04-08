@@ -2,6 +2,7 @@ import "./globals.css";
 import { AppProvider } from "@/providers/app";
 import { Manrope } from "next/font/google";
 import type { Metadata, Viewport } from "next";
+import { getVenueName } from "@/lib/venue";
 
 const manrope = Manrope({
   subsets: ["latin", "cyrillic"],
@@ -10,14 +11,16 @@ const manrope = Manrope({
   display: "swap",
 });
 
+const venueName = getVenueName(process.env.NEXT_PUBLIC_VENUE_SLUG);
+
 export const metadata: Metadata = {
-  title: "Loft N8 Pilot",
-  applicationName: "Loft N8",
+  title: venueName,
+  applicationName: venueName,
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Loft N8",
+    title: venueName,
   },
   icons: {
     icon: "/logo.svg",

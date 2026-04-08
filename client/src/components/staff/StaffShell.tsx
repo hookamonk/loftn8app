@@ -140,7 +140,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
 
                 {staff ? (
                   <div className="mt-1 text-sm text-white/60">
-                    {staff.username} • {roleLabel(staff.role)} • точка #{staff.venueId}
+                    {staff.username} • {roleLabel(staff.role)} • {staff.venueName ?? `venue #${staff.venueId}`}
                   </div>
                 ) : null}
               </div>

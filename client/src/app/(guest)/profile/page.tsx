@@ -107,7 +107,7 @@ export default function ProfilePage() {
 
         {loyalty.pendingCzk > 0 && loyalty.nextAvailableAt ? (
           <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/70">
-            New cashback is on the way.
+            New cashback will become available after midnight.
             <div className="mt-1 text-xs text-white/45">{formatDate(loyalty.nextAvailableAt)}</div>
           </div>
         ) : null}
@@ -231,7 +231,7 @@ export default function ProfilePage() {
             <div className="text-sm font-semibold text-white">How loyalty works</div>
             <div className="mt-3 space-y-2 text-sm text-white/75">
               <div>You get 10% cashback after each confirmed payment.</div>
-              <div>For testing, cashback becomes available right away after payment is confirmed.</div>
+              <div>New cashback becomes available only after midnight.</div>
               <div>You can either use all available points on the next bill or keep saving them.</div>
             </div>
 
