@@ -1,6 +1,11 @@
 import type { StaffSession, StaffRole } from "@/providers/staffSession";
 
 const API_BASE = "/api";
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error: string; status: number };
@@ -19,30 +24,51 @@ function withQuery(path: string, params?: Record<string, string | undefined>) {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
-  });
+  const method = String(init?.method ?? "GET").toUpperCase();
+  const maxAttempts = method === "GET" ? 3 : 1;
 
-  const text = await res.text();
-  let json: any = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(init?.headers || {}),
+        },
+      });
 
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    // ignore
+      const text = await res.text();
+      let json: any = null;
+
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        // ignore
+      }
+
+      if (!res.ok) {
+        const msg = (json && (json.message || json.error)) || `HTTP_${res.status}`;
+
+        if (attempt < maxAttempts && RETRYABLE_STATUS.has(res.status)) {
+          await sleep(350 * attempt);
+          continue;
+        }
+
+        return { ok: false, error: msg, status: res.status };
+      }
+
+      return { ok: true, data: json as T };
+    } catch {
+      if (attempt < maxAttempts) {
+        await sleep(350 * attempt);
+        continue;
+      }
+      return { ok: false, error: "NETWORK_ERROR", status: 0 };
+    }
   }
 
-  if (!res.ok) {
-    const msg = (json && (json.message || json.error)) || `HTTP_${res.status}`;
-    return { ok: false, error: msg, status: res.status };
-  }
-
-  return { ok: true, data: json as T };
+  return { ok: false, error: "NETWORK_ERROR", status: 0 };
 }
 
 async function tryPaths<T>(paths: string[], init?: RequestInit): Promise<ApiResult<T>> {
