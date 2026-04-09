@@ -175,7 +175,6 @@ staffDashboardRouter.get(
             message: ORDER_REQUEST_MARKER,
           },
           table: { venueId },
-          createdAt: { gte: shift.openedAt },
         },
       }),
       role === "HOOKAH"
@@ -430,7 +429,6 @@ staffDashboardRouter.get(
           message: ORDER_REQUEST_MARKER,
         },
         table: { venueId },
-        createdAt: { gte: shift.openedAt },
       },
       orderBy: { createdAt: "desc" },
       include: {
@@ -557,12 +555,12 @@ staffDashboardRouter.patch(
       select: {
         id: true,
         type: true,
-        session: { select: { shiftId: true } },
+        table: { select: { venueId: true } },
       },
     });
 
     if (!call) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
-    if (call.session?.shiftId !== shift.id) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
+    if (call.table.venueId !== venueId) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
     if (!allowedTypes.includes(call.type)) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
 
     await prisma.staffCall.update({
