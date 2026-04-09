@@ -75,8 +75,8 @@ export default function StaffOrdersPage() {
   };
 
   const { tick, isRunning } = usePolling(() => load({ silent: true }), {
-    activeMs: 4000,
-    idleMs: 12000,
+    activeMs: 8000,
+    idleMs: 30000,
     immediate: true,
     enabled: true,
   });

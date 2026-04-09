@@ -76,6 +76,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   const isAdmin = staff?.role === "ADMIN";
   const isManager = staff?.role === "MANAGER";
   const isAdminPage = pathname.startsWith("/staff/admin");
+  const shouldPollSummary = !isAdmin && !pathname.startsWith("/staff/summary");
 
   const loadSummary = async (opts?: { silent?: boolean }) => {
     if (isAdmin) return;
@@ -96,28 +97,28 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   };
 
   const { tick } = usePolling(() => loadSummary({ silent: true }), {
-    activeMs: 4000,
-    idleMs: 12000,
+    activeMs: 10000,
+    idleMs: 30000,
     immediate: true,
-    enabled: !isAdmin,
+    enabled: shouldPollSummary,
   });
 
   useEffect(() => {
-    if (isAdmin) return;
+    if (!shouldPollSummary) return;
     void loadSummary({ silent: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin, staff?.role]);
+  }, [shouldPollSummary, staff?.role]);
 
   useEffect(() => {
-    if (isAdmin) return;
+    if (!shouldPollSummary) return;
     const off = attachStaffRealtime(() => {
       void tick();
     });
     return off;
-  }, [tick, isAdmin]);
+  }, [tick, shouldPollSummary]);
 
   useStaffPushEvents(() => {
-    if (isAdmin) return;
+    if (!shouldPollSummary) return;
     void tick();
   });
 
