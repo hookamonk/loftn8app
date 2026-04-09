@@ -1,3 +1,5 @@
+import { ensureBackendWarm } from "@/lib/backendWarmup";
+
 const API = "/api";
 
 type FetchOptions = Omit<RequestInit, "headers"> & {
@@ -17,6 +19,10 @@ export async function api<T>(path: string, options: FetchOptions = {}): Promise<
   const method = String(options.method ?? "GET").toUpperCase();
   const maxAttempts = method === "GET" ? 3 : 1;
   let lastError: Error | null = null;
+
+  if (method !== "GET") {
+    await ensureBackendWarm();
+  }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {

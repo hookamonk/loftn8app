@@ -1,4 +1,5 @@
 import type { StaffSession, StaffRole } from "@/providers/staffSession";
+import { ensureBackendWarm } from "@/lib/backendWarmup";
 
 const API_BASE = "/api";
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
@@ -26,6 +27,10 @@ function withQuery(path: string, params?: Record<string, string | undefined>) {
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   const method = String(init?.method ?? "GET").toUpperCase();
   const maxAttempts = method === "GET" ? 3 : 1;
+
+  if (method !== "GET") {
+    await ensureBackendWarm();
+  }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {

@@ -127,7 +127,7 @@ type GuestFeedState = {
 const Ctx = createContext<GuestFeedState | null>(null);
 
 function isGuestSurface(pathname: string) {
-  return pathname === "/menu" || pathname === "/cart" || pathname === "/call" || pathname === "/profile";
+  return pathname === "/cart" || pathname === "/call" || pathname === "/profile";
 }
 
 export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
@@ -207,8 +207,8 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
 
   const { tick } = usePolling(() => refresh({ silent: true }), {
     enabled,
-    activeMs: 8000,
-    idleMs: 18000,
+    activeMs: 12000,
+    idleMs: 30000,
     immediate: false,
   });
 

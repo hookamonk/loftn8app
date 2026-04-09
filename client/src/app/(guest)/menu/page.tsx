@@ -91,6 +91,42 @@ type SearchItem = MenuItem & {
   __section?: MenuSection;
 };
 
+const MENU_CACHE_KEY = "guest_menu_cache_v1";
+const MENU_CACHE_TTL_MS = 60 * 1000;
+
+function readCachedMenu() {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(MENU_CACHE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as { ts: number; data: MenuResponse };
+    if (!parsed?.ts || !parsed?.data) return null;
+    if (Date.now() - parsed.ts > MENU_CACHE_TTL_MS) return null;
+
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedMenu(data: MenuResponse) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(
+      MENU_CACHE_KEY,
+      JSON.stringify({
+        ts: Date.now(),
+        data,
+      })
+    );
+  } catch {
+    // ignore cache write errors
+  }
+}
+
 export default function Page() {
   return <MenuPage />;
 }
@@ -114,21 +150,34 @@ function MenuPage() {
       ? latestOrderRequest
       : null;
   const orderRequestActive = Boolean(activeOrderRequest);
+
+  const applyMenu = (m: MenuResponse) => {
+    const catsWithItems = (m.categories ?? []).filter((c) => (c.items?.length ?? 0) > 0);
+    const next = { ...m, categories: catsWithItems };
+    setData(next);
+
+    const sec = firstSection(catsWithItems);
+    setActiveSection(sec);
+
+    const firstCatInSec = catsWithItems.find((c) => c.section === sec);
+    setActiveCatId(firstCatInSec?.id ?? catsWithItems[0]?.id ?? null);
+  };
+
   useEffect(() => {
+    const cached = readCachedMenu();
+    if (cached) {
+      applyMenu(cached);
+    }
+
     const load = async () => {
       try {
         const m = await api<MenuResponse>("/menu");
-        const catsWithItems = (m.categories ?? []).filter((c) => (c.items?.length ?? 0) > 0);
-
-        setData({ ...m, categories: catsWithItems });
-
-        const sec = firstSection(catsWithItems);
-        setActiveSection(sec);
-
-        const firstCatInSec = catsWithItems.find((c) => c.section === sec);
-        setActiveCatId(firstCatInSec?.id ?? catsWithItems[0]?.id ?? null);
+        writeCachedMenu(m);
+        applyMenu(m);
       } catch (e: any) {
-        setErr(e?.message ?? "Failed to load menu");
+        if (!cached) {
+          setErr(e?.message ?? "Failed to load menu");
+        }
       }
     };
     void load();

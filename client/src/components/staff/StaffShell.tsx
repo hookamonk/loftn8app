@@ -97,9 +97,9 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   };
 
   const { tick } = usePolling(() => loadSummary({ silent: true }), {
-    activeMs: 10000,
-    idleMs: 30000,
-    immediate: true,
+    activeMs: 15000,
+    idleMs: 45000,
+    immediate: false,
     enabled: shouldPollSummary,
   });
 
