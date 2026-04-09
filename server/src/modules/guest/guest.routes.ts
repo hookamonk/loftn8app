@@ -572,7 +572,10 @@ guestRouter.get(
 
     const [orders, calls, payments, loyaltyTransactions, orderRequest] = await Promise.all([
       prisma.order.findMany({
-        where: { tableId: session.tableId },
+        where: {
+          tableId: session.tableId,
+          ...(session.shiftId ? { session: { shiftId: session.shiftId } } : {}),
+        },
         orderBy: { createdAt: "desc" },
         include: {
           items: {
@@ -589,7 +592,10 @@ guestRouter.get(
         orderBy: { createdAt: "desc" },
       }),
       (prisma as any).paymentRequest.findMany({
-        where: { tableId: session.tableId },
+        where: {
+          tableId: session.tableId,
+          ...(session.shiftId ? { session: { shiftId: session.shiftId } } : {}),
+        },
         orderBy: { createdAt: "desc" },
         include: {
           session: {
@@ -614,6 +620,7 @@ guestRouter.get(
           tableId: session.tableId,
           type: "HELP",
           message: ORDER_REQUEST_MARKER,
+          ...(session.shiftId ? { session: { shiftId: session.shiftId } } : {}),
         },
         orderBy: { createdAt: "desc" },
       }),

@@ -76,6 +76,11 @@ paymentsRouter.post(
         table: {
           select: {
             orders: {
+              where: attachedSession.shiftId
+                ? {
+                    session: { shiftId: attachedSession.shiftId },
+                  }
+                : undefined,
               orderBy: { createdAt: "asc" },
               select: {
                 id: true,
@@ -95,7 +100,14 @@ paymentsRouter.post(
               },
             },
             payments: {
-              where: { status: "CONFIRMED" },
+              where: {
+                status: "CONFIRMED",
+                ...(attachedSession.shiftId
+                  ? {
+                      session: { shiftId: attachedSession.shiftId },
+                    }
+                  : {}),
+              },
               select: {
                 id: true,
                 status: true,

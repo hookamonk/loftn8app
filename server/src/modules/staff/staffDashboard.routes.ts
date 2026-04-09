@@ -186,7 +186,7 @@ staffDashboardRouter.get(
           status: "NEW",
           type: { in: types },
           ...excludeOrderRequestMarker(),
-          table: { venueId },
+          session: { shiftId: shift.id },
         },
       }),
       role === "HOOKAH"
@@ -438,7 +438,7 @@ staffDashboardRouter.get(
         status,
         type: { in: types },
         ...excludeOrderRequestMarker(),
-        table: { venueId },
+        session: { shiftId: shift.id },
       },
       orderBy: { createdAt: "desc" },
       include: {
