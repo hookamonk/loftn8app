@@ -4,55 +4,71 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { getVenueName, getVenueSlug, setVenueSlug } from "@/lib/venue";
 
-function normalizeTableCode(raw: string): string | null {
-  const v = String(raw || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "");
+function normalizeTableSlug(raw: string): string | null {
+  const value = String(raw || "").trim();
+  if (!value) return null;
 
-  if (!v) return null;
+  if (/^\d+$/.test(value)) return String(Number(value));
+  if (/^T\d+$/i.test(value)) return String(Number(value.slice(1)));
 
-  // 1 -> T1
-  if (/^\d+$/.test(v)) return `T${v}`;
+  const composite = value.match(/^(\d+)[.,](\d+)$/);
+  if (composite) {
+    return `${Number(composite[1])}-${Number(composite[2])}`;
+  }
 
-  // T1
-  if (/^T\d+$/.test(v)) return v;
+  const vip = value.match(/^vip(?:[\s-]?(\d+))?$/i);
+  if (vip) {
+    return `vip-${Number(vip[1] || "1")}`;
+  }
 
-  // VIP variants
-  if (v === "VIP") return "VIP";
-  if (v === "TVIP" || v === "T-VIP") return "VIP";
+  const slug = value
+    .toLowerCase()
+    .replace(/[.]/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 
-  // allow custom table codes like LOUNGE, BAR1, VIP2 if needed later
-  if (/^[A-Z0-9_-]+$/.test(v)) return v;
-
-  return null;
+  return slug || null;
 }
 
-function extractTableCode(rawInput: string): string | null {
+function extractTableSlug(rawInput: string): { branchSlug?: string; tableSlug: string } | null {
   const raw = String(rawInput || "").trim();
 
   try {
     const url = new URL(raw);
 
+    const branchPathMatch = url.pathname.match(/^\/(loft-[^/]+)\/tables\/([^/]+)$/i);
+    if (branchPathMatch?.[1] && branchPathMatch?.[2]) {
+      const tableSlug = normalizeTableSlug(branchPathMatch[2]);
+      if (tableSlug) {
+        return { branchSlug: branchPathMatch[1].toLowerCase(), tableSlug };
+      }
+    }
+
     const pathMatch = url.pathname.match(/\/t\/([^/]+)$/i);
     if (pathMatch?.[1]) {
-      return normalizeTableCode(pathMatch[1]);
+      const tableSlug = normalizeTableSlug(pathMatch[1]);
+      return tableSlug ? { tableSlug } : null;
     }
 
     const qp = url.searchParams.get("table");
     if (qp) {
-      return normalizeTableCode(qp);
+      const tableSlug = normalizeTableSlug(qp);
+      return tableSlug ? { tableSlug } : null;
     }
   } catch {}
 
   if (/^\/t\/[^/]+$/i.test(raw)) {
     const m = raw.match(/\/t\/([^/]+)$/i);
     if (m?.[1]) {
-      return normalizeTableCode(m[1]);
+      const tableSlug = normalizeTableSlug(m[1]);
+      return tableSlug ? { tableSlug } : null;
     }
   }
 
-  return normalizeTableCode(raw);
+  const tableSlug = normalizeTableSlug(raw);
+  return tableSlug ? { tableSlug } : null;
 }
 
 const SCANNER_ID = "loft-table-qr-reader";
@@ -70,21 +86,22 @@ export default function TablePage() {
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const canGo = useMemo(() => !!extractTableCode(table), [table]);
+  const canGo = useMemo(() => !!extractTableSlug(table), [table]);
 
-  const goToTable = (code: string) => {
-    setVenueSlug(getVenueSlug());
-    window.location.href = `/t/${encodeURIComponent(code)}`;
+  const goToTable = (tableSlug: string, branchSlug?: string) => {
+    const nextBranch = branchSlug ?? getVenueSlug();
+    setVenueSlug(nextBranch);
+    window.location.href = `/${encodeURIComponent(nextBranch)}/tables/${encodeURIComponent(tableSlug)}`;
   };
 
   const go = () => {
     setErr(null);
-    const code = extractTableCode(table);
-    if (!code) {
+    const match = extractTableSlug(table);
+    if (!match) {
       setErr("Enter the table number");
       return;
     }
-    goToTable(code);
+    goToTable(match.tableSlug, match.branchSlug);
   };
 
   const stopScan = async () => {
@@ -106,17 +123,17 @@ export default function TablePage() {
   };
 
   const handleDecoded = async (decodedText: string) => {
-    const code = extractTableCode(decodedText);
+    const match = extractTableSlug(decodedText);
 
-    if (!code) {
+    if (!match) {
       setScanErr("QR was scanned, but the format was not recognized.");
       return;
     }
 
-    setTable(code);
+    setTable(match.tableSlug);
     setScanOpen(false);
     await stopScan();
-    goToTable(code);
+    goToTable(match.tableSlug, match.branchSlug);
   };
 
   const startScan = async () => {

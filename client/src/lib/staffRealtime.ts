@@ -1,11 +1,15 @@
 "use client";
 
+import { getStaffVenueSlug, resolveVenueSlug } from "@/lib/venue";
+
 export type StaffPushEvent = {
   title?: string;
   body?: string;
   url?: string;
   tag?: string;
   ts?: number;
+  venueId?: number | null;
+  venueSlug?: string | null;
 };
 
 type Handler = (e: StaffPushEvent) => void;
@@ -19,7 +23,12 @@ export function attachStaffRealtime(handler: Handler) {
     if (!msg || typeof msg !== "object") return;
 
     if (msg.type === "STAFF_PUSH") {
-      handler((msg.payload || {}) as StaffPushEvent);
+      const payload = (msg.payload || {}) as StaffPushEvent;
+      const payloadVenue = resolveVenueSlug(payload.venueSlug ?? null);
+      if (payloadVenue && payloadVenue !== getStaffVenueSlug()) {
+        return;
+      }
+      handler(payload);
     }
   };
 

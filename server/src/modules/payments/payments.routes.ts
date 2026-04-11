@@ -75,12 +75,16 @@ paymentsRouter.post(
         tableId: true,
         table: {
           select: {
+            venueId: true,
             orders: {
               where: attachedSession.shiftId
                 ? {
+                    table: { venueId: session.table.venueId },
                     session: { shiftId: attachedSession.shiftId },
                   }
-                : undefined,
+                : {
+                    table: { venueId: session.table.venueId },
+                  },
               orderBy: { createdAt: "asc" },
               select: {
                 id: true,
@@ -102,6 +106,7 @@ paymentsRouter.post(
             payments: {
               where: {
                 status: "CONFIRMED",
+                table: { venueId: session.table.venueId },
                 ...(attachedSession.shiftId
                   ? {
                       session: { shiftId: attachedSession.shiftId },
@@ -214,6 +219,7 @@ paymentsRouter.post(
     const existing = await prisma.paymentRequest.findFirst({
       where: {
         tableId: session.tableId,
+        table: { venueId: session.table.venueId },
         status: "PENDING",
         ...(attachedSession.shiftId
           ? {

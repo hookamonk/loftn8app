@@ -4,6 +4,7 @@ import { prisma } from "../../db/prisma";
 import { HttpError } from "../../utils/httpError";
 import { env } from "../../config/env";
 import type { StaffRole } from "@prisma/client";
+import { normalizeVenueSlug, resolveVenueSlug } from "../../config/venues";
 
 declare global {
   namespace Express {
@@ -41,7 +42,7 @@ export function clearStaffCookie(res: any) {
   });
 }
 
-export const requireStaffAuth: RequestHandler = async (req, _res, next) => {
+export const requireStaffAuth: RequestHandler = async (req, res, next) => {
   try {
     const token = (req.cookies?.[STAFF_COOKIE_NAME] as string | undefined) ?? undefined;
     if (!token) throw new HttpError(401, "STAFF_UNAUTH", "Staff auth required");
@@ -52,12 +53,39 @@ export const requireStaffAuth: RequestHandler = async (req, _res, next) => {
       role: StaffRole;
     };
 
-    const staff = await prisma.staffUser.findUnique({ where: { id: payload.staffId } });
-    if (!staff || !staff.isActive) throw new HttpError(401, "STAFF_INVALID", "Staff session invalid");
+    const staff = await prisma.staffUser.findUnique({
+      where: { id: payload.staffId },
+      include: {
+        venue: {
+          select: { slug: true },
+        },
+      },
+    });
+    if (!staff || !staff.isActive) {
+      clearStaffCookie(res);
+      throw new HttpError(401, "STAFF_INVALID", "Staff session invalid");
+    }
+
+    const requestedVenueSlug = String(req.headers["x-venue-slug"] ?? "").trim();
+    if (requestedVenueSlug) {
+      const requestedVenue = resolveVenueSlug(requestedVenueSlug);
+      if (!requestedVenue) {
+        clearStaffCookie(res);
+        throw new HttpError(400, "INVALID_BRANCH", "Invalid branch");
+      }
+      const staffVenueSlug = normalizeVenueSlug(staff.venue?.slug ?? null);
+      if (staffVenueSlug !== requestedVenue) {
+        clearStaffCookie(res);
+        throw new HttpError(409, "STAFF_BRANCH_MISMATCH", "Staff session belongs to another branch");
+      }
+    }
 
     req.staff = { staffId: staff.id, venueId: staff.venueId, role: staff.role };
     next();
   } catch (e) {
+    if (e instanceof jwt.JsonWebTokenError || e instanceof jwt.TokenExpiredError) {
+      clearStaffCookie(res);
+    }
     next(e);
   }
 };

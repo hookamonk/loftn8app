@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
+import { getVenueName, hasVenueSelection } from "@/lib/venue";
 import { useToast } from "@/providers/toast";
 import { useAuth } from "@/providers/auth";
 import { useSession } from "@/providers/session";
@@ -34,7 +35,7 @@ async function post<T = any>(path: string, body: any) {
 export default function AuthPage() {
   const router = useRouter();
   const { push } = useToast();
-  const { me, loading, refresh } = useAuth();
+  const { me, loading, setAuthenticated } = useAuth();
   const { restoreSession } = useSession();
 
   const [mode, setMode] = useState<Mode>("register");
@@ -55,10 +56,15 @@ export default function AuthPage() {
   const [showAnonWarn, setShowAnonWarn] = useState(false);
 
   const p = useMemo(() => normalizePhone(phone), [phone]);
+  const venueName = useMemo(() => getVenueName(), []);
 
   useEffect(() => {
+    if (!hasVenueSelection()) {
+      router.replace("/");
+      return;
+    }
     void ensureBackendWarm();
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (loading) return;
@@ -106,7 +112,7 @@ export default function AuthPage() {
 
     setBusy(true);
     try {
-      await post("/auth/guest/verify-otp", {
+      const verify: any = await post("/auth/guest/verify-otp", {
         phone: p,
         code: code.trim(),
         intent: mode,
@@ -115,7 +121,17 @@ export default function AuthPage() {
         consent: mode === "register" ? consent : undefined,
       });
 
-      await refresh();
+      setAuthenticated({
+        authenticated: true,
+        user: {
+          id: String((verify as any).user.id),
+          name: String((verify as any).user.name),
+          phone: String((verify as any).user.phone),
+          email: String((verify as any).user.email ?? ""),
+          role: String((verify as any).user.role ?? "USER"),
+        },
+      });
+      await restoreSession().catch(() => {});
       push({ kind: "success", title: "Done", message: "You are signed in." });
       router.replace("/menu");
     } catch (e: any) {
@@ -190,9 +206,17 @@ export default function AuthPage() {
           </div>
 
           <div className="w-full">
+            <div className="text-[11px] tracking-[0.24em] text-white/45">{venueName}</div>
             <h1 className="mt-1 text-left text-2xl font-bold text-white">
-              Welcome to <span className="text-white/80">Loft №8</span>
+              Welcome to <span className="text-white/80">{venueName}</span>
             </h1>
+            <button
+              type="button"
+              className="mt-2 text-xs text-white/60 underline underline-offset-4"
+              onClick={() => router.push("/")}
+            >
+              Change branch
+            </button>
           </div>
         </div>
 

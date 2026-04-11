@@ -1,5 +1,6 @@
 import { PrismaClient, MenuSection } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { branchTables } from "../src/config/tables";
 
 const prisma = new PrismaClient();
 
@@ -14,9 +15,9 @@ type SeedItem = {
 const VENUES = [
   {
     slug: "zizkov",
-    name: "Loft№8 Žižkov",
+    name: "LoftN8 Žižkov",
     staffPrefix: "ZIZKOV",
-    legacyPrefix: "PILOT",
+    legacyPrefix: null,
     defaults: {
       waiter: "zizkov_waiter",
       hookah: "zizkov_hookah",
@@ -25,7 +26,7 @@ const VENUES = [
   },
   {
     slug: "garden",
-    name: "Loft№8 Garden",
+    name: "LoftN8 Garden",
     staffPrefix: "GARDEN",
     legacyPrefix: null,
     defaults: {
@@ -36,7 +37,7 @@ const VENUES = [
   },
   {
     slug: "nekazanka",
-    name: "Loft№8 Nekazanka",
+    name: "LoftN8 Nekázanka",
     staffPrefix: "NEKAZANKA",
     legacyPrefix: null,
     defaults: {
@@ -52,19 +53,58 @@ function internalTableCode(venueSlug: string, code: string) {
 }
 
 async function seedVenueTables(venueId: number, venueSlug: string) {
-  for (let i = 1; i <= 17; i++) {
-    const publicCode = `T${i}`;
+  for (const table of branchTables(venueSlug)) {
+    const publicCode = table.legacyCode ?? table.slug.toUpperCase();
     await prisma.table.upsert({
       where: { code: internalTableCode(venueSlug, publicCode) },
-      update: { venueId, label: `Table ${i}` },
-      create: { venueId, code: internalTableCode(venueSlug, publicCode), label: `Table ${i}` },
+      update: {
+        venueId,
+        label: table.displayName,
+        displayName: table.displayName,
+        slug: table.slug,
+      },
+      create: {
+        venueId,
+        code: internalTableCode(venueSlug, publicCode),
+        label: table.displayName,
+        displayName: table.displayName,
+        slug: table.slug,
+      },
+    });
+  }
+}
+
+async function resolveSeedVenue(target: (typeof VENUES)[number]) {
+  const candidates = Array.from(
+    new Set([target.slug, ...(target.slug === "zizkov" ? ["pilot"] : [])])
+  );
+
+  const existing = await prisma.venue.findFirst({
+    where: {
+      slug: { in: candidates },
+    },
+    orderBy: { id: "asc" },
+    select: { id: true, slug: true, name: true, isActive: true },
+  });
+
+  if (existing) {
+    return prisma.venue.update({
+      where: { id: existing.id },
+      data: {
+        name: target.name,
+        isActive: true,
+      },
+      select: { id: true, slug: true, name: true },
     });
   }
 
-  await prisma.table.upsert({
-    where: { code: internalTableCode(venueSlug, "VIP") },
-    update: { venueId, label: "VIP" },
-    create: { venueId, code: internalTableCode(venueSlug, "VIP"), label: "VIP" },
+  return prisma.venue.create({
+    data: {
+      slug: target.slug,
+      name: target.name,
+      isActive: true,
+    },
+    select: { id: true, slug: true, name: true },
   });
 }
 
@@ -219,15 +259,13 @@ async function upsertItemInCategory(categoryId: number, data: SeedItem) {
 }
 
 async function main() {
-  // ===== 0) Venue =====
-  const venue = await prisma.venue.upsert({
-    where: { slug: "zizkov" },
-    update: { name: "Loft№8 Žižkov" },
-    create: { name: "Loft№8 Žižkov", slug: "zizkov" },
-  });
+  const baseVenueDef = VENUES[0];
+
+  // ===== 0) Base Venue =====
+  const venue = await resolveSeedVenue(baseVenueDef);
 
   // ===== 1) Tables =====
-  await seedVenueTables(venue.id, "zizkov");
+  await seedVenueTables(venue.id, venue.slug);
 
   // ===== 2) Categories structure =====
   const DISHES: Array<[string, number]> = [
@@ -1128,16 +1166,12 @@ async function main() {
   }
 
   // ===== 5) STAFF =====
-  await seedVenueStaff(venue.id, "ZIZKOV", VENUES[0].defaults, "PILOT");
+  await seedVenueStaff(venue.id, baseVenueDef.staffPrefix, baseVenueDef.defaults, baseVenueDef.legacyPrefix);
 
   for (const target of VENUES.slice(1)) {
-    const targetVenue = await prisma.venue.upsert({
-      where: { slug: target.slug },
-      update: { name: target.name, isActive: true },
-      create: { slug: target.slug, name: target.name, isActive: true },
-    });
+    const targetVenue = await resolveSeedVenue(target);
 
-    await seedVenueTables(targetVenue.id, target.slug);
+    await seedVenueTables(targetVenue.id, targetVenue.slug);
     await cloneVenueMenu(venue.id, targetVenue.id);
     await seedVenueStaff(targetVenue.id, target.staffPrefix, target.defaults, target.legacyPrefix);
   }

@@ -6,13 +6,25 @@ import { staffLogin } from "@/lib/staffApi";
 import { useStaffSession } from "@/providers/staffSession";
 import { ensurePushSubscribed, rebindPushIfPossible } from "@/lib/staffPush";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
+import {
+  getStoredStaffVenueSlug,
+  getVenueCatalog,
+  refreshVenueCatalog,
+  setStaffVenueSlug,
+  type VenueOption,
+  type VenueSlug,
+} from "@/lib/venue";
 
 export default function StaffLoginPage() {
   const router = useRouter();
   const { setStaff } = useStaffSession();
 
+  const [venues, setVenues] = useState<VenueOption[]>(() => getVenueCatalog());
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [selectedVenue, setSelectedVenue] = useState<VenueSlug>(
+    () => getStoredStaffVenueSlug() ?? "loft-zizkov"
+  );
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -20,12 +32,33 @@ export default function StaffLoginPage() {
     void ensureBackendWarm();
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+
+    void refreshVenueCatalog().then((catalog) => {
+      if (!mounted) return;
+      setVenues(catalog);
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!venues.some((venue) => venue.slug === selectedVenue)) {
+      setSelectedVenue(venues[0]?.slug ?? "loft-zizkov");
+    }
+  }, [selectedVenue, venues]);
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setErr(null);
     setLoading(true);
 
-    const r = await staffLogin(username.trim(), password);
+    setStaffVenueSlug(selectedVenue);
+
+    const r = await staffLogin(username.trim(), password, selectedVenue);
     setLoading(false);
 
     if (!r.ok) {
@@ -74,6 +107,30 @@ export default function StaffLoginPage() {
           ) : null}
 
           <form className="mt-5 space-y-3" onSubmit={onSubmit}>
+            <div className="space-y-2">
+              <label className="text-xs text-white/60">Branch</label>
+              <div className="grid grid-cols-1 gap-2">
+                {venues.map((venue) => {
+                  const active = selectedVenue === venue.slug;
+                  return (
+                    <button
+                      key={venue.slug}
+                      type="button"
+                      onClick={() => setSelectedVenue(venue.slug)}
+                      className={[
+                        "w-full rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition",
+                        active
+                          ? "border-white/20 bg-white text-black"
+                          : "border-white/10 bg-black/30 text-white/80 hover:bg-white/10",
+                      ].join(" ")}
+                    >
+                      {venue.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="space-y-2">
               <label className="text-xs text-white/60">Username</label>
               <input

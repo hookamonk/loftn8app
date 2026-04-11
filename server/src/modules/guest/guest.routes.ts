@@ -13,11 +13,51 @@ import { isOrderRequestMessage, ORDER_REQUEST_MARKER } from "../orders/orderRequ
 import { latestLegacyPaymentCutoff, paidQtyByOrderItemId, parsePaymentItemsJson } from "../payments/paymentAllocation";
 import { expireGuestSessionIfInactiveAfterPayment } from "./sessionExpiry";
 import {
+  buildInternalTableCode,
+  normalizeVenueSlug,
+  venueCandidateSlugs,
   publicTableCode,
+  publicVenueCatalog,
+  publicVenueSlug,
   venueNameBySlug,
+  venueShortNameBySlug,
 } from "../../config/venues";
+import { branchTables, normalizeTableSlugInput } from "../../config/tables";
 
 export const guestRouter = Router();
+
+guestRouter.get(
+  "/branches",
+  asyncHandler(async (_req, res) => {
+    const activeVenues = await prisma.venue.findMany({
+      where: {
+        slug: {
+          in: publicVenueCatalog().map((branch) => branch.internalSlug),
+        },
+        isActive: true,
+      },
+      select: { id: true, slug: true, name: true },
+    });
+
+    const bySlug = new Map(activeVenues.map((venue) => [normalizeVenueSlug(venue.slug), venue]));
+    const branches = publicVenueCatalog()
+      .map((branch) => {
+        const venue = bySlug.get(branch.internalSlug);
+        if (!venue) return null;
+
+        return {
+          id: venue.id,
+          slug: branch.slug,
+          internalSlug: branch.internalSlug,
+          name: venue.name,
+          shortName: branch.shortName,
+        };
+      })
+      .filter(Boolean);
+
+    res.json({ ok: true, branches });
+  })
+);
 
 const CreateSessionSchema = z.object({
   tableCode: z.string().min(1),
@@ -55,30 +95,15 @@ function clearCookie(res: any, name: string) {
   });
 }
 
-function normalizeTableCode(raw: string) {
-  const v = String(raw || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "");
-
-  if (!v) return "";
-  if (/^\d+$/.test(v)) return `T${v}`;
-  if (/^T\d+$/.test(v)) return v;
-  if (v === "TVIP" || v === "T-VIP") return "VIP";
-  return v;
+function requestVenueSlug(req: any) {
+  return String(req.headers["x-venue-slug"] ?? req.body?.venueSlug ?? req.query?.venueSlug ?? "").trim();
 }
 
-function isKnownPilotTableCode(code: string) {
-  if (code === "VIP") return true;
-  if (!/^T\d+$/.test(code)) return false;
-  const n = Number(code.slice(1));
-  return Number.isInteger(n) && n >= 1 && n <= 17;
-}
-
-async function resolveVenue() {
+async function resolveVenue(rawVenueSlug?: string | null) {
+  const candidates = venueCandidateSlugs(rawVenueSlug);
   const exact = await prisma.venue.findFirst({
     where: {
-      slug: { in: ["pilot", "zizkov"] },
+      slug: { in: candidates },
       isActive: true,
     },
     orderBy: { id: "asc" },
@@ -87,55 +112,69 @@ async function resolveVenue() {
 
   if (exact) return exact;
 
-  return prisma.venue.create({
-    data: {
-      slug: "pilot",
-      name: venueNameBySlug("pilot"),
-      isActive: true,
-    },
-    select: { id: true, slug: true, name: true },
-  });
+  throw new HttpError(404, "VENUE_NOT_FOUND", "Venue not found");
 }
 
-async function resolveTableByCode(rawTableCode: string) {
-  const tableCode = normalizeTableCode(rawTableCode);
-  if (!tableCode) return null;
+async function resolveTableByCode(rawTableCode: string, rawVenueSlug?: string | null) {
+  const venue = await resolveVenue(rawVenueSlug);
+  const parsed = normalizeTableSlugInput(rawTableCode);
+  if (!parsed) return null;
 
-  const legacyCodes = Array.from(new Set([tableCode, `pilot:${tableCode}`, `zizkov:${tableCode}`]));
+  const venueSlugs = venueCandidateSlugs(venue.slug);
+  const exactCodes = Array.from(new Set(parsed.legacyCodeCandidates.flatMap((code) => [
+    code,
+    ...venueSlugs.map((slug) => buildInternalTableCode(slug, code)),
+  ])));
 
   const existing = await prisma.table.findFirst({
-    where: { code: { in: legacyCodes } },
+    where: {
+      venueId: venue.id,
+      OR: [
+        { slug: { in: parsed.slugCandidates } },
+        ...(exactCodes.length ? [{ code: { in: exactCodes } }] : []),
+      ],
+    },
     select: {
       id: true,
       code: true,
       label: true,
+      displayName: true,
+      slug: true,
       venueId: true,
       venue: { select: { slug: true, name: true } },
     },
   });
   if (existing) return existing;
 
-  if (!isKnownPilotTableCode(tableCode)) return null;
+  const branchTable = branchTables(venue.slug).find((table) => parsed.slugCandidates.includes(table.slug));
+  if (!branchTable) return null;
 
-  const venue = await resolveVenue();
-
-  const label = tableCode === "VIP" ? "VIP" : `Table ${Number(tableCode.slice(1))}`;
+  const internalCode = buildInternalTableCode(
+    venue.slug,
+    branchTable.legacyCode ?? branchTable.slug.toUpperCase()
+  );
 
   return prisma.table.upsert({
-    where: { code: tableCode },
+    where: { code: internalCode },
     update: {
       venueId: venue.id,
-      label,
+      label: branchTable.displayName,
+      displayName: branchTable.displayName,
+      slug: branchTable.slug,
     },
     create: {
       venueId: venue.id,
-      code: tableCode,
-      label,
+      code: internalCode,
+      label: branchTable.displayName,
+      displayName: branchTable.displayName,
+      slug: branchTable.slug,
     },
     select: {
       id: true,
       code: true,
       label: true,
+      displayName: true,
+      slug: true,
       venueId: true,
       venue: { select: { slug: true, name: true } },
     },
@@ -177,6 +216,7 @@ async function closePreviousSessionFromCookie(req: any) {
 
 async function resolveGuestSessionFromCookie(req: any) {
   req.__guestSessionExpired = false;
+  req.__guestSessionBranchMismatch = false;
   const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
   if (!gsid) return null;
 
@@ -190,6 +230,8 @@ async function resolveGuestSessionFromCookie(req: any) {
             id: true,
             code: true,
             label: true,
+            displayName: true,
+            slug: true,
             venueId: true,
             venue: { select: { slug: true, name: true } },
           },
@@ -202,6 +244,15 @@ async function resolveGuestSessionFromCookie(req: any) {
 
     if (!session || session.endedAt) {
       req.__guestSessionExpired = true;
+      return null;
+    }
+
+    const requestedVenue = requestVenueSlug(req);
+    if (
+      requestedVenue &&
+      normalizeVenueSlug((session.table as any).venue?.slug ?? null) !== normalizeVenueSlug(requestedVenue)
+    ) {
+      req.__guestSessionBranchMismatch = true;
       return null;
     }
 
@@ -222,6 +273,8 @@ async function resolveGuestSessionFromCookie(req: any) {
               id: true,
               code: true,
               label: true,
+              displayName: true,
+              slug: true,
               venueId: true,
               venue: { select: { slug: true, name: true } },
             },
@@ -243,21 +296,25 @@ function toGuestSessionResponse(
   session: {
     id: string;
     startedAt: Date;
-    table: { id: number; code: string; label: string | null };
+    table: { id: number; code: string; label: string | null; displayName?: string | null; slug?: string | null };
     shift?: { id: string; openedAt: Date } | { id: string; status: string; openedAt: Date; closedAt: Date | null } | null;
   }
 ) {
+  const publicCode = session.table.displayName ?? session.table.label ?? publicTableCode(session.table.code);
   return {
     id: session.id,
     table: {
       id: session.table.id,
-      code: publicTableCode(session.table.code),
-      label: session.table.label,
+      code: publicCode,
+      label: session.table.displayName ?? session.table.label,
+      displayName: publicCode,
+      slug: session.table.slug ?? publicCode.toLowerCase().replace(/\s+/g, "-").replace(/\./g, "-"),
     },
     venue: {
       id: (session.table as any).venueId ?? null,
-      slug: (session.table as any).venue?.slug ?? null,
-      name: (session.table as any).venue?.name ?? null,
+      slug: publicVenueSlug((session.table as any).venue?.slug ?? null),
+      name: venueNameBySlug((session.table as any).venue?.slug ?? null),
+      shortName: venueShortNameBySlug((session.table as any).venue?.slug ?? null),
     },
     shift: session.shift
       ? {
@@ -425,7 +482,8 @@ guestRouter.post(
       venueSlug?: string;
     };
 
-    const table = await resolveTableByCode(rawTableCode);
+    const requestedVenueSlug = venueSlug ?? requestVenueSlug(req);
+    const table = await resolveTableByCode(rawTableCode, requestedVenueSlug);
 
     if (!table) {
       throw new HttpError(404, "TABLE_NOT_FOUND", "Table not found");
@@ -460,6 +518,8 @@ guestRouter.post(
                     id: true,
                     code: true,
                     label: true,
+                    displayName: true,
+                    slug: true,
                     venueId: true,
                     venue: { select: { slug: true, name: true } },
                   },
@@ -472,13 +532,23 @@ guestRouter.post(
           : {
               id: existingSession.id,
               startedAt: existingSession.startedAt,
-              table: {
-                id: existingSession.table.id,
-                code: publicTableCode(existingSession.table.code),
-                label: existingSession.table.label,
-                venueId: existingSession.table.venueId,
-                venue: existingSession.table.venue,
-              },
+                table: {
+                  id: existingSession.table.id,
+                  code:
+                    (existingSession.table as any).displayName ??
+                    existingSession.table.label ??
+                    publicTableCode(existingSession.table.code),
+                  label: (existingSession.table as any).displayName ?? existingSession.table.label,
+                  displayName:
+                    (existingSession.table as any).displayName ??
+                    existingSession.table.label ??
+                    publicTableCode(existingSession.table.code),
+                  slug:
+                    (existingSession.table as any).slug ??
+                    publicTableCode(existingSession.table.code).toLowerCase(),
+                  venueId: existingSession.table.venueId,
+                  venue: existingSession.table.venue,
+                },
               shift: existingSession.shift
                 ? {
                     id: existingSession.shift.id,
@@ -510,6 +580,22 @@ guestRouter.post(
         shiftId: shift?.id ?? null,
         userId: user?.id ?? null,
       },
+      include: {
+        table: {
+          select: {
+            id: true,
+            code: true,
+            label: true,
+            displayName: true,
+            slug: true,
+            venueId: true,
+            venue: { select: { slug: true, name: true } },
+          },
+        },
+        shift: {
+          select: { id: true, openedAt: true, status: true, closedAt: true },
+        },
+      },
     });
 
     const token = jwt.sign(
@@ -522,11 +608,7 @@ guestRouter.post(
 
     res.json({
       ok: true,
-      session: toGuestSessionResponse({
-        ...session,
-        table,
-        shift,
-      }),
+      session: toGuestSessionResponse(session),
       reused: false,
     });
   })
@@ -537,10 +619,14 @@ guestRouter.get(
   asyncHandler(async (req, res) => {
     const session = await resolveGuestSessionFromCookie(req);
     if (!session) {
-      if ((req as any).__guestSessionExpired) {
+      if ((req as any).__guestSessionExpired || (req as any).__guestSessionBranchMismatch) {
         clearCookie(res, "gsid");
       }
-      return res.json({ ok: false, session: null, expired: Boolean((req as any).__guestSessionExpired) });
+      return res.json({
+        ok: false,
+        session: null,
+        expired: Boolean((req as any).__guestSessionExpired),
+      });
     }
 
     res.json({
@@ -549,18 +635,31 @@ guestRouter.get(
         id: session.id,
         table: {
           id: session.table.id,
-          code: publicTableCode(session.table.code),
-          label: session.table.label,
+          code: session.table.displayName ?? session.table.label ?? publicTableCode(session.table.code),
+          label: session.table.displayName ?? session.table.label,
+          displayName: session.table.displayName ?? session.table.label ?? publicTableCode(session.table.code),
+          slug: session.table.slug ?? publicTableCode(session.table.code).toLowerCase(),
         },
         venue: {
           id: (session.table as any).venueId ?? null,
-          slug: (session.table as any).venue?.slug ?? null,
-          name: (session.table as any).venue?.name ?? null,
+          slug: publicVenueSlug((session.table as any).venue?.slug ?? null),
+          name: venueNameBySlug((session.table as any).venue?.slug ?? null),
+          shortName: venueShortNameBySlug((session.table as any).venue?.slug ?? null),
         },
         shift: session.shift ?? null,
         startedAt: session.startedAt,
       },
     });
+  })
+);
+
+guestRouter.post(
+  "/session/disconnect",
+  asyncHandler(async (req, res) => {
+    await closePreviousSessionFromCookie(req);
+    clearCookie(res, "gsid");
+
+    res.json({ ok: true });
   })
 );
 
@@ -574,6 +673,7 @@ guestRouter.get(
       prisma.order.findMany({
         where: {
           tableId: session.tableId,
+          table: { venueId: session.table.venueId },
           ...(session.shiftId ? { session: { shiftId: session.shiftId } } : {}),
         },
         orderBy: { createdAt: "desc" },
@@ -588,12 +688,16 @@ guestRouter.get(
         },
       }),
       prisma.staffCall.findMany({
-        where: { sessionId: session.id },
+        where: {
+          sessionId: session.id,
+          table: { venueId: session.table.venueId },
+        },
         orderBy: { createdAt: "desc" },
       }),
       (prisma as any).paymentRequest.findMany({
         where: {
           tableId: session.tableId,
+          table: { venueId: session.table.venueId },
           ...(session.shiftId ? { session: { shiftId: session.shiftId } } : {}),
         },
         orderBy: { createdAt: "desc" },
@@ -618,6 +722,7 @@ guestRouter.get(
       prisma.staffCall.findFirst({
         where: {
           tableId: session.tableId,
+          table: { venueId: session.table.venueId },
           type: "HELP",
           message: ORDER_REQUEST_MARKER,
           ...(session.shiftId ? { session: { shiftId: session.shiftId } } : {}),
@@ -810,8 +915,9 @@ guestRouter.get(
       },
       venue: {
         id: (session.table as any).venueId ?? null,
-        slug: (session.table as any).venue?.slug ?? null,
-        name: (session.table as any).venue?.name ?? null,
+        slug: publicVenueSlug((session.table as any).venue?.slug ?? null),
+        name: venueNameBySlug((session.table as any).venue?.slug ?? null),
+        shortName: venueShortNameBySlug((session.table as any).venue?.slug ?? null),
       },
       totals: {
         orderedTotalCzk,

@@ -1,5 +1,6 @@
 import type { StaffSession, StaffRole } from "@/providers/staffSession";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
+import { getStaffVenueSlug } from "@/lib/venue";
 
 const API_BASE = "/api";
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
@@ -38,11 +39,13 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
+      const venueSlug = typeof window !== "undefined" ? getStaffVenueSlug() : undefined;
       const res = await fetch(`${API_BASE}${path}`, {
         ...init,
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
+          ...(venueSlug ? { "X-Venue-Slug": venueSlug } : {}),
           ...(init?.headers || {}),
         },
       });
@@ -96,7 +99,8 @@ async function tryPaths<T>(paths: string[], init?: RequestInit): Promise<ApiResu
 // AUTH
 export async function staffLogin(
   username: string,
-  password: string
+  password: string,
+  venueSlug?: string
 ): Promise<ApiResult<{ staff: StaffSession }>> {
   const r = await tryPaths<{
     ok: true;
@@ -110,7 +114,7 @@ export async function staffLogin(
     };
   }>(["/staff/auth/login", "/staff/login"], {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, venueSlug: venueSlug ?? getStaffVenueSlug() }),
   });
 
   if (!r.ok) return r;

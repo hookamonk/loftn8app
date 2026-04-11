@@ -7,7 +7,7 @@ import { validate } from "../../middleware/validate";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { HttpError } from "../../utils/httpError";
 import { clearStaffCookie, requireStaffAuth, setStaffCookie } from "./staff.middleware";
-import { normalizeVenueSlug, venueNameBySlug } from "../../config/venues";
+import { normalizeVenueSlug, publicVenueSlug, resolveVenueSlug, venueNameBySlug } from "../../config/venues";
 
 export const staffAuthRouter = Router();
 
@@ -23,7 +23,11 @@ staffAuthRouter.post(
   validate(LoginSchema),
   asyncHandler(async (req, res) => {
     const { username, password } = req.body as any;
-    const venueSlug = normalizeVenueSlug(String(req.headers["x-venue-slug"] ?? (req.body as any)?.venueSlug ?? ""));
+    const requestedVenueSlug = String(req.headers["x-venue-slug"] ?? (req.body as any)?.venueSlug ?? "");
+    const venueSlug = resolveVenueSlug(requestedVenueSlug);
+    if (!venueSlug) {
+      throw new HttpError(400, "INVALID_BRANCH", "Invalid branch");
+    }
 
     const staff = await prisma.staffUser.findUnique({ where: { username } });
     if (!staff || !staff.isActive) throw new HttpError(401, "STAFF_LOGIN_FAILED", "Invalid credentials");
@@ -48,7 +52,7 @@ staffAuthRouter.post(
         id: staff.id,
         role: staff.role,
         venueId: staff.venueId,
-        venueSlug: normalizeVenueSlug(staffVenue.slug),
+        venueSlug: publicVenueSlug(staffVenue.slug),
         venueName: venueNameBySlug(staffVenue.slug),
         username: staff.username,
       },
@@ -71,7 +75,7 @@ staffAuthRouter.get(
             id: staff.id,
             role: staff.role,
             venueId: staff.venueId,
-            venueSlug: normalizeVenueSlug(staff.venue.slug),
+            venueSlug: publicVenueSlug(staff.venue.slug),
             venueName: venueNameBySlug(staff.venue.slug),
             username: staff.username,
           }

@@ -1,14 +1,13 @@
 import type { MetadataRoute } from "next";
-import { getVenueName } from "@/lib/venue";
 
 export default function manifest(): MetadataRoute.Manifest {
-  const venueName = getVenueName(process.env.NEXT_PUBLIC_VENUE_SLUG);
+  const appName = "LOFT №8";
 
   return {
     id: "/",
-    name: venueName,
-    short_name: venueName,
-    description: `${venueName} guest and staff web app with push notifications.`,
+    name: appName,
+    short_name: appName,
+    description: "LOFT №8 guest and staff web app with push notifications.",
     start_url: "/staff/login",
     scope: "/",
     display: "standalone",

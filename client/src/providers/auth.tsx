@@ -9,6 +9,7 @@ type AuthState = {
   loading: boolean;
   me: AuthMeResponse;
   refresh: () => Promise<void>;
+  setAuthenticated: (me: AuthMeResponse) => void;
 };
 
 const Ctx = createContext<AuthState | null>(null);
@@ -57,7 +58,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void refresh();
   }, [isStaffSurface]);
 
-  const value = useMemo(() => ({ loading, me, refresh }), [loading, me]);
+  const setAuthenticated = (next: AuthMeResponse) => {
+    setMe(next);
+    setLoading(false);
+  };
+
+  const value = useMemo(() => ({ loading, me, refresh, setAuthenticated }), [loading, me]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -55,9 +55,16 @@ callsRouter.post(
   validate(CreateCallSchema),
   asyncHandler(async (req, res) => {
     const session = req.guestSession!;
-    await attachSessionToActiveShiftIfNeeded(session.id);
+    const attachedSession = await attachSessionToActiveShiftIfNeeded(session.id);
 
     const body = req.body as z.infer<typeof CreateCallSchema>;
+
+    if (attachedSession.shiftId !== session.shiftId) {
+      req.guestSession = {
+        ...session,
+        shiftId: attachedSession.shiftId,
+      } as any;
+    }
 
     const call = await prisma.staffCall.create({
       data: {

@@ -89,6 +89,7 @@ ordersRouter.post(
     const existing = await prisma.staffCall.findFirst({
       where: {
         tableId: session.tableId,
+        table: { venueId: session.table.venueId },
         type: "HELP",
         message: ORDER_REQUEST_MARKER,
         status: { in: ["NEW", "ACKED"] },
@@ -130,7 +131,10 @@ ordersRouter.get(
   asyncHandler(async (req, res) => {
     const session = req.guestSession!;
     const orders = await prisma.order.findMany({
-      where: { sessionId: session.id },
+      where: {
+        sessionId: session.id,
+        table: { venueId: session.table.venueId },
+      },
       orderBy: { createdAt: "desc" },
       include: { items: true },
     });

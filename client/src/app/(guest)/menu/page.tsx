@@ -7,6 +7,7 @@ import type { MenuResponse, MenuCategory, MenuItem, MenuSection } from "@/types"
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
+import { getVenueName } from "@/lib/venue";
 
 function Pill({
   active,
@@ -91,14 +92,17 @@ type SearchItem = MenuItem & {
   __section?: MenuSection;
 };
 
-const MENU_CACHE_KEY = "guest_menu_cache_v1";
 const MENU_CACHE_TTL_MS = 60 * 1000;
 
-function readCachedMenu() {
+function cacheKey(venueName: string) {
+  return `guest_menu_cache_v2:${venueName}`;
+}
+
+function readCachedMenu(venueName: string) {
   if (typeof window === "undefined") return null;
 
   try {
-    const raw = window.sessionStorage.getItem(MENU_CACHE_KEY);
+    const raw = window.sessionStorage.getItem(cacheKey(venueName));
     if (!raw) return null;
 
     const parsed = JSON.parse(raw) as { ts: number; data: MenuResponse };
@@ -111,12 +115,12 @@ function readCachedMenu() {
   }
 }
 
-function writeCachedMenu(data: MenuResponse) {
+function writeCachedMenu(venueName: string, data: MenuResponse) {
   if (typeof window === "undefined") return;
 
   try {
     window.sessionStorage.setItem(
-      MENU_CACHE_KEY,
+      cacheKey(venueName),
       JSON.stringify({
         ts: Date.now(),
         data,
@@ -133,6 +137,7 @@ export default function Page() {
 
 function MenuPage() {
   const router = useRouter();
+  const venueName = getVenueName();
   const [data, setData] = useState<MenuResponse | null>(null);
   const [activeSection, setActiveSection] = useState<MenuSection>("DISHES");
   const [activeCatId, setActiveCatId] = useState<number | null>(null);
@@ -164,7 +169,7 @@ function MenuPage() {
   };
 
   useEffect(() => {
-    const cached = readCachedMenu();
+    const cached = readCachedMenu(venueName);
     if (cached) {
       applyMenu(cached);
     }
@@ -172,7 +177,7 @@ function MenuPage() {
     const load = async () => {
       try {
         const m = await api<MenuResponse>("/menu");
-        writeCachedMenu(m);
+        writeCachedMenu(venueName, m);
         applyMenu(m);
       } catch (e: any) {
         if (!cached) {
@@ -181,7 +186,7 @@ function MenuPage() {
       }
     };
     void load();
-  }, []);
+  }, [venueName]);
 
   const cats = useMemo(() => data?.categories ?? [], [data]);
 
@@ -311,7 +316,7 @@ function MenuPage() {
     <RequireTable>
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
         <div className="mb-4">
-          <div className="text-[11px] tracking-[0.28em] text-white/55">LOFT №8</div>
+          <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName}</div>
           <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
           <div className="mt-1 text-xs text-white/60">Browse the menu</div>
         </div>

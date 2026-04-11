@@ -1,5 +1,6 @@
 import type { ApiResult } from "@/lib/staffApi";
 import { primeAlerts } from "@/lib/staffAlerts";
+import { getStaffVenueSlug } from "@/lib/venue";
 
 const API_BASE = "/api";
 
@@ -22,10 +23,15 @@ function isStandaloneMode() {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
+  const venueSlug = typeof window !== "undefined" ? getStaffVenueSlug() : undefined;
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(venueSlug ? { "X-Venue-Slug": venueSlug } : {}),
+      ...(init?.headers || {}),
+    },
   });
 
   const text = await res.text();

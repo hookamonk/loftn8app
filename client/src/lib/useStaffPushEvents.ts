@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { fireInAppAlert } from "@/lib/staffAlerts";
+import { getStaffVenueSlug, resolveVenueSlug } from "@/lib/venue";
 
 export type StaffPushPayload = {
   title?: string;
@@ -10,6 +11,8 @@ export type StaffPushPayload = {
   tag?: string;
   ts?: number;
   kind?: "ORDER_CREATED" | "CALL_CREATED" | "GUEST_MESSAGE" | "PAYMENT_REQUESTED";
+  venueId?: number | null;
+  venueSlug?: string | null;
 };
 
 export function useStaffPushEvents(onEvent?: (p: StaffPushPayload) => void) {
@@ -21,6 +24,10 @@ export function useStaffPushEvents(onEvent?: (p: StaffPushPayload) => void) {
       if (!data || data.type !== "STAFF_PUSH") return;
 
       const payload = (data.payload ?? {}) as StaffPushPayload;
+      const payloadVenue = resolveVenueSlug(payload.venueSlug ?? null);
+      if (payloadVenue && payloadVenue !== getStaffVenueSlug()) {
+        return;
+      }
 
       if (document.visibilityState === "visible") {
         fireInAppAlert(payload);

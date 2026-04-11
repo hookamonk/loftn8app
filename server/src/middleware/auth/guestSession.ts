@@ -4,6 +4,7 @@ import { env } from "../../config/env";
 import { prisma } from "../../db/prisma";
 import { HttpError } from "../../utils/httpError";
 import { expireGuestSessionIfInactiveAfterPayment } from "../../modules/guest/sessionExpiry";
+import { normalizeVenueSlug, resolveVenueSlug } from "../../config/venues";
 
 type GuestPayload = { sessionId: string };
 type UserPayload = { userId: string; role: string };
@@ -22,7 +23,15 @@ export async function guestSessionAuth(req: Request, _res: Response, next: NextF
 
   const session = await prisma.guestSession.findUnique({
     where: { id: guestPayload.sessionId },
-    include: { table: true }, 
+    include: {
+      table: {
+        include: {
+          venue: {
+            select: { slug: true, name: true },
+          },
+        },
+      },
+    },
   });
 
   if (!session || session.endedAt) {
@@ -41,6 +50,18 @@ export async function guestSessionAuth(req: Request, _res: Response, next: NextF
     return next(new HttpError(401, "SESSION_NOT_FOUND", "Session not found or ended"));
   }
 
+  const requestedVenueSlug = String(req.headers["x-venue-slug"] ?? "").trim();
+  if (requestedVenueSlug) {
+    const requestedVenue = resolveVenueSlug(requestedVenueSlug);
+    if (!requestedVenue) {
+      return next(new HttpError(400, "INVALID_BRANCH", "Invalid branch"));
+    }
+    const sessionVenueSlug = normalizeVenueSlug(session.table.venue?.slug ?? null);
+    if (sessionVenueSlug !== requestedVenue) {
+      return next(new HttpError(409, "SESSION_BRANCH_MISMATCH", "Guest session belongs to another branch"));
+    }
+  }
+
   req.guestSession = session;
 
   // optional user
@@ -56,7 +77,15 @@ export async function guestSessionAuth(req: Request, _res: Response, next: NextF
           const syncedSession = await prisma.guestSession.update({
             where: { id: session.id },
             data: { userId: user.id },
-            include: { table: true },
+            include: {
+              table: {
+                include: {
+                  venue: {
+                    select: { slug: true, name: true },
+                  },
+                },
+              },
+            },
           });
           req.guestSession = syncedSession;
         }

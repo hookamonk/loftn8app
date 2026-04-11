@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useStaffSession } from "@/providers/staffSession";
 import { getStaffMe } from "@/lib/staffApi";
 import { rebindPushIfPossible } from "@/lib/staffPush";
+import { setStaffVenueSlug } from "@/lib/venue";
 
 export function StaffGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -27,6 +28,9 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      if (r.data.staff.venueSlug) {
+        setStaffVenueSlug(r.data.staff.venueSlug);
+      }
       setStaff(r.data.staff);
 
       try {

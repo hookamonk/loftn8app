@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
-import { venueNameBySlug } from "../../config/venues";
+import { normalizeVenueSlug, publicVenueSlug, resolveVenueSlug, venueCandidateSlugs, venueNameBySlug } from "../../config/venues";
+import { HttpError } from "../../utils/httpError";
 
 export const menuRouter = Router();
 
@@ -30,10 +31,16 @@ let menuCache:
     }
   | null = null;
 
-async function resolveVenue() {
+async function resolveVenue(rawVenueSlug?: string | null) {
+  const requestedVenue = resolveVenueSlug(rawVenueSlug);
+  if (!requestedVenue) {
+    throw new HttpError(404, "VENUE_NOT_FOUND", "Venue not found");
+  }
+
+  const candidates = venueCandidateSlugs(rawVenueSlug);
   const existing = await prisma.venue.findFirst({
     where: {
-      slug: { in: ["pilot", "zizkov"] },
+      slug: { in: candidates },
       isActive: true,
     },
     orderBy: { id: "asc" },
@@ -41,13 +48,7 @@ async function resolveVenue() {
 
   if (existing) return existing;
 
-  return prisma.venue.create({
-    data: {
-      slug: "pilot",
-      name: venueNameBySlug("pilot"),
-      isActive: true,
-    },
-  });
+  throw new HttpError(404, "VENUE_NOT_FOUND", "Venue not found");
 }
 
 async function ensureVenueMenuSeeded(venueId: number) {
@@ -108,7 +109,8 @@ async function ensureVenueMenuSeeded(venueId: number) {
 menuRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const venue = await resolveVenue();
+    const requestedVenueSlug = String(req.headers["x-venue-slug"] ?? req.query?.venueSlug ?? "").trim();
+    const venue = await resolveVenue(requestedVenueSlug);
     const now = Date.now();
 
     if (menuCache && menuCache.venueId === venue.id && menuCache.expiresAt > now) {
@@ -130,7 +132,7 @@ menuRouter.get(
     });
 
     const payload = {
-      venue: { id: venue.id, name: venueNameBySlug(venue.slug), slug: venue.slug },
+      venue: { id: venue.id, name: venueNameBySlug(venue.slug), slug: publicVenueSlug(venue.slug) },
       categories: categories.map((c) => ({
         id: c.id,
         name: c.name,

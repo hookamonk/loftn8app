@@ -1,4 +1,5 @@
 import { ensureBackendWarm } from "@/lib/backendWarmup";
+import { getVenueSlug } from "@/lib/venue";
 
 const API = "/api";
 
@@ -30,10 +31,12 @@ export async function api<T>(path: string, options: FetchOptions = {}): Promise<
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
+      const venueSlug = typeof window !== "undefined" ? getVenueSlug() : undefined;
       const res = await fetch(url, {
         ...options,
         headers: {
           "Content-Type": "application/json",
+          ...(venueSlug ? { "X-Venue-Slug": venueSlug } : {}),
           ...(options.headers ?? {}),
         },
         credentials: "include",

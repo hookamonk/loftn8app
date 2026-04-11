@@ -125,8 +125,13 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                 </div>
 
                 {staff ? (
-                  <div className="mt-1 text-sm text-white/60">
-                    {staff.username} • {roleLabel(staff.role)} • {staff.venueName ?? `venue #${staff.venueId}`}
+                  <div className="mt-2 space-y-1">
+                    <div className="text-sm text-white/60">
+                      {staff.username} • {roleLabel(staff.role)}
+                    </div>
+                    <div className="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/85">
+                      Текущая точка: {staff.venueName ?? `venue #${staff.venueId}`}
+                    </div>
                   </div>
                 ) : null}
               </div>

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { getVenueName } from "@/lib/venue";
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { RatingSheet } from "@/components/RatingSheet";
@@ -100,6 +101,7 @@ function SmallIcon({ name }: { name: "user" | "zap" | "card" }) {
 }
 
 export default function CallPage() {
+  const venueName = getVenueName();
   const router = useRouter();
   const { me, loading } = useAuth();
   const canRate = !loading && !!me?.authenticated;
@@ -241,7 +243,7 @@ export default function CallPage() {
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
         <div className="mb-4">
           <div className="text-[11px] tracking-[0.28em] text-white/55">
-            LOFT №8
+            {venueName}
           </div>
           <h1 className="mt-1 text-2xl font-bold text-white">Staff</h1>
 

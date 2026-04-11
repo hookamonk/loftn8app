@@ -16,6 +16,8 @@ self.addEventListener("push", (event) => {
     kind: "CALL_CREATED",
     message: null,
     tableCode: null,
+    venueId: null,
+    venueSlug: null,
     vibrate: [320, 140, 320, 140, 420],
     requireInteraction: true,
     renotify: true,
@@ -43,6 +45,8 @@ self.addEventListener("push", (event) => {
       kind: payload.kind || "CALL_CREATED",
       message: payload.message || null,
       tableCode: payload.tableCode || null,
+      venueId: payload.venueId || null,
+      venueSlug: payload.venueSlug || null,
       vibrate,
     },
     tag,
@@ -77,6 +81,8 @@ self.addEventListener("push", (event) => {
             kind: payload.kind || "CALL_CREATED",
             message: payload.message || null,
             tableCode: payload.tableCode || null,
+            venueId: payload.venueId || null,
+            venueSlug: payload.venueSlug || null,
             vibrate,
           },
         });
@@ -96,6 +102,8 @@ self.addEventListener("notificationclick", (event) => {
     kind: event.notification.data?.kind || "CALL_CREATED",
     message: event.notification.data?.message || null,
     tableCode: event.notification.data?.tableCode || null,
+    venueId: event.notification.data?.venueId || null,
+    venueSlug: event.notification.data?.venueSlug || null,
     vibrate: event.notification.data?.vibrate || [320, 140, 320, 140, 420],
   };
 

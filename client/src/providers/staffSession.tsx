@@ -8,6 +8,7 @@ import React, {
   useState,
   useCallback,
 } from "react";
+import { STAFF_VENUE_CHANGE_EVENT } from "@/lib/venue";
 
 export type StaffRole = "WAITER" | "HOOKAH" | "MANAGER" | "ADMIN";
 
@@ -54,6 +55,24 @@ export function StaffSessionProvider({ children }: { children: React.ReactNode }
 
   const clear = useCallback(() => {
     setStaff(null);
+  }, [setStaff]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onVenueChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ prevSlug?: string | null; slug?: string | null }>).detail;
+      const prevSlug = detail?.prevSlug ?? null;
+      const nextSlug = detail?.slug ?? null;
+
+      if (prevSlug && nextSlug && prevSlug !== nextSlug) {
+        setStaff(null);
+      }
+    };
+
+    window.addEventListener(STAFF_VENUE_CHANGE_EVENT, onVenueChange as EventListener);
+    return () =>
+      window.removeEventListener(STAFF_VENUE_CHANGE_EVENT, onVenueChange as EventListener);
   }, [setStaff]);
 
   const value = useMemo(() => ({ staff, setStaff, clear }), [staff, setStaff, clear]);

@@ -53,9 +53,11 @@ function excludeOrderRequestMarker(): Prisma.StaffCallWhereInput {
 }
 
 function toPublicTable<T extends { code: string; label: string | null }>(table: T): T {
+  const publicCode = publicTableCode(table.code);
   return {
     ...table,
-    code: publicTableCode(table.code),
+    code: table.label?.trim() || publicCode,
+    label: table.label && table.label.trim() && table.label.trim() !== publicCode ? table.label : null,
   };
 }
 
@@ -186,6 +188,7 @@ staffDashboardRouter.get(
           status: "NEW",
           type: { in: types },
           ...excludeOrderRequestMarker(),
+          table: { venueId },
           session: { shiftId: shift.id },
         },
       }),
@@ -194,6 +197,7 @@ staffDashboardRouter.get(
         : prisma.paymentRequest.count({
             where: {
               status: "PENDING",
+              table: { venueId },
               session: { shiftId: shift.id },
             },
           }),
@@ -224,6 +228,7 @@ staffDashboardRouter.get(
     const sections = orderSectionsForRole(role);
 
     const where: any = {
+      table: { venueId },
       session: { shiftId: shift.id },
     };
 
@@ -312,6 +317,7 @@ staffDashboardRouter.patch(
       select: {
         id: true,
         tableId: true,
+        table: { select: { venueId: true } },
         session: { select: { shiftId: true } },
         items: {
           select: {
@@ -322,6 +328,7 @@ staffDashboardRouter.patch(
     });
 
     if (!order) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
+    if (order.table.venueId !== venueId) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
     if (order.session?.shiftId !== shift.id) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
 
     if (sections) {
@@ -360,6 +367,7 @@ staffDashboardRouter.post(
         select: {
           id: true,
           tableId: true,
+          table: { select: { venueId: true } },
           userId: true,
           shiftId: true,
           endedAt: true,
@@ -374,7 +382,13 @@ staffDashboardRouter.post(
       }),
     ]);
 
-    if (!session || session.tableId !== body.tableId || session.shiftId !== shift.id || session.endedAt) {
+    if (
+      !session ||
+      session.tableId !== body.tableId ||
+      session.table.venueId !== venueId ||
+      session.shiftId !== shift.id ||
+      session.endedAt
+    ) {
       throw new HttpError(404, "SESSION_NOT_FOUND", "Session not found for this table");
     }
     if (menuItems.length !== menuItemIds.length) {
@@ -438,6 +452,7 @@ staffDashboardRouter.get(
         status,
         type: { in: types },
         ...excludeOrderRequestMarker(),
+        table: { venueId },
         session: { shiftId: shift.id },
       },
       orderBy: { createdAt: "desc" },
@@ -565,12 +580,14 @@ staffDashboardRouter.patch(
       select: {
         id: true,
         type: true,
+        session: { select: { shiftId: true } },
         table: { select: { venueId: true } },
       },
     });
 
     if (!call) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
     if (call.table.venueId !== venueId) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
+    if (call.session?.shiftId !== shift.id) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
     if (!allowedTypes.includes(call.type)) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
 
     await prisma.staffCall.update({
@@ -599,6 +616,7 @@ staffDashboardRouter.get(
     const payments = await (prisma as any).paymentRequest.findMany({
       where: {
         status,
+        table: { venueId },
         session: { shiftId: shift.id },
       },
       orderBy: { createdAt: "desc" },
@@ -608,6 +626,9 @@ staffDashboardRouter.get(
             code: true,
             label: true,
             orders: {
+              where: {
+                table: { venueId },
+              },
               select: {
                 createdAt: true,
                 status: true,
@@ -620,7 +641,7 @@ staffDashboardRouter.get(
               },
             },
             payments: {
-              where: { status: "CONFIRMED" },
+              where: { status: "CONFIRMED", table: { venueId } },
               select: {
                 id: true,
                 confirmedAt: true,
@@ -736,7 +757,11 @@ staffDashboardRouter.post(
           useLoyalty: true,
           table: {
             select: {
+              venueId: true,
               orders: {
+                where: {
+                  table: { venueId },
+                },
                 select: {
                   createdAt: true,
                   status: true,
@@ -749,7 +774,7 @@ staffDashboardRouter.post(
                 },
               },
               payments: {
-                where: { status: "CONFIRMED" },
+                where: { status: "CONFIRMED", table: { venueId } },
                 select: {
                   id: true,
                   confirmedAt: true,
@@ -784,6 +809,7 @@ staffDashboardRouter.post(
       });
 
       if (!pr) throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
+      if (pr.table.venueId !== venueId) throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
       if (pr.session?.shiftId !== shift.id) throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
 
       if (pr.status !== "PENDING") {

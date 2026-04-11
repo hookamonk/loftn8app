@@ -7,6 +7,8 @@ export type StaffPushPayload = {
   kind?: "ORDER_CREATED" | "CALL_CREATED" | "GUEST_MESSAGE" | "PAYMENT_REQUESTED";
   message?: string | null;
   tableCode?: string | null;
+  venueId?: number | null;
+  venueSlug?: string | null;
   vibrate?: number[];
 };
 

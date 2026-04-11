@@ -3,7 +3,7 @@ import { prisma } from "../../db/prisma";
 import type { StaffRole, MenuSection } from "@prisma/client";
 import { env } from "../../config/env";
 import { isOrderRequestMessage } from "../orders/orderRequest";
-import { publicTableCode } from "../../config/venues";
+import { publicTableCode, publicVenueSlug } from "../../config/venues";
 
 type PushPayload = {
   title: string;
@@ -18,6 +18,8 @@ type PushPayload = {
     | "PAYMENT_REQUESTED";
   message?: string;
   tableCode?: string;
+  venueId?: number;
+  venueSlug?: string;
   vibrate?: number[];
   requireInteraction?: boolean;
   renotify?: boolean;
@@ -158,7 +160,7 @@ export async function notifyOrderCreated(orderId: string) {
     where: { id: orderId },
     select: {
       id: true,
-      table: { select: { venueId: true, code: true } },
+      table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
       items: {
         select: {
           menuItem: {
@@ -174,6 +176,7 @@ export async function notifyOrderCreated(orderId: string) {
 
   const venueId = order.table.venueId;
   const tableCode = publicTableCode(order.table.code);
+  const venueSlug = publicVenueSlug(order.table.venue.slug);
 
   const sections = order.items.map((it) => it.menuItem.category.section as MenuSection);
   const hasHookah = sections.includes("HOOKAH");
@@ -191,6 +194,8 @@ export async function notifyOrderCreated(orderId: string) {
     ts: Date.now(),
     kind: "ORDER_CREATED",
     tableCode,
+    venueId,
+    venueSlug,
     vibrate: [240, 120, 240, 120, 360],
   });
 }
@@ -202,13 +207,14 @@ export async function notifyCallCreated(callId: string) {
       id: true,
       type: true,
       message: true,
-      table: { select: { venueId: true, code: true } },
+      table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
     },
   });
   if (!call) return;
 
   const venueId = call.table.venueId;
   const tableCode = publicTableCode(call.table.code);
+  const venueSlug = publicVenueSlug(call.table.venue.slug);
   const isOrderRequest = call.type === "HELP" && isOrderRequestMessage(call.message);
 
   const roles: StaffRole[] = ["MANAGER"];
@@ -246,6 +252,8 @@ export async function notifyCallCreated(callId: string) {
     kind: isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
     message: messagePreview ?? undefined,
     tableCode,
+    venueId,
+    venueSlug,
     vibrate: isMessageOnly ? [420, 140, 420, 140, 560] : [320, 140, 320, 140, 420],
   });
 }
@@ -253,10 +261,16 @@ export async function notifyCallCreated(callId: string) {
 export async function notifyPaymentRequested(paymentRequestId: string) {
   const pr = await prisma.paymentRequest.findUnique({
     where: { id: paymentRequestId },
-    select: { id: true, status: true, method: true, table: { select: { venueId: true, code: true } } },
+    select: {
+      id: true,
+      status: true,
+      method: true,
+      table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
+    },
   });
   if (!pr) return;
   if (pr.status !== "PENDING") return;
+  const venueSlug = publicVenueSlug(pr.table.venue.slug);
 
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
     title: "Запрос оплаты",
@@ -266,6 +280,8 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
     ts: Date.now(),
     kind: "PAYMENT_REQUESTED",
     tableCode: publicTableCode(pr.table.code),
+    venueId: pr.table.venueId,
+    venueSlug,
     vibrate: [280, 120, 280, 120, 460],
   });
 }

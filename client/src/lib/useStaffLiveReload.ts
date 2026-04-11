@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { fireInAppAlert, type StaffPushPayload } from "@/lib/staffAlerts";
+import { getStaffVenueSlug, resolveVenueSlug } from "@/lib/venue";
 
 type Msg =
   | { type: "STAFF_PUSH"; payload?: StaffPushPayload }
@@ -37,6 +38,10 @@ export function useStaffLiveReload(load: () => void | Promise<void>, intervalMs 
       if (!data || typeof data !== "object") return;
 
       if (data.type === "STAFF_PUSH") {
+        const payloadVenue = resolveVenueSlug(data.payload?.venueSlug ?? null);
+        if (payloadVenue && payloadVenue !== getStaffVenueSlug()) {
+          return;
+        }
         fireInAppAlert(data.payload);
         safeLoad();
       }

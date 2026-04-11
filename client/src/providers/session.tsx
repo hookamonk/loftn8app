@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import { storage } from "@/lib/storage";
 import { api } from "@/lib/api";
+import { getVenueSlug, setVenueSlug, VENUE_CHANGE_EVENT } from "@/lib/venue";
 
 type GuestSessionMeResponse =
   | {
@@ -80,6 +81,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         const guestSession = await api<GuestSessionMeResponse>("/guest/me");
         if (guestSession.ok && guestSession.session) {
           const actualCode = guestSession.session.table.code;
+          const actualVenueSlug = guestSession.session.venue?.slug;
+          if (actualVenueSlug) {
+            setVenueSlug(actualVenueSlug);
+          }
           if (actualCode && actualCode !== tableCode) {
             _setTableCode(actualCode);
             storage.set(TABLE_KEY, actualCode);
@@ -107,9 +112,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             };
           }>("/guest/session", {
             method: "POST",
-            body: JSON.stringify({ tableCode: code }),
+            body: JSON.stringify({ tableCode: code, venueSlug: getVenueSlug() }),
           });
           const actualCode = created.session.table.code;
+          const actualVenueSlug = created.session.venue?.slug;
+          if (actualVenueSlug) {
+            setVenueSlug(actualVenueSlug);
+          }
           if (actualCode && actualCode !== tableCode) {
             _setTableCode(actualCode);
             storage.set(TABLE_KEY, actualCode);
@@ -146,6 +155,23 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (restoreInFlightRef.current) return;
     void restoreSession();
   }, [tableCode, sessionReady]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onVenueChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ prevSlug?: string | null; slug?: string | null }>).detail;
+      const prevSlug = detail?.prevSlug ?? null;
+      const nextSlug = detail?.slug ?? null;
+
+      if (prevSlug && nextSlug && prevSlug !== nextSlug) {
+        clearSession();
+      }
+    };
+
+    window.addEventListener(VENUE_CHANGE_EVENT, onVenueChange as EventListener);
+    return () => window.removeEventListener(VENUE_CHANGE_EVENT, onVenueChange as EventListener);
+  }, []);
 
   const value = useMemo(
     () => ({
