@@ -138,6 +138,11 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
   const inFlightRef = useRef<Promise<void> | null>(null);
 
   const enabled = sessionReady && isGuestSurface(pathname);
+  const waitingForStaffOrder =
+    enabled &&
+    pathname === "/cart" &&
+    Boolean(feed?.orderRequest && (feed.orderRequest.status === "NEW" || feed.orderRequest.status === "ACKED")) &&
+    (feed?.orders?.length ?? 0) === 0;
 
   const refresh = async (opts?: { silent?: boolean }) => {
     if (!enabled) {
@@ -207,8 +212,8 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
 
   const { tick } = usePolling(() => refresh({ silent: true }), {
     enabled,
-    activeMs: 12000,
-    idleMs: 30000,
+    activeMs: waitingForStaffOrder ? 1500 : 12000,
+    idleMs: waitingForStaffOrder ? 4000 : 30000,
     immediate: false,
   });
 
