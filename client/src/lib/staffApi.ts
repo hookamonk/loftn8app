@@ -86,9 +86,12 @@ async function performFetchJson<T>(
     try {
       const res = await fetch(`${API_BASE}${path}`, {
         ...init,
+        cache: "no-store",
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
+          "Cache-Control": "no-cache, no-store, max-age=0",
+          Pragma: "no-cache",
           ...(venueSlug ? { "X-Venue-Slug": venueSlug } : {}),
           ...(init?.headers || {}),
         },

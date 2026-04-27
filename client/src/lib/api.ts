@@ -78,8 +78,11 @@ async function performRequest<T>(
     try {
       const res = await fetch(url, {
         ...options,
+        cache: "no-store",
         headers: {
           "Content-Type": "application/json",
+          "Cache-Control": "no-cache, no-store, max-age=0",
+          Pragma: "no-cache",
           ...(venueSlug ? { "X-Venue-Slug": venueSlug } : {}),
           ...(options.headers ?? {}),
         },
