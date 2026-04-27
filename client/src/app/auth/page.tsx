@@ -36,6 +36,8 @@ function humanError(msg: string) {
   if (m.includes("ACCOUNT_EXISTS")) return "This account already exists. Please sign in.";
   if (m.includes("EMAIL_REQUIRED")) return "Email is required.";
   if (m.includes("EMAIL_MISMATCH")) return "Account not found. Please check your email.";
+  if (m.includes("PASSWORD_INVALID")) return "Incorrect password.";
+  if (m.includes("PASSWORD_NOT_SET")) return "Password is not set for this account yet.";
   if (m.includes("CONSENT_REQUIRED")) return "You must agree to personal data processing.";
   if (m.includes("NAME_REQUIRED")) return "Name is required.";
   if (m.includes("OTP_INVALID")) return "Invalid code.";
@@ -60,7 +62,11 @@ export default function AuthPage() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("+420");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
   const [consent, setConsent] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
   const [code, setCode] = useState("");
 
@@ -72,6 +78,7 @@ export default function AuthPage() {
 
   const p = useMemo(() => normalizePhone(phone), [phone]);
   const venueName = useMemo(() => getVenueName(), []);
+  const passwordsMatch = mode === "login" || password === passwordConfirm;
 
   useEffect(() => {
     if (!hasVenueSelection()) {
@@ -88,10 +95,14 @@ export default function AuthPage() {
 
   const canSend =
     !busy &&
-    p.length >= 6 &&
-    name.trim().length >= 1 &&
-    isValidEmail(email) &&
-    (mode === "register" ? consent : true);
+    (mode === "register"
+      ? p.length >= 6 &&
+        name.trim().length >= 1 &&
+        isValidEmail(email) &&
+        password.trim().length >= 6 &&
+        passwordsMatch &&
+        consent
+      : isValidEmail(email) && password.trim().length >= 6);
 
   const canVerify = !busy && code.trim().length >= 4;
 
@@ -99,6 +110,11 @@ export default function AuthPage() {
     setErr(null);
     setSuggestedMode(null);
     if (!canSend) return;
+
+    if (mode === "login") {
+      await loginWithPassword();
+      return;
+    }
 
     setBusy(true);
     try {
@@ -118,7 +134,39 @@ export default function AuthPage() {
       setErr(msg);
       if (mode === "register" && raw.includes("ACCOUNT_EXISTS")) {
         setSuggestedMode("login");
-      } else if (mode === "login" && (raw.includes("NO_ACCOUNT") || raw.includes("NAME_MISMATCH"))) {
+      }
+      push({ kind: "error", title: "Error", message: msg });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loginWithPassword = async () => {
+    setBusy(true);
+    try {
+      const login: any = await post("/auth/guest/login-password", {
+        email: email.trim(),
+        password,
+      });
+
+      setAuthenticated({
+        authenticated: true,
+        user: {
+          id: String((login as any).user.id),
+          name: String((login as any).user.name),
+          phone: String((login as any).user.phone),
+          email: String((login as any).user.email ?? ""),
+          role: String((login as any).user.role ?? "USER"),
+        },
+      });
+      await restoreSession().catch(() => {});
+      push({ kind: "success", title: "Done", message: "You are signed in." });
+      router.replace("/menu");
+    } catch (e: any) {
+      const msg = humanError(e?.message ?? "Failed");
+      const raw = String(e?.message || "");
+      setErr(msg);
+      if (raw.includes("NO_ACCOUNT")) {
         setSuggestedMode("register");
       }
       push({ kind: "error", title: "Error", message: msg });
@@ -140,6 +188,7 @@ export default function AuthPage() {
         intent: mode,
         name: name.trim(),
         email: email.trim(),
+        password,
         consent: mode === "register" ? consent : undefined,
       });
 
@@ -272,8 +321,12 @@ export default function AuthPage() {
               onClick={() => {
                 setErr(null);
                 setStep("form");
-                  setMode((m) => (m === "register" ? "login" : "register"));
-                }}
+                setSuggestedMode(null);
+                setCode("");
+                setPassword("");
+                setPasswordConfirm("");
+                setMode((m) => (m === "register" ? "login" : "register"));
+              }}
               >
               {mode === "register" ? "Already have an account? Sign in" : "No account? Register"}
             </button>
@@ -282,31 +335,35 @@ export default function AuthPage() {
           {step === "form" ? (
             <>
               <div className="mt-4 grid gap-3">
-                <div>
-                  <label className="text-xs text-white/60">Name *</label>
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Your name"
-                    className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-                    autoComplete="name"
-                  />
-                </div>
+                {mode === "register" ? (
+                  <>
+                    <div>
+                      <label className="text-xs text-white/60">Name *</label>
+                      <input
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Your name"
+                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
+                        autoComplete="name"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-white/60">Phone *</label>
+                      <input
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="+420 777 000 000"
+                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
+                        inputMode="tel"
+                        autoComplete="tel"
+                      />
+                    </div>
+                  </>
+                ) : null}
 
                 <div>
-                  <label className="text-xs text-white/60">Phone *</label>
-                  <input
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+420 777 000 000"
-                    className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-                    inputMode="tel"
-                    autoComplete="tel"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs text-white/60">Email *</label>
+                  <label className="text-xs text-white/60">{mode === "register" ? "Email *" : "Login email *"}</label>
                   <input
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -317,6 +374,55 @@ export default function AuthPage() {
                     type="email"
                   />
                 </div>
+
+                <div>
+                  <label className="text-xs text-white/60">
+                    {mode === "register" ? "Password *" : "Password *"}
+                  </label>
+                  <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
+                    <input
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder={mode === "register" ? "Create password" : "Enter password"}
+                      className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+                      autoComplete={mode === "register" ? "new-password" : "current-password"}
+                      type={showPassword ? "text" : "password"}
+                    />
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-white/70"
+                      onClick={() => setShowPassword((v) => !v)}
+                    >
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                </div>
+
+                {mode === "register" ? (
+                  <div>
+                    <label className="text-xs text-white/60">Repeat password *</label>
+                    <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
+                      <input
+                        value={passwordConfirm}
+                        onChange={(e) => setPasswordConfirm(e.target.value)}
+                        placeholder="Repeat password"
+                        className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+                        autoComplete="new-password"
+                        type={showPasswordConfirm ? "text" : "password"}
+                      />
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-white/70"
+                        onClick={() => setShowPasswordConfirm((v) => !v)}
+                      >
+                        {showPasswordConfirm ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                    {!passwordsMatch && passwordConfirm ? (
+                      <div className="mt-2 text-xs text-red-200">Passwords do not match.</div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {mode === "register" ? (
                   <label className="mt-1 flex cursor-pointer items-start gap-3 text-xs text-white/70">
@@ -357,7 +463,7 @@ export default function AuthPage() {
                 onClick={requestOtp}
                 className="mt-4 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black disabled:opacity-50"
               >
-                {busy ? "Sending…" : mode === "register" ? "Register" : "Sign in"}
+                {busy ? (mode === "register" ? "Sending…" : "Signing in…") : mode === "register" ? "Register" : "Sign in"}
               </button>
 
               {mode === "register" ? (
