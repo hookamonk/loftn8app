@@ -7,6 +7,7 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
+import { sendGuestOtpEmail } from "../../utils/mailer";
 
 export const authRouter = Router();
 
@@ -16,7 +17,7 @@ const RequestOtpSchema = z.object({
   phone: z.string().min(6),
   intent: z.enum(["login", "register"]).optional(),
   name: z.string().optional(),
-  email: z.string().optional(),
+  email: z.string().min(3),
 });
 
 const VerifyOtpSchema = z.object({
@@ -24,7 +25,7 @@ const VerifyOtpSchema = z.object({
   code: z.string().min(4),
   intent: z.enum(["login", "register"]).optional(),
   name: z.string().optional(),
-  email: z.string().optional().or(z.literal("")),
+  email: z.string().min(3),
   consent: z.boolean().optional(),
 });
 
@@ -53,7 +54,15 @@ function clearCookie(res: any, name: string) {
 }
 
 function normalizePhone(phone: string) {
-  return phone.replace(/\s+/g, "").trim();
+  const compact = phone.replace(/\s+/g, "").trim();
+  if (!compact) return "";
+  if (compact.startsWith("+")) return compact;
+  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
+  if (/^\d+$/.test(compact)) {
+    if (compact.startsWith("420")) return `+${compact}`;
+    return `+420${compact}`;
+  }
+  return compact;
 }
 
 function normalizeName(name: string) {
@@ -61,7 +70,7 @@ function normalizeName(name: string) {
 }
 
 function normalizeEmail(raw?: string | null) {
-  const v = String(raw ?? "").trim();
+  const v = String(raw ?? "").trim().toLowerCase();
   return v.length ? v : null;
 }
 
@@ -70,6 +79,14 @@ function assertEmailOrNull(email: string | null) {
   const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   if (!ok) throw new HttpError(400, "EMAIL_INVALID", "Email is invalid");
   return email;
+}
+
+function assertEmail(email: string | null) {
+  const normalized = assertEmailOrNull(email);
+  if (!normalized) {
+    throw new HttpError(400, "EMAIL_REQUIRED", "Email is required");
+  }
+  return normalized;
 }
 
 function genOtpCode() {
@@ -90,10 +107,15 @@ authRouter.post(
     const phone = normalizePhone((req.body as any).phone);
     const intent: Intent = ((req.body as any).intent as Intent) || "login";
     const nameRaw = String((req.body as any).name ?? "").trim();
+    const email = assertEmail(normalizeEmail((req.body as any).email));
     const user = await prisma.user.findUnique({ where: { phone } });
+    const existingEmailUser = await prisma.user.findUnique({ where: { email } }).catch(() => null);
 
     if (intent === "login") {
       if (!user) throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
+      if (!user.email || normalizeEmail(user.email) !== email) {
+        throw new HttpError(404, "EMAIL_MISMATCH", "Account not found. Please check your email.");
+      }
 
       if (nameRaw) {
         const okName = normalizeName(nameRaw) === normalizeName(user.name);
@@ -101,6 +123,9 @@ authRouter.post(
       }
     } else {
       assertRegisterAllowed(user);
+      if (existingEmailUser) {
+        throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
+      }
     }
 
     const code = genOtpCode();
@@ -108,13 +133,15 @@ authRouter.post(
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
     await prisma.otpCode.create({ data: { phone, codeHash, expiresAt } });
-
-    // DEMO/TEST MODE
-    console.log(`[OTP DEMO] phone=${phone} code=${code}`);
+    await sendGuestOtpEmail({
+      to: email,
+      guestName: nameRaw || user?.name || null,
+      code,
+    });
     return res.json({
       ok: true,
-      devOtp: code,
       expiresInSec: 600,
+      delivery: "email",
     });
   })
 );
@@ -130,6 +157,7 @@ authRouter.post(
     const consent = Boolean((req.body as any).consent);
 
     const phone = normalizePhone(rawPhone);
+    const email = assertEmail(normalizeEmail((req.body as any).email));
 
     const otp = await prisma.otpCode.findFirst({
       where: { phone, usedAt: null, expiresAt: { gt: new Date() } },
@@ -147,6 +175,9 @@ authRouter.post(
 
     if (intent === "login") {
       if (!user) throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
+      if (!user.email || normalizeEmail(user.email) !== email) {
+        throw new HttpError(404, "EMAIL_MISMATCH", "Account not found. Please check your email.");
+      }
 
       if (nameRaw) {
         const okName = normalizeName(nameRaw) === normalizeName(user.name);
@@ -156,14 +187,16 @@ authRouter.post(
       if (!nameRaw) throw new HttpError(400, "NAME_REQUIRED", "Name is required");
       if (!consent) throw new HttpError(400, "CONSENT_REQUIRED", "Consent is required");
       assertRegisterAllowed(user);
-
-      const emailNorm = assertEmailOrNull(normalizeEmail((req.body as any).email));
+      const existingEmailUser = await prisma.user.findUnique({ where: { email } }).catch(() => null);
+      if (existingEmailUser) {
+        throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
+      }
 
       user = await prisma.user.create({
         data: {
           phone,
           name: nameRaw,
-          email: emailNorm,
+          email,
           privacyAcceptedAt: new Date(),
         },
       });

@@ -14,6 +14,21 @@ const EnvSchema = z.object({
 
   COOKIE_DOMAIN: z.string().optional().or(z.literal("")).optional(),
 
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().optional(),
+  SMTP_SECURE: z
+    .union([z.string(), z.boolean()])
+    .optional()
+    .transform((value) => {
+      if (typeof value === "boolean") return value;
+      if (typeof value === "string") return value === "true" || value === "1";
+      return undefined;
+    }),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM_EMAIL: z.string().optional(),
+  SMTP_FROM_NAME: z.string().optional(),
+
   //Web Push
   VAPID_SUBJECT: z.string().optional(),
   VAPID_PUBLIC_KEY: z.string().optional(),

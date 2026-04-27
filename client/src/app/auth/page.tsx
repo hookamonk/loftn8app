@@ -14,14 +14,28 @@ type Mode = "register" | "login";
 type Step = "form" | "code";
 
 function normalizePhone(x: string) {
-  return x.replace(/\s+/g, "").trim();
+  const compact = x.replace(/\s+/g, "").trim();
+  if (!compact) return "";
+  if (compact.startsWith("+")) return compact;
+  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
+  if (/^\d+$/.test(compact)) {
+    if (compact.startsWith("420")) return `+${compact}`;
+    return `+420${compact}`;
+  }
+  return compact;
+}
+
+function isValidEmail(x: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(x).trim());
 }
 
 function humanError(msg: string) {
   const m = String(msg || "");
   if (m.includes("NO_ACCOUNT")) return "Account not found. Please register.";
   if (m.includes("NAME_MISMATCH")) return "Account not found (please check your name and phone) — please register.";
-  if (m.includes("ACCOUNT_EXISTS")) return "This phone is already registered. Please sign in.";
+  if (m.includes("ACCOUNT_EXISTS")) return "This account already exists. Please sign in.";
+  if (m.includes("EMAIL_REQUIRED")) return "Email is required.";
+  if (m.includes("EMAIL_MISMATCH")) return "Account not found. Please check your email.";
   if (m.includes("CONSENT_REQUIRED")) return "You must agree to personal data processing.";
   if (m.includes("NAME_REQUIRED")) return "Name is required.";
   if (m.includes("OTP_INVALID")) return "Invalid code.";
@@ -44,7 +58,7 @@ export default function AuthPage() {
   const [step, setStep] = useState<Step>("form");
 
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const [phone, setPhone] = useState("+420");
   const [email, setEmail] = useState("");
   const [consent, setConsent] = useState(false);
 
@@ -53,8 +67,6 @@ export default function AuthPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [suggestedMode, setSuggestedMode] = useState<Mode | null>(null);
-
-  const [devOtp, setDevOtp] = useState<string | null>(null);
 
   const [showAnonWarn, setShowAnonWarn] = useState(false);
 
@@ -78,6 +90,7 @@ export default function AuthPage() {
     !busy &&
     p.length >= 6 &&
     name.trim().length >= 1 &&
+    isValidEmail(email) &&
     (mode === "register" ? consent : true);
 
   const canVerify = !busy && code.trim().length >= 4;
@@ -93,14 +106,12 @@ export default function AuthPage() {
         phone: p,
         intent: mode,
         name: name.trim(),
-        email: mode === "register" ? email.trim() : undefined,
+        email: email.trim(),
       });
-
-      setDevOtp(r?.devOtp ? String(r.devOtp) : null);
 
       setStep("code");
       setCode("");
-      push({ kind: "success", title: "Code sent", message: "Check your SMS and enter the code." });
+      push({ kind: "success", title: "Code sent", message: "Check your email and enter the code." });
     } catch (e: any) {
       const raw = String(e?.message || "");
       const msg = humanError(e?.message ?? "Failed");
@@ -128,7 +139,7 @@ export default function AuthPage() {
         code: code.trim(),
         intent: mode,
         name: name.trim(),
-        email: mode === "register" ? email.trim() : undefined,
+        email: email.trim(),
         consent: mode === "register" ? consent : undefined,
       });
 
@@ -261,10 +272,9 @@ export default function AuthPage() {
               onClick={() => {
                 setErr(null);
                 setStep("form");
-                setDevOtp(null);
-                setMode((m) => (m === "register" ? "login" : "register"));
-              }}
-            >
+                  setMode((m) => (m === "register" ? "login" : "register"));
+                }}
+              >
               {mode === "register" ? "Already have an account? Sign in" : "No account? Register"}
             </button>
           </div>
@@ -295,19 +305,18 @@ export default function AuthPage() {
                   />
                 </div>
 
-                {mode === "register" ? (
-                  <div>
-                    <label className="text-xs text-white/60">Email (optional)</label>
-                    <input
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@email.com"
-                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-                      inputMode="email"
-                      autoComplete="email"
-                    />
-                  </div>
-                ) : null}
+                <div>
+                  <label className="text-xs text-white/60">Email *</label>
+                  <input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@email.com"
+                    className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
+                    inputMode="email"
+                    autoComplete="email"
+                    type="email"
+                  />
+                </div>
 
                 {mode === "register" ? (
                   <label className="mt-1 flex cursor-pointer items-start gap-3 text-xs text-white/70">
@@ -332,7 +341,6 @@ export default function AuthPage() {
                       onClick={() => {
                         setErr(null);
                         setSuggestedMode(null);
-                        setDevOtp(null);
                         setCode("");
                         setStep("form");
                         setMode(suggestedMode);
@@ -366,21 +374,15 @@ export default function AuthPage() {
           ) : (
             <>
               <div className="mt-4">
-                <div className="text-xs text-white/60">SMS code</div>
+                <div className="text-xs text-white/60">Email code</div>
                 <input
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
-                  placeholder="1234"
+                  placeholder="123456"
                   className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
                   inputMode="numeric"
                   autoComplete="one-time-code"
                 />
-
-                {devOtp ? (
-                  <div className="mt-2 rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-white/80">
-                    Your code: <b className="text-white">{devOtp}</b>
-                  </div>
-                ) : null}
 
                 {err ? (
                   <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs text-red-200">
@@ -392,7 +394,6 @@ export default function AuthPage() {
                         onClick={() => {
                           setErr(null);
                           setSuggestedMode(null);
-                          setDevOtp(null);
                           setCode("");
                           setStep("form");
                           setMode(suggestedMode);
