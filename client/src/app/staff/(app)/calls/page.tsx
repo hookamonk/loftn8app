@@ -5,6 +5,7 @@ import { listCalls, updateCallStatus, type StaffCall, type CallStatus } from "@/
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 
 const STATUSES: CallStatus[] = ["NEW", "ACKED", "DONE"];
 
@@ -92,6 +93,7 @@ export default function StaffCallsPage() {
     }
 
     push({ kind: "success", title: "Готово", message: okText });
+    emitStaffLiveSync("call-status-updated");
     await load({ silent: false });
   };
 

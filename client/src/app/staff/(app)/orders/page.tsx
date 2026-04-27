@@ -14,6 +14,7 @@ import {
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 
 const STATUSES: OrderStatus[] = ["IN_PROGRESS", "DELIVERED", "CANCELLED"];
 
@@ -117,6 +118,7 @@ export default function StaffOrdersPage() {
     }
 
     push({ kind: "success", title: "Готово", message: okText });
+    emitStaffLiveSync("order-status-updated");
     await load({ silent: false });
   };
 
@@ -131,6 +133,7 @@ export default function StaffOrdersPage() {
     }
 
     const connected = result.data.request;
+    emitStaffLiveSync("order-request-connected");
     router.push(
       `/staff/orders/create?requestId=${encodeURIComponent(connected.id)}&tableId=${connected.table.id}&tableCode=${encodeURIComponent(
         connected.table.code

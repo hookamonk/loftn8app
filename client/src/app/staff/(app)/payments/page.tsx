@@ -5,6 +5,7 @@ import { listPayments, confirmPayment, cancelPayment, type StaffPayment, type Pa
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 
 const STATUSES: PaymentStatus[] = ["PENDING", "CONFIRMED", "CANCELLED"];
 
@@ -91,6 +92,7 @@ export default function StaffPaymentsPage() {
       message: "The bill was closed successfully.",
     });
 
+    emitStaffLiveSync("payment-confirmed");
     await load({ silent: false });
   };
 
@@ -112,6 +114,7 @@ export default function StaffPaymentsPage() {
       message: "The guest can now choose the payment method again.",
     });
 
+    emitStaffLiveSync("payment-cancelled");
     await load({ silent: false });
   };
 

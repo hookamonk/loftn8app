@@ -7,6 +7,7 @@ import { staffLogout, getStaffSummary, type StaffSummary } from "@/lib/staffApi"
 import { useStaffSession } from "@/providers/staffSession";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 
 function Badge({ value }: { value?: number }) {
   if (!value || value <= 0) return null;
@@ -96,8 +97,8 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   };
 
   const { tick } = usePolling(() => loadSummary({ silent: true }), {
-    activeMs: 15000,
-    idleMs: 45000,
+    activeMs: 4000,
+    idleMs: 12000,
     immediate: false,
     enabled: shouldPollSummary,
   });
@@ -118,6 +119,13 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
     void loadSummary({ silent: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldPollSummary, staff?.role]);
+
+  useEffect(() => {
+    if (!shouldPollSummary) return;
+    return subscribeStaffLiveSync(() => {
+      void tick();
+    });
+  }, [shouldPollSummary, tick]);
 
   return (
     <div className="min-h-dvh bg-[#07070a] text-white">

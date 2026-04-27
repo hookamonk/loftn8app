@@ -143,6 +143,15 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
     pathname === "/cart" &&
     Boolean(feed?.orderRequest && (feed.orderRequest.status === "NEW" || feed.orderRequest.status === "ACKED")) &&
     (feed?.orders?.length ?? 0) === 0;
+  const hasActiveOrders = Boolean(
+    feed?.orders?.some((order) => order.status === "NEW" || order.status === "ACCEPTED" || order.status === "IN_PROGRESS")
+  );
+  const hasActiveCalls = Boolean(feed?.calls?.some((call) => call.status === "NEW" || call.status === "ACKED"));
+  const hasPendingPayments = Boolean(feed?.payments?.some((payment) => payment.status === "PENDING"));
+  const hasActiveOrderRequest = Boolean(
+    feed?.orderRequest && (feed.orderRequest.status === "NEW" || feed.orderRequest.status === "ACKED")
+  );
+  const liveActivity = enabled && (hasActiveOrderRequest || hasActiveOrders || hasActiveCalls || hasPendingPayments);
 
   const refresh = async (opts?: { silent?: boolean }) => {
     if (!enabled) {
@@ -212,8 +221,8 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
 
   const { tick } = usePolling(() => refresh({ silent: true }), {
     enabled,
-    activeMs: waitingForStaffOrder ? 1500 : 12000,
-    idleMs: waitingForStaffOrder ? 4000 : 30000,
+    activeMs: waitingForStaffOrder ? 1500 : liveActivity ? 2500 : 12000,
+    idleMs: waitingForStaffOrder ? 4000 : liveActivity ? 6000 : 30000,
     immediate: false,
   });
 
