@@ -35,6 +35,12 @@ const corsMiddleware = cors({
 });
 
 app.use(corsMiddleware);
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
 
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());

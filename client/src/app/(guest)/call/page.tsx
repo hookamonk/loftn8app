@@ -20,6 +20,8 @@ function requestStatusText(status?: "NEW" | "ACKED" | "DONE") {
 
 function paymentStatusText(status?: "PENDING" | "CONFIRMED" | "CANCELLED") {
   if (status === "PENDING") return "Payment requested";
+  if (status === "CONFIRMED") return "Payment confirmed";
+  if (status === "CANCELLED") return "Payment cancelled";
   return undefined;
 }
 
@@ -118,7 +120,7 @@ export default function CallPage() {
 
   const latestWaiter = feed?.calls.find((call) => call.type === "WAITER");
   const latestHookah = feed?.calls.find((call) => call.type === "HOOKAH");
-  const latestPayment = feed?.payments.find((payment) => payment.status === "PENDING");
+  const latestPayment = (feed?.payments ?? [])[0];
   const latestMessage = feed?.calls.find((call) => call.type === "HELP");
 
   useEffect(() => {

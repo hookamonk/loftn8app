@@ -28,6 +28,11 @@ function requestKey(path: string, init?: RequestInit, venueSlug?: string) {
   });
 }
 
+function withNoStoreQuery(path: string) {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}__ts=${Date.now()}`;
+}
+
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error: string; status: number };
 export type ApiResult<T> = ApiOk<T> | ApiErr;
@@ -84,7 +89,9 @@ async function performFetchJson<T>(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const res = await fetch(`${API_BASE}${path}`, {
+      const requestPath =
+        String(init?.method ?? "GET").toUpperCase() === "GET" ? withNoStoreQuery(path) : path;
+      const res = await fetch(`${API_BASE}${requestPath}`, {
         ...init,
         cache: "no-store",
         credentials: "include",

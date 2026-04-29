@@ -221,10 +221,16 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
 
   const { tick } = usePolling(() => refresh({ silent: true }), {
     enabled,
-    activeMs: waitingForStaffOrder ? 1500 : liveActivity ? 2500 : 12000,
-    idleMs: waitingForStaffOrder ? 4000 : liveActivity ? 6000 : 30000,
+    activeMs: waitingForStaffOrder ? 800 : liveActivity ? 1500 : 10000,
+    idleMs: waitingForStaffOrder ? 2000 : liveActivity ? 3500 : 20000,
     immediate: false,
   });
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (!waitingForStaffOrder && !liveActivity) return;
+    void tick();
+  }, [enabled, waitingForStaffOrder, liveActivity, tick]);
 
   useEffect(() => {
     if (!enabled) {

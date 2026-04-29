@@ -32,9 +32,14 @@ function requestKey(url: string, options: FetchOptions, venueSlug?: string) {
   });
 }
 
+function withNoStoreQuery(url: string) {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}__ts=${Date.now()}`;
+}
+
 export async function api<T>(path: string, options: FetchOptions = {}): Promise<T> {
   const base = API.replace(/\/$/, "");
-  const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
+  const baseUrl = `${base}${path.startsWith("/") ? path : `/${path}`}`;
 
   const method = String(options.method ?? "GET").toUpperCase();
   const maxAttempts = method === "GET" ? 3 : 1;
@@ -45,7 +50,7 @@ export async function api<T>(path: string, options: FetchOptions = {}): Promise<
   }
 
   if (method === "GET") {
-    const key = requestKey(url, options, venueSlug);
+    const key = requestKey(baseUrl, options, venueSlug);
     const existing = inFlightGetRequests.get(key) as Promise<T> | undefined;
     if (existing) {
       return existing;
@@ -53,7 +58,7 @@ export async function api<T>(path: string, options: FetchOptions = {}): Promise<
 
     const pending = (async () => {
       try {
-        return await performRequest<T>(url, options, maxAttempts, venueSlug);
+        return await performRequest<T>(baseUrl, options, maxAttempts, venueSlug);
       } finally {
         inFlightGetRequests.delete(key);
       }
@@ -63,7 +68,7 @@ export async function api<T>(path: string, options: FetchOptions = {}): Promise<
     return pending;
   }
 
-  return performRequest<T>(url, options, maxAttempts, venueSlug);
+  return performRequest<T>(baseUrl, options, maxAttempts, venueSlug);
 }
 
 async function performRequest<T>(
@@ -76,7 +81,8 @@ async function performRequest<T>(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const res = await fetch(url, {
+      const requestUrl = options.method && String(options.method).toUpperCase() !== "GET" ? url : withNoStoreQuery(url);
+      const res = await fetch(requestUrl, {
         ...options,
         cache: "no-store",
         headers: {
