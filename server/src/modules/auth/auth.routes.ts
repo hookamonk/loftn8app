@@ -15,18 +15,24 @@ type Intent = "login" | "register";
 
 const RequestOtpSchema = z.object({
   phone: z.string().min(6),
-  intent: z.enum(["login", "register"]).optional(),
-  name: z.string().optional(),
+  intent: z.enum(["register"]).optional(),
+  name: z.string().min(1),
   email: z.string().min(3),
 });
 
 const VerifyOtpSchema = z.object({
   phone: z.string().min(6),
   code: z.string().min(4),
-  intent: z.enum(["login", "register"]).optional(),
-  name: z.string().optional(),
+  intent: z.enum(["register"]).optional(),
+  name: z.string().min(1),
   email: z.string().min(3),
-  consent: z.boolean().optional(),
+  password: z.string().min(6),
+  consent: z.boolean(),
+});
+
+const PasswordLoginSchema = z.object({
+  email: z.string().min(3),
+  password: z.string().min(6),
 });
 
 function setCookie(res: any, name: string, value: string, maxAgeSeconds: number) {
@@ -105,27 +111,15 @@ authRouter.post(
   validate(RequestOtpSchema),
   asyncHandler(async (req, res) => {
     const phone = normalizePhone((req.body as any).phone);
-    const intent: Intent = ((req.body as any).intent as Intent) || "login";
+    const intent: Intent = "register";
     const nameRaw = String((req.body as any).name ?? "").trim();
     const email = assertEmail(normalizeEmail((req.body as any).email));
     const user = await prisma.user.findUnique({ where: { phone } });
     const existingEmailUser = await prisma.user.findUnique({ where: { email } }).catch(() => null);
 
-    if (intent === "login") {
-      if (!user) throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
-      if (!user.email || normalizeEmail(user.email) !== email) {
-        throw new HttpError(404, "EMAIL_MISMATCH", "Account not found. Please check your email.");
-      }
-
-      if (nameRaw) {
-        const okName = normalizeName(nameRaw) === normalizeName(user.name);
-        if (!okName) throw new HttpError(404, "NAME_MISMATCH", "Account not found. Please register.");
-      }
-    } else {
-      assertRegisterAllowed(user);
-      if (existingEmailUser) {
-        throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
-      }
+    assertRegisterAllowed(user);
+    if (existingEmailUser) {
+      throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
     }
 
     const code = genOtpCode();
@@ -152,9 +146,10 @@ authRouter.post(
   validate(VerifyOtpSchema),
   asyncHandler(async (req, res) => {
     const { phone: rawPhone, code } = req.body as any;
-    const intent: Intent = ((req.body as any).intent as Intent) || "login";
+    const intent: Intent = "register";
     const nameRaw = String((req.body as any).name ?? "").trim();
     const consent = Boolean((req.body as any).consent);
+    const passwordRaw = String((req.body as any).password ?? "");
 
     const phone = normalizePhone(rawPhone);
     const email = assertEmail(normalizeEmail((req.body as any).email));
@@ -173,34 +168,26 @@ authRouter.post(
 
     let user = await prisma.user.findUnique({ where: { phone } });
 
-    if (intent === "login") {
-      if (!user) throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
-      if (!user.email || normalizeEmail(user.email) !== email) {
-        throw new HttpError(404, "EMAIL_MISMATCH", "Account not found. Please check your email.");
-      }
-
-      if (nameRaw) {
-        const okName = normalizeName(nameRaw) === normalizeName(user.name);
-        if (!okName) throw new HttpError(404, "NAME_MISMATCH", "Account not found. Please register.");
-      }
-    } else {
-      if (!nameRaw) throw new HttpError(400, "NAME_REQUIRED", "Name is required");
-      if (!consent) throw new HttpError(400, "CONSENT_REQUIRED", "Consent is required");
-      assertRegisterAllowed(user);
-      const existingEmailUser = await prisma.user.findUnique({ where: { email } }).catch(() => null);
-      if (existingEmailUser) {
-        throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
-      }
-
-      user = await prisma.user.create({
-        data: {
-          phone,
-          name: nameRaw,
-          email,
-          privacyAcceptedAt: new Date(),
-        },
-      });
+    if (!nameRaw) throw new HttpError(400, "NAME_REQUIRED", "Name is required");
+    if (!consent) throw new HttpError(400, "CONSENT_REQUIRED", "Consent is required");
+    if (passwordRaw.length < 6) throw new HttpError(400, "PASSWORD_TOO_SHORT", "Password is too short");
+    assertRegisterAllowed(user);
+    const existingEmailUser = await prisma.user.findUnique({ where: { email } }).catch(() => null);
+    if (existingEmailUser) {
+      throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
     }
+
+    const passwordHash = await bcrypt.hash(passwordRaw, 10);
+
+    user = await prisma.user.create({
+      data: {
+        phone,
+        name: nameRaw,
+        email,
+        passwordHash,
+        privacyAcceptedAt: new Date(),
+      },
+    });
 
     const uidToken = jwt.sign(
       { userId: user!.id, role: user!.role },
@@ -236,6 +223,62 @@ authRouter.post(
     });
   })
 );
+
+const guestPasswordLoginHandler = asyncHandler(async (req, res) => {
+    const email = assertEmail(normalizeEmail((req.body as any).email));
+    const password = String((req.body as any).password ?? "");
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
+    }
+
+    if (!user.passwordHash) {
+      throw new HttpError(400, "PASSWORD_NOT_SET", "Password is not set for this account");
+    }
+
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) {
+      throw new HttpError(400, "PASSWORD_INVALID", "Password is invalid");
+    }
+
+    const uidToken = jwt.sign(
+      { userId: user.id, role: user.role },
+      env.JWT_USER_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    setCookie(res, "uid", uidToken, 60 * 60 * 24 * 30);
+
+    const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
+    if (gsid) {
+      try {
+        const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
+        await prisma.guestSession.update({
+          where: { id: payload.sessionId },
+          data: { userId: user.id },
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    res.json({
+      ok: true,
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        role: user.role,
+        privacyAcceptedAt: (user as any).privacyAcceptedAt ?? null,
+      },
+    });
+  });
+
+authRouter.post("/guest/login-password", validate(PasswordLoginSchema), guestPasswordLoginHandler);
+authRouter.post("/guest/password-login", validate(PasswordLoginSchema), guestPasswordLoginHandler);
+authRouter.post("/guest/login", validate(PasswordLoginSchema), guestPasswordLoginHandler);
 
 authRouter.get(
   "/guest/me",

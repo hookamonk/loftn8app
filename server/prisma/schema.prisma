@@ -109,6 +109,7 @@ model User {
   id                 String    @id @default(cuid())
   phone              String    @unique
   email              String?   @unique
+  passwordHash       String?
   name               String
   role               UserRole  @default(USER)
   privacyAcceptedAt  DateTime?
