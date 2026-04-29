@@ -1,6 +1,8 @@
+import { env } from "../../config/env";
 import { prisma } from "../../db/prisma";
 
-const SESSION_AUTO_END_AFTER_PAYMENT_MS = 60 * 60 * 1000;
+const SESSION_AUTO_END_AFTER_PAYMENT_MS =
+  env.GUEST_SESSION_AUTO_END_AFTER_PAYMENT_MINUTES * 60 * 1000;
 
 export async function expireGuestSessionIfInactiveAfterPayment(
   sessionId: string,
@@ -42,38 +44,49 @@ export async function expireGuestSessionIfInactiveAfterPayment(
   }
 
   const paymentAt = latestConfirmedPayment.confirmedAt ?? latestConfirmedPayment.createdAt;
-  const autoEndsAt = new Date(paymentAt.getTime() + SESSION_AUTO_END_AFTER_PAYMENT_MS);
-
-  if (autoEndsAt.getTime() > Date.now()) {
-    return { expired: false as const, autoEndsAt };
-  }
-
-  const [nextOrder, nextCall, nextPayment] = await Promise.all([
+  const [nextOrder, nextCall, nextPayment, nextRating] = await Promise.all([
     prisma.order.findFirst({
       where: {
         sessionId,
         createdAt: { gt: paymentAt },
       },
-      select: { id: true },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, createdAt: true },
     }),
     prisma.staffCall.findFirst({
       where: {
         sessionId,
         createdAt: { gt: paymentAt },
       },
-      select: { id: true },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, createdAt: true },
     }),
     prisma.paymentRequest.findFirst({
       where: {
         sessionId,
         createdAt: { gt: paymentAt },
       },
-      select: { id: true },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, createdAt: true },
+    }),
+    prisma.rating.findFirst({
+      where: {
+        sessionId,
+        createdAt: { gt: paymentAt },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, createdAt: true },
     }),
   ]);
 
-  if (nextOrder || nextCall || nextPayment) {
-    return { expired: false as const, autoEndsAt: null };
+  const lastActivityAt = [paymentAt, nextOrder?.createdAt, nextCall?.createdAt, nextPayment?.createdAt, nextRating?.createdAt]
+    .filter((value): value is Date => Boolean(value))
+    .reduce((latest, current) => (current.getTime() > latest.getTime() ? current : latest), paymentAt);
+
+  const autoEndsAt = new Date(lastActivityAt.getTime() + SESSION_AUTO_END_AFTER_PAYMENT_MS);
+
+  if (autoEndsAt.getTime() > Date.now()) {
+    return { expired: false as const, autoEndsAt };
   }
 
   await prisma.guestSession.update({

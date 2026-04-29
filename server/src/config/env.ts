@@ -11,6 +11,7 @@ const EnvSchema = z.object({
   JWT_GUEST_SESSION_SECRET: z.string().min(20),
   JWT_USER_SECRET: z.string().min(20),
   JWT_STAFF_SECRET: z.string().min(20),
+  GUEST_SESSION_AUTO_END_AFTER_PAYMENT_MINUTES: z.coerce.number().int().positive().default(30),
 
   COOKIE_DOMAIN: z.string().optional().or(z.literal("")).optional(),
 
