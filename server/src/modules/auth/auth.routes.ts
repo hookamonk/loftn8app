@@ -35,6 +35,16 @@ const PasswordLoginSchema = z.object({
   password: z.string().min(6),
 });
 
+const RequestPasswordResetSchema = z.object({
+  email: z.string().min(3),
+});
+
+const ConfirmPasswordResetSchema = z.object({
+  email: z.string().min(3),
+  code: z.string().min(4),
+  password: z.string().min(6),
+});
+
 function setCookie(res: any, name: string, value: string, maxAgeSeconds: number) {
   const isProd = env.NODE_ENV === "production";
 
@@ -105,6 +115,15 @@ function assertRegisterAllowed(existingUser: { id: string } | null) {
   }
 }
 
+async function issueOtpForPhone(phone: string) {
+  const code = genOtpCode();
+  const codeHash = await bcrypt.hash(code, 10);
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+  await prisma.otpCode.create({ data: { phone, codeHash, expiresAt } });
+  return { code, expiresInSec: 600 };
+}
+
 // POST /auth/guest/request-otp
 authRouter.post(
   "/guest/request-otp",
@@ -122,19 +141,16 @@ authRouter.post(
       throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
     }
 
-    const code = genOtpCode();
-    const codeHash = await bcrypt.hash(code, 10);
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
-    await prisma.otpCode.create({ data: { phone, codeHash, expiresAt } });
+    const { code, expiresInSec } = await issueOtpForPhone(phone);
     await sendGuestOtpEmail({
       to: email,
       guestName: nameRaw || user?.name || null,
       code,
+      purpose: "verification",
     });
     return res.json({
       ok: true,
-      expiresInSec: 600,
+      expiresInSec,
       delivery: "email",
     });
   })
@@ -279,6 +295,99 @@ const guestPasswordLoginHandler = asyncHandler(async (req, res) => {
 authRouter.post("/guest/login-password", validate(PasswordLoginSchema), guestPasswordLoginHandler);
 authRouter.post("/guest/password-login", validate(PasswordLoginSchema), guestPasswordLoginHandler);
 authRouter.post("/guest/login", validate(PasswordLoginSchema), guestPasswordLoginHandler);
+
+authRouter.post(
+  "/guest/request-password-reset",
+  validate(RequestPasswordResetSchema),
+  asyncHandler(async (req, res) => {
+    const email = assertEmail(normalizeEmail((req.body as any).email));
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+      throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
+    }
+
+    const { code, expiresInSec } = await issueOtpForPhone(user.phone);
+    await sendGuestOtpEmail({
+      to: email,
+      guestName: user.name,
+      code,
+      purpose: "password-reset",
+    });
+
+    res.json({
+      ok: true,
+      expiresInSec,
+      delivery: "email",
+    });
+  })
+);
+
+authRouter.post(
+  "/guest/reset-password",
+  validate(ConfirmPasswordResetSchema),
+  asyncHandler(async (req, res) => {
+    const email = assertEmail(normalizeEmail((req.body as any).email));
+    const code = String((req.body as any).code ?? "").trim();
+    const passwordRaw = String((req.body as any).password ?? "");
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
+    }
+
+    const otp = await prisma.otpCode.findFirst({
+      where: { phone: user.phone, usedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!otp) throw new HttpError(400, "OTP_NOT_FOUND", "OTP code not found or expired");
+
+    const ok = await bcrypt.compare(code, otp.codeHash);
+    if (!ok) throw new HttpError(400, "OTP_INVALID", "OTP code is invalid");
+
+    await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+
+    const passwordHash = await bcrypt.hash(passwordRaw, 10);
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
+
+    const uidToken = jwt.sign(
+      { userId: updatedUser.id, role: updatedUser.role },
+      env.JWT_USER_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    setCookie(res, "uid", uidToken, 60 * 60 * 24 * 30);
+
+    const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
+    if (gsid) {
+      try {
+        const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
+        await prisma.guestSession.update({
+          where: { id: payload.sessionId },
+          data: { userId: updatedUser.id },
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    res.json({
+      ok: true,
+      user: {
+        id: updatedUser.id,
+        name: updatedUser.name,
+        phone: updatedUser.phone,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        privacyAcceptedAt: (updatedUser as any).privacyAcceptedAt ?? null,
+      },
+    });
+  })
+);
 
 authRouter.get(
   "/guest/me",

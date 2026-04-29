@@ -37,11 +37,25 @@ export async function sendGuestOtpEmail(params: {
   to: string;
   guestName?: string | null;
   code: string;
+  purpose?: "verification" | "password-reset";
 }) {
   const transporter = getTransport();
   const appName = env.SMTP_FROM_NAME || "LoftN8";
   const guestName = String(params.guestName ?? "").trim();
   const greeting = guestName ? `Hello, ${guestName}` : "Hello";
+  const purpose = params.purpose ?? "verification";
+  const subject =
+    purpose === "password-reset"
+      ? `${appName} password reset code`
+      : `${appName} verification code`;
+  const intro =
+    purpose === "password-reset"
+      ? `Your password reset code for ${appName}:`
+      : `Your verification code for ${appName}:`;
+  const footer =
+    purpose === "password-reset"
+      ? "If you did not request a password reset, you can ignore this email."
+      : "If you did not request this code, you can ignore this email.";
 
   await transporter.sendMail({
     from: {
@@ -49,25 +63,26 @@ export async function sendGuestOtpEmail(params: {
       address: env.SMTP_FROM_EMAIL,
     },
     to: params.to,
-    subject: `${appName} verification code`,
+    subject,
     text: [
       `${greeting}!`,
       "",
-      `Your verification code: ${params.code}`,
+      intro,
+      params.code,
       "",
       "This code is valid for 10 minutes.",
       "",
-      "If you did not request this code, you can ignore this email.",
+      footer,
     ].join("\n"),
     html: `
       <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111">
         <p>${greeting}!</p>
-        <p>Your verification code for <strong>${appName}</strong>:</p>
+        <p>${intro.replace(appName, `<strong>${appName}</strong>`)}</p>
         <div style="display:inline-block;padding:14px 18px;border-radius:12px;background:#111;color:#fff;font-size:28px;font-weight:700;letter-spacing:6px;">
           ${params.code}
         </div>
         <p style="margin-top:16px;">This code is valid for 10 minutes.</p>
-        <p style="color:#666;">If you did not request this code, you can ignore this email.</p>
+        <p style="color:#666;">${footer}</p>
       </div>
     `,
   });

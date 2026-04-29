@@ -10,7 +10,7 @@ import { useToast } from "@/providers/toast";
 import { useAuth } from "@/providers/auth";
 import { useSession } from "@/providers/session";
 
-type Mode = "register" | "login";
+type Mode = "register" | "login" | "forgot";
 type Step = "form" | "code";
 
 function normalizePhone(x: string) {
@@ -38,6 +38,7 @@ function humanError(msg: string) {
   if (m.includes("EMAIL_MISMATCH")) return "Account not found. Please check your email.";
   if (m.includes("PASSWORD_INVALID")) return "Incorrect password.";
   if (m.includes("PASSWORD_NOT_SET")) return "Password is not set for this account yet.";
+  if (m.includes("PASSWORD_TOO_SHORT")) return "Password is too short.";
   if (m.includes("CONSENT_REQUIRED")) return "You must agree to personal data processing.";
   if (m.includes("NAME_REQUIRED")) return "Name is required.";
   if (m.includes("OTP_INVALID")) return "Invalid code.";
@@ -78,7 +79,8 @@ export default function AuthPage() {
 
   const p = useMemo(() => normalizePhone(phone), [phone]);
   const venueName = useMemo(() => getVenueName(), []);
-  const passwordsMatch = mode === "login" || password === passwordConfirm;
+  const needsPasswordConfirm = mode === "register" || mode === "forgot";
+  const passwordsMatch = !needsPasswordConfirm || password === passwordConfirm;
 
   useEffect(() => {
     if (!hasVenueSelection()) {
@@ -102,9 +104,14 @@ export default function AuthPage() {
         password.trim().length >= 6 &&
         passwordsMatch &&
         consent
-      : isValidEmail(email) && password.trim().length >= 6);
+      : mode === "login"
+      ? isValidEmail(email) && password.trim().length >= 6
+      : isValidEmail(email));
 
-  const canVerify = !busy && code.trim().length >= 4;
+  const canVerify =
+    !busy &&
+    code.trim().length >= 4 &&
+    (mode !== "forgot" || (password.trim().length >= 6 && passwordsMatch));
 
   const requestOtp = async () => {
     setErr(null);
@@ -113,6 +120,11 @@ export default function AuthPage() {
 
     if (mode === "login") {
       await loginWithPassword();
+      return;
+    }
+
+    if (mode === "forgot") {
+      await requestPasswordReset();
       return;
     }
 
@@ -175,10 +187,40 @@ export default function AuthPage() {
     }
   };
 
+  const requestPasswordReset = async () => {
+    setBusy(true);
+    try {
+      await post("/auth/guest/request-password-reset", {
+        email: email.trim(),
+      });
+
+      setStep("code");
+      setCode("");
+      setPassword("");
+      setPasswordConfirm("");
+      push({ kind: "success", title: "Code sent", message: "Check your email and create a new password." });
+    } catch (e: any) {
+      const msg = humanError(e?.message ?? "Failed");
+      const raw = String(e?.message || "");
+      setErr(msg);
+      if (raw.includes("NO_ACCOUNT")) {
+        setSuggestedMode("register");
+      }
+      push({ kind: "error", title: "Error", message: msg });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const verifyOtp = async () => {
     setErr(null);
     setSuggestedMode(null);
     if (!canVerify) return;
+
+    if (mode === "forgot") {
+      await resetPassword();
+      return;
+    }
 
     setBusy(true);
     try {
@@ -221,6 +263,42 @@ export default function AuthPage() {
         setSuggestedMode("register");
       }
 
+      push({ kind: "error", title: "Error", message: msg });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetPassword = async () => {
+    setBusy(true);
+    try {
+      const result: any = await post("/auth/guest/reset-password", {
+        email: email.trim(),
+        code: code.trim(),
+        password,
+      });
+
+      setAuthenticated({
+        authenticated: true,
+        user: {
+          id: String((result as any).user.id),
+          name: String((result as any).user.name),
+          phone: String((result as any).user.phone),
+          email: String((result as any).user.email ?? ""),
+          role: String((result as any).user.role ?? "USER"),
+        },
+      });
+      await restoreSession().catch(() => {});
+      push({ kind: "success", title: "Password updated", message: "You are signed in with the new password." });
+      router.replace("/menu");
+    } catch (e: any) {
+      const msg = humanError(e?.message ?? "Failed");
+      const raw = String(e?.message || "");
+      setErr(msg);
+      if (raw.includes("NO_ACCOUNT")) {
+        setSuggestedMode("register");
+        setStep("form");
+      }
       push({ kind: "error", title: "Error", message: msg });
     } finally {
       setBusy(false);
@@ -312,24 +390,42 @@ export default function AuthPage() {
         <div className="rounded-3xl border border-white/10 bg-[rgba(20,20,20,0.72)] p-4 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur">
           <div className="flex items-center justify-between">
             <div className="text-sm font-semibold text-white">
-              {mode === "register" ? "Register" : "Sign in"}
+              {mode === "register" ? "Register" : mode === "forgot" ? "Reset password" : "Sign in"}
             </div>
 
-            <button
-              type="button"
-              className="text-xs text-white/70 underline underline-offset-4"
-              onClick={() => {
-                setErr(null);
-                setStep("form");
-                setSuggestedMode(null);
-                setCode("");
-                setPassword("");
-                setPasswordConfirm("");
-                setMode((m) => (m === "register" ? "login" : "register"));
-              }}
+            {mode !== "forgot" ? (
+              <button
+                type="button"
+                className="text-xs text-white/70 underline underline-offset-4"
+                onClick={() => {
+                  setErr(null);
+                  setStep("form");
+                  setSuggestedMode(null);
+                  setCode("");
+                  setPassword("");
+                  setPasswordConfirm("");
+                  setMode((m) => (m === "register" ? "login" : "register"));
+                }}
               >
-              {mode === "register" ? "Already have an account? Sign in" : "No account? Register"}
-            </button>
+                {mode === "register" ? "Already have an account? Sign in" : "No account? Register"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="text-xs text-white/70 underline underline-offset-4"
+                onClick={() => {
+                  setErr(null);
+                  setStep("form");
+                  setSuggestedMode(null);
+                  setCode("");
+                  setPassword("");
+                  setPasswordConfirm("");
+                  setMode("login");
+                }}
+              >
+                Back to sign in
+              </button>
+            )}
           </div>
 
           {step === "form" ? (
@@ -363,7 +459,9 @@ export default function AuthPage() {
                 ) : null}
 
                 <div>
-                  <label className="text-xs text-white/60">{mode === "register" ? "Email *" : "Login email *"}</label>
+                  <label className="text-xs text-white/60">
+                    {mode === "register" ? "Email *" : mode === "forgot" ? "Account email *" : "Login email *"}
+                  </label>
                   <input
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -375,28 +473,28 @@ export default function AuthPage() {
                   />
                 </div>
 
-                <div>
-                  <label className="text-xs text-white/60">
-                    {mode === "register" ? "Password *" : "Password *"}
-                  </label>
-                  <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
-                    <input
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder={mode === "register" ? "Create password" : "Enter password"}
-                      className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
-                      autoComplete={mode === "register" ? "new-password" : "current-password"}
-                      type={showPassword ? "text" : "password"}
-                    />
-                    <button
-                      type="button"
-                      className="text-xs font-semibold text-white/70"
-                      onClick={() => setShowPassword((v) => !v)}
-                    >
-                      {showPassword ? "Hide" : "Show"}
-                    </button>
+                {mode !== "forgot" ? (
+                  <div>
+                    <label className="text-xs text-white/60">Password *</label>
+                    <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
+                      <input
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder={mode === "register" ? "Create password" : "Enter password"}
+                        className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+                        autoComplete={mode === "register" ? "new-password" : "current-password"}
+                        type={showPassword ? "text" : "password"}
+                      />
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-white/70"
+                        onClick={() => setShowPassword((v) => !v)}
+                      >
+                        {showPassword ? "Hide" : "Show"}
+                      </button>
+                    </div>
                   </div>
-                </div>
+                ) : null}
 
                 {mode === "register" ? (
                   <div>
@@ -463,8 +561,37 @@ export default function AuthPage() {
                 onClick={requestOtp}
                 className="mt-4 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black disabled:opacity-50"
               >
-                {busy ? (mode === "register" ? "Sending…" : "Signing in…") : mode === "register" ? "Register" : "Sign in"}
+                {busy
+                  ? mode === "register"
+                    ? "Sending…"
+                    : mode === "forgot"
+                    ? "Sending…"
+                    : "Signing in…"
+                  : mode === "register"
+                  ? "Register"
+                  : mode === "forgot"
+                  ? "Send code"
+                  : "Sign in"}
               </button>
+
+              {mode === "login" ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setErr(null);
+                    setSuggestedMode(null);
+                    setStep("form");
+                    setCode("");
+                    setPassword("");
+                    setPasswordConfirm("");
+                    setMode("forgot");
+                  }}
+                  className="mt-2 w-full text-xs text-white/60 underline underline-offset-4 disabled:opacity-50"
+                >
+                  Forgot password?
+                </button>
+              ) : null}
 
               {mode === "register" ? (
                 <button
@@ -480,7 +607,9 @@ export default function AuthPage() {
           ) : (
             <>
               <div className="mt-4">
-                <div className="text-xs text-white/60">Email code</div>
+                <div className="text-xs text-white/60">
+                  {mode === "forgot" ? "Password reset code" : "Email code"}
+                </div>
                 <input
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
@@ -489,6 +618,55 @@ export default function AuthPage() {
                   inputMode="numeric"
                   autoComplete="one-time-code"
                 />
+
+                {mode === "forgot" ? (
+                  <div className="mt-3 grid gap-3">
+                    <div>
+                      <label className="text-xs text-white/60">New password *</label>
+                      <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
+                        <input
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="Create new password"
+                          className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+                          autoComplete="new-password"
+                          type={showPassword ? "text" : "password"}
+                        />
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-white/70"
+                          onClick={() => setShowPassword((v) => !v)}
+                        >
+                          {showPassword ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-white/60">Repeat new password *</label>
+                      <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
+                        <input
+                          value={passwordConfirm}
+                          onChange={(e) => setPasswordConfirm(e.target.value)}
+                          placeholder="Repeat new password"
+                          className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+                          autoComplete="new-password"
+                          type={showPasswordConfirm ? "text" : "password"}
+                        />
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-white/70"
+                          onClick={() => setShowPasswordConfirm((v) => !v)}
+                        >
+                          {showPasswordConfirm ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                      {!passwordsMatch && passwordConfirm ? (
+                        <div className="mt-2 text-xs text-red-200">Passwords do not match.</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
 
                 {err ? (
                   <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs text-red-200">
@@ -517,7 +695,7 @@ export default function AuthPage() {
                 onClick={verifyOtp}
                 className="mt-4 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black disabled:opacity-50"
               >
-                {busy ? "Verifying…" : "Confirm"}
+                {busy ? (mode === "forgot" ? "Updating…" : "Verifying…") : mode === "forgot" ? "Save new password" : "Confirm"}
               </button>
 
               <button
