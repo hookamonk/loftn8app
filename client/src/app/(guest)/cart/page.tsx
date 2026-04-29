@@ -224,6 +224,12 @@ export default function CartPage() {
       .filter((item) => item.selectedQty > 0);
   }, [openTab, activeSelectionQtyByKey]);
   const paymentSelectionActive = Boolean(effectivePendingPayment) || (payOpen && selectedPayableItems.length > 0);
+  const hasLiveOrderState = Boolean(
+    activeOrderRequest ||
+      openTab ||
+      latestPendingPayment ||
+      (feed?.payments ?? []).some((payment) => payment.status === "CONFIRMED")
+  );
 
   useEffect(() => {
     if (!pendingMarkerStorageKey) {
@@ -283,6 +289,27 @@ export default function CartPage() {
       setLocalPendingMarker(null);
     }
   }, [latestPendingPayment, localPendingMarker]);
+
+  useEffect(() => {
+    if (!hasLiveOrderState) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const run = async () => {
+      if (document.visibilityState !== "visible") return;
+      await refresh().catch(() => {});
+      if (cancelled) return;
+      timer = window.setTimeout(run, 1200);
+    };
+
+    timer = window.setTimeout(run, 1200);
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [hasLiveOrderState, refresh]);
 
   const requestPayment = async (method: "CARD" | "CASH") => {
     if (latestPendingPayment || !showOpenTab || !openTab) return;

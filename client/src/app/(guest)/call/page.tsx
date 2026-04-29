@@ -174,6 +174,37 @@ export default function CallPage() {
   const hookahStatus = doneFlash.HOOKAH ? "Done" : requestStatusText(latestHookah?.status);
   const paymentStatus = paymentStatusText(latestPayment?.status);
   const messageStatus = doneFlash.HELP ? "Done" : requestStatusText(latestMessage?.status);
+  const hasLiveCallState = Boolean(
+    latestWaiter?.status === "NEW" ||
+      latestWaiter?.status === "ACKED" ||
+      latestHookah?.status === "NEW" ||
+      latestHookah?.status === "ACKED" ||
+      latestMessage?.status === "NEW" ||
+      latestMessage?.status === "ACKED" ||
+      latestPayment?.status === "PENDING" ||
+      (feed?.payments ?? []).some((payment) => payment.status === "CONFIRMED")
+  );
+
+  useEffect(() => {
+    if (!hasLiveCallState) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const run = async () => {
+      if (document.visibilityState !== "visible") return;
+      await refresh().catch(() => {});
+      if (cancelled) return;
+      timer = window.setTimeout(run, 1200);
+    };
+
+    timer = window.setTimeout(run, 1200);
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [hasLiveCallState, refresh]);
 
   const send = async (type: string, message?: string) => {
     if (cooldown) return;
