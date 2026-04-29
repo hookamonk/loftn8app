@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { listActiveTables, type StaffActiveTable } from "@/lib/staffApi";
+import { disconnectActiveTable, listActiveTables, type StaffActiveTable } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
-import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
+import { emitStaffLiveSync, subscribeStaffLiveSync } from "@/lib/staffLiveSync";
+import { useToast } from "@/providers/toast";
 
 const card =
   "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
@@ -20,10 +21,12 @@ function formatTime(value?: string | null) {
 }
 
 export default function StaffTablesPage() {
+  const { push } = useToast();
   const [tables, setTables] = useState<StaffActiveTable[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [last, setLast] = useState<number | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<number | null>(null);
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
@@ -67,6 +70,38 @@ export default function StaffTablesPage() {
   });
 
   useEffect(() => subscribeStaffLiveSync(() => void tick()), [tick]);
+
+  const onDisconnect = async (tableId: number) => {
+    if (disconnectingId) return;
+
+    const entry = tables.find((item) => item.table.id === tableId);
+    if (!entry?.capabilities.canDisconnect) {
+      push({
+        kind: "error",
+        title: "Нельзя закрыть стол",
+        message: entry?.capabilities.disconnectBlockedReason ?? "Сначала нужно полностью закрыть счет.",
+      });
+      return;
+    }
+
+    setDisconnectingId(tableId);
+    const result = await disconnectActiveTable(tableId);
+    setDisconnectingId(null);
+
+    if (!result.ok) {
+      push({ kind: "error", title: "Ошибка", message: result.error });
+      return;
+    }
+
+    push({
+      kind: "success",
+      title: "Сессия завершена",
+      message: "Стол отключен вручную и исчезнет из активных.",
+    });
+
+    emitStaffLiveSync("table-session-disconnected");
+    await load({ silent: false });
+  };
 
   return (
     <div>
@@ -131,9 +166,19 @@ export default function StaffTablesPage() {
                 </div>
               </div>
 
-              <Link href={`/staff/tables/${entry.table.id}`} className={btnPrimary}>
-                Просмотр
-              </Link>
+              <div className="flex shrink-0 flex-col gap-2">
+                <Link href={`/staff/tables/${entry.table.id}`} className={btnPrimary}>
+                  Просмотр
+                </Link>
+                <button
+                  className={btnGhost}
+                  disabled={disconnectingId === entry.table.id || !entry.capabilities.canDisconnect}
+                  onClick={() => void onDisconnect(entry.table.id)}
+                  title={entry.capabilities.disconnectBlockedReason ?? undefined}
+                >
+                  {disconnectingId === entry.table.id ? "Отключаем…" : "Отключить"}
+                </button>
+              </div>
             </div>
           </div>
         ))}

@@ -15,6 +15,10 @@ import {
 } from "../payments/paymentAllocation";
 import { publicTableCode } from "../../config/venues";
 import { getOpenShiftOrThrow } from "./shiftCache";
+import {
+  expireGuestSessionIfInactiveAfterPayment,
+  getGuestSessionClosureState,
+} from "../guest/sessionExpiry";
 import type {
   Prisma,
   CallType,
@@ -68,6 +72,10 @@ function toPublicTable<T extends { code: string; label: string | null }>(table: 
 
 function canCreateSettlement(role: StaffRole) {
   return role === "WAITER" || role === "MANAGER" || role === "ADMIN";
+}
+
+function disconnectBlockedReason() {
+  return "Сессию можно закрыть только после полной оплаты счета.";
 }
 
 type PayableTableItem = {
@@ -174,6 +182,15 @@ async function getActiveTableSessionOrThrow(params: {
   });
 
   if (!session) {
+    throw new HttpError(404, "TABLE_SESSION_NOT_FOUND", "Active table session not found");
+  }
+
+  const expiry = await expireGuestSessionIfInactiveAfterPayment(session.id, {
+    id: session.id,
+    endedAt: session.endedAt,
+    startedAt: session.startedAt,
+  });
+  if (expiry.expired) {
     throw new HttpError(404, "TABLE_SESSION_NOT_FOUND", "Active table session not found");
   }
 
@@ -618,13 +635,26 @@ staffDashboardRouter.get(
 
     const latestByTable = new Map<number, (typeof sessions)[number]>();
     for (const session of sessions) {
+      const expiry = await expireGuestSessionIfInactiveAfterPayment(session.id, {
+        id: session.id,
+        endedAt: session.endedAt,
+        startedAt: session.startedAt,
+      });
+      if (expiry.expired) {
+        continue;
+      }
       if (!latestByTable.has(session.tableId)) {
         latestByTable.set(session.tableId, session);
       }
     }
 
-    const tables = Array.from(latestByTable.values())
-      .map((session) => {
+    const tables = await Promise.all(
+      Array.from(latestByTable.values()).map(async (session) => {
+        const closureState = await getGuestSessionClosureState(session.id, {
+          id: session.id,
+          endedAt: session.endedAt,
+          startedAt: session.startedAt,
+        });
         const openItemsCount = session.orders.reduce(
           (sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.qty, 0),
           0
@@ -648,11 +678,56 @@ staffDashboardRouter.get(
           activeCallsCount: session.calls.length,
           pendingPaymentsCount: session.payments.length,
           lastActivityAt,
+          capabilities: {
+            canDisconnect: !("missing" in closureState) && !("ended" in closureState) && closureState.eligible,
+            disconnectBlockedReason:
+              !("missing" in closureState) && !("ended" in closureState) && !closureState.eligible
+                ? disconnectBlockedReason()
+                : null,
+          },
         };
       })
+    );
+
+    const sortedTables = tables
       .sort((left, right) => left.table.code.localeCompare(right.table.code, undefined, { numeric: true }));
 
-    res.json({ ok: true, tables });
+    res.json({ ok: true, tables: sortedTables });
+  })
+);
+
+staffDashboardRouter.post(
+  "/tables/:id/disconnect",
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const tableId = Number(req.params.id);
+
+    if (!Number.isFinite(tableId) || tableId <= 0) {
+      throw new HttpError(400, "TABLE_ID_INVALID", "Table id is invalid");
+    }
+
+    const session = await getActiveTableSessionOrThrow({
+      tableId,
+      venueId,
+      shiftId: shift.id,
+    });
+
+    const closureState = await getGuestSessionClosureState(session.id, {
+      id: session.id,
+      endedAt: session.endedAt,
+      startedAt: session.startedAt,
+    });
+    if ("missing" in closureState || "ended" in closureState || !closureState.eligible) {
+      throw new HttpError(409, "TABLE_SESSION_NOT_SETTLED", disconnectBlockedReason());
+    }
+
+    await prisma.guestSession.update({
+      where: { id: session.id },
+      data: { endedAt: new Date() },
+    });
+
+    res.json({ ok: true, sessionId: session.id, endedAt: new Date().toISOString() });
   })
 );
 
@@ -796,6 +871,7 @@ staffDashboardRouter.get(
     });
 
     const billTotalCzk = payableItems.reduce((sum, item) => sum + item.totalCzk, 0);
+    const canDisconnect = !pendingPayment && billTotalCzk <= 0;
 
     res.json({
       ok: true,
@@ -821,6 +897,8 @@ staffDashboardRouter.get(
       capabilities: {
         canAddItems: true,
         canSettle: canCreateSettlement(role),
+        canDisconnect,
+        disconnectBlockedReason: canDisconnect ? null : disconnectBlockedReason(),
       },
     });
   })

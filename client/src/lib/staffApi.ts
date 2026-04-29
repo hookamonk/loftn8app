@@ -429,6 +429,10 @@ export type StaffActiveTable = {
   activeCallsCount: number;
   pendingPaymentsCount: number;
   lastActivityAt: string;
+  capabilities: {
+    canDisconnect: boolean;
+    disconnectBlockedReason: string | null;
+  };
 };
 
 export type StaffActiveTableDetails = {
@@ -491,6 +495,8 @@ export type StaffActiveTableDetails = {
   capabilities: {
     canAddItems: boolean;
     canSettle: boolean;
+    canDisconnect: boolean;
+    disconnectBlockedReason: string | null;
   };
 };
 
@@ -541,6 +547,17 @@ export async function requestTablePayment(
   return tryPaths<any>(
     [`/staff/dashboard/tables/${tableId}/request-payment`],
     { method: "POST", body: JSON.stringify({ method }) }
+  );
+}
+
+export async function disconnectActiveTable(
+  tableId: number
+): Promise<ApiResult<{ sessionId: string; endedAt: string }>> {
+  return tryPaths<{ ok: true; sessionId: string; endedAt: string }>(
+    [`/staff/dashboard/tables/${tableId}/disconnect`],
+    { method: "POST", body: JSON.stringify({}) }
+  ).then((r) =>
+    r.ok ? { ok: true, data: { sessionId: r.data.sessionId, endedAt: r.data.endedAt } } : r
   );
 }
 

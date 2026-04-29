@@ -259,6 +259,7 @@ async function resolveGuestSessionFromCookie(req: any) {
     const expiry = await expireGuestSessionIfInactiveAfterPayment(session.id, {
       id: session.id,
       endedAt: session.endedAt,
+      startedAt: session.startedAt,
     });
     if (expiry.expired) {
       req.__guestSessionExpired = true;

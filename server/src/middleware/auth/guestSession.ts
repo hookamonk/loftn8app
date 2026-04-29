@@ -53,6 +53,7 @@ export async function guestSessionAuth(req: Request, _res: Response, next: NextF
   const expiry = await expireGuestSessionIfInactiveAfterPayment(session.id, {
     id: session.id,
     endedAt: session.endedAt,
+    startedAt: session.startedAt,
   });
   if (expiry.expired) {
     const isProd = env.NODE_ENV === "production";

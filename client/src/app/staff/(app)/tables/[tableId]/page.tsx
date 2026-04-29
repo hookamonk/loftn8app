@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
+  disconnectActiveTable,
   getActiveTableDetails,
   requestTablePayment,
   type StaffActiveTableDetails,
@@ -46,6 +47,7 @@ export default function StaffTableDetailsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [last, setLast] = useState<number | null>(null);
   const [busyMethod, setBusyMethod] = useState<"CARD" | "CASH" | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
@@ -124,6 +126,37 @@ export default function StaffTableDetailsPage() {
     await load({ silent: false });
   };
 
+  const onDisconnect = async () => {
+    if (!data || disconnecting) return;
+
+    if (!data.capabilities.canDisconnect) {
+      push({
+        kind: "error",
+        title: "Нельзя закрыть стол",
+        message: data.capabilities.disconnectBlockedReason ?? "Сначала нужно полностью закрыть счет.",
+      });
+      return;
+    }
+
+    setDisconnecting(true);
+    const result = await disconnectActiveTable(data.table.id);
+    setDisconnecting(false);
+
+    if (!result.ok) {
+      push({ kind: "error", title: "Ошибка", message: result.error });
+      return;
+    }
+
+    push({
+      kind: "success",
+      title: "Сессия завершена",
+      message: "Гость отключен от этого стола.",
+    });
+
+    emitStaffLiveSync("table-session-disconnected");
+    router.replace("/staff/tables");
+  };
+
   return (
     <div>
       <div className={card}>
@@ -168,6 +201,15 @@ export default function StaffTableDetailsPage() {
                 Добавить позиции
               </Link>
             ) : null}
+
+            <button
+              className={btnGhost}
+              disabled={disconnecting || !data.capabilities.canDisconnect}
+              onClick={() => void onDisconnect()}
+              title={data.capabilities.disconnectBlockedReason ?? undefined}
+            >
+              {disconnecting ? "Отключаем…" : "Отключить стол"}
+            </button>
 
             {data.capabilities.canSettle ? (
               <>
