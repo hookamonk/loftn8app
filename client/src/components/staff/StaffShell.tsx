@@ -179,6 +179,11 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                     badge={summary?.newOrders ?? 0}
                   />
                   <NavLink
+                    href="/staff/tables"
+                    label="Столы"
+                    active={pathname.startsWith("/staff/tables")}
+                  />
+                  <NavLink
                     href="/staff/calls"
                     label="Вызовы"
                     active={pathname.startsWith("/staff/calls")}

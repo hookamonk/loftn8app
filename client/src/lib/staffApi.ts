@@ -417,11 +417,131 @@ export type StaffPayment = {
   }>;
 };
 
+export type StaffActiveTable = {
+  table: { id: number; code: string; label: string | null };
+  session: {
+    id: string;
+    startedAt: string;
+    user: { id: string; name: string; phone: string } | null;
+  };
+  isActive: boolean;
+  openItemsCount: number;
+  activeCallsCount: number;
+  pendingPaymentsCount: number;
+  lastActivityAt: string;
+};
+
+export type StaffActiveTableDetails = {
+  table: { id: number; code: string; label: string | null };
+  session: {
+    id: string;
+    startedAt: string;
+    user: { id: string; name: string; phone: string } | null;
+  };
+  orders: Array<{
+    id: string;
+    status: OrderStatus;
+    comment: string | null;
+    createdAt: string;
+    totalCzk: number;
+    items: Array<{
+      id: string;
+      qty: number;
+      comment: string | null;
+      priceCzk: number;
+      menuItem: { id: number; name: string };
+    }>;
+  }>;
+  payableItems: Array<{
+    orderId: string;
+    orderItemId: string;
+    menuItemId: number;
+    name: string;
+    qty: number;
+    unitPriceCzk: number;
+    totalCzk: number;
+    comment?: string;
+  }>;
+  billTotalCzk: number;
+  activeCalls: Array<{
+    id: string;
+    type: CallType;
+    status: CallStatus;
+    message: string | null;
+    createdAt: string;
+  }>;
+  pendingPayment: null | {
+    id: string;
+    status: PaymentStatus;
+    method: PaymentMethod;
+    createdAt: string;
+    billTotalCzk: number;
+    useLoyalty: boolean;
+    loyaltyAppliedCzk: number;
+    selectedItems: Array<{
+      orderItemId: string;
+      menuItemId: number;
+      name: string;
+      qty: number;
+      unitPriceCzk: number;
+      totalCzk: number;
+      comment?: string;
+    }>;
+  };
+  capabilities: {
+    canAddItems: boolean;
+    canSettle: boolean;
+  };
+};
+
 export async function listPayments(status: PaymentStatus): Promise<ApiResult<{ payments: StaffPayment[] }>> {
   return tryPaths<{ ok: true; payments: StaffPayment[] }>(
     [`/staff/dashboard/payments?status=${status}`, `/staff/payments?status=${status}`],
     { method: "GET" }
   ).then((r) => (r.ok ? { ok: true, data: { payments: r.data.payments } } : r));
+}
+
+export async function listActiveTables(): Promise<ApiResult<{ tables: StaffActiveTable[] }>> {
+  return tryPaths<{ ok: true; tables: StaffActiveTable[] }>(["/staff/dashboard/tables"], {
+    method: "GET",
+  }).then((r) => (r.ok ? { ok: true, data: { tables: r.data.tables } } : r));
+}
+
+export async function getActiveTableDetails(
+  tableId: number
+): Promise<ApiResult<{ table: StaffActiveTableDetails }>> {
+  return tryPaths<{ ok: true } & StaffActiveTableDetails>(
+    [`/staff/dashboard/tables/${tableId}`],
+    { method: "GET" }
+  ).then((r) =>
+    r.ok
+      ? {
+          ok: true,
+          data: {
+            table: {
+              table: r.data.table,
+              session: r.data.session,
+              orders: r.data.orders,
+              payableItems: r.data.payableItems,
+              billTotalCzk: r.data.billTotalCzk,
+              activeCalls: r.data.activeCalls,
+              pendingPayment: r.data.pendingPayment,
+              capabilities: r.data.capabilities,
+            },
+          },
+        }
+      : r
+  );
+}
+
+export async function requestTablePayment(
+  tableId: number,
+  method: PaymentMethod
+): Promise<ApiResult<any>> {
+  return tryPaths<any>(
+    [`/staff/dashboard/tables/${tableId}/request-payment`],
+    { method: "POST", body: JSON.stringify({ method }) }
+  );
 }
 
 export async function confirmPayment(id: string): Promise<ApiResult<any>> {

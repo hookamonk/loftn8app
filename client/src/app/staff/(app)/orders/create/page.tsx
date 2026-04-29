@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { createTableOrder } from "@/lib/staffApi";
 import type { MenuResponse, MenuCategory, MenuItem, MenuSection } from "@/types";
 import { useToast } from "@/providers/toast";
+import { useStaffSession } from "@/providers/staffSession";
 
 type DraftItem = {
   menuItemId: number;
@@ -103,6 +104,8 @@ export default function StaffOrderCreatePage() {
   const tableId = Number(params.get("tableId") ?? 0);
   const tableCode = params.get("tableCode") ?? "";
   const sessionId = params.get("sessionId") ?? "";
+  const returnTo = params.get("returnTo") ?? "";
+  const { staff } = useStaffSession();
 
   const [data, setData] = useState<MenuResponse | null>(null);
   const [items, setItems] = useState<DraftItem[]>([]);
@@ -138,11 +141,21 @@ export default function StaffOrderCreatePage() {
   }, []);
 
   const categories = useMemo(() => data?.categories ?? [], [data]);
+  const visibleCategories = useMemo(() => {
+    if (!staff) return categories;
+    if (staff.role === "HOOKAH") {
+      return categories.filter((category) => category.section === "HOOKAH");
+    }
+    if (staff.role === "WAITER") {
+      return categories.filter((category) => category.section === "DISHES" || category.section === "DRINKS");
+    }
+    return categories;
+  }, [categories, staff]);
 
   const groupsBySection = useMemo(() => {
     const map = new Map<MenuSection, CatGroup[]>();
 
-    for (const category of categories) {
+    for (const category of visibleCategories) {
       const section = category.section as MenuSection;
       const { group } = splitCatName(category.name);
 
@@ -166,15 +179,15 @@ export default function StaffOrderCreatePage() {
     }
 
     return map;
-  }, [categories]);
+  }, [visibleCategories]);
 
   const sectionGroups = groupsBySection.get(activeSection) ?? [];
 
   const activeGroupKey = useMemo(() => {
-    const active = categories.find((category) => category.id === activeCatId) ?? null;
+    const active = visibleCategories.find((category) => category.id === activeCatId) ?? null;
     if (!active) return sectionGroups[0]?.key ?? null;
     return splitCatName(active.name).group;
-  }, [categories, activeCatId, sectionGroups]);
+  }, [visibleCategories, activeCatId, sectionGroups]);
 
   const activeGroup = useMemo(() => {
     return sectionGroups.find((group) => group.key === activeGroupKey) ?? sectionGroups[0] ?? null;
@@ -201,9 +214,20 @@ export default function StaffOrderCreatePage() {
     setActiveCatId(groups[0].cats[0]?.id ?? null);
   }, [activeSection, groupsBySection, activeCatId]);
 
+  useEffect(() => {
+    if (!visibleCategories.length) return;
+    const availableSections = ["DISHES", "DRINKS", "HOOKAH"].filter((section) =>
+      visibleCategories.some((category) => category.section === section)
+    ) as MenuSection[];
+
+    if (!availableSections.includes(activeSection)) {
+      setActiveSection(availableSections[0] ?? "DISHES");
+    }
+  }, [visibleCategories, activeSection]);
+
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const baseItems = (query ? categories : activeCategory ? [activeCategory] : []).flatMap((category) =>
+    const baseItems = (query ? visibleCategories : activeCategory ? [activeCategory] : []).flatMap((category) =>
       category.items.map((item) => ({
         ...item,
         categoryName: category.name,
@@ -217,7 +241,7 @@ export default function StaffOrderCreatePage() {
         String(item.description ?? "").toLowerCase().includes(query) ||
         item.categoryName.toLowerCase().includes(query)
     );
-  }, [categories, search, activeCategory]);
+  }, [visibleCategories, search, activeCategory]);
 
   const qtyById = useMemo(() => {
     const map = new Map<number, number>();
@@ -281,7 +305,7 @@ export default function StaffOrderCreatePage() {
         message: `Table ${tableCode} now has an updated order.`,
       });
 
-      router.replace("/staff/orders?status=IN_PROGRESS");
+      router.replace(returnTo || "/staff/orders?status=IN_PROGRESS");
     } finally {
       setSubmitting(false);
     }
@@ -300,7 +324,7 @@ export default function StaffOrderCreatePage() {
           </div>
 
           <Link
-            href="/staff/orders"
+            href={returnTo || "/staff/orders"}
             className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
           >
             Back
@@ -317,7 +341,7 @@ export default function StaffOrderCreatePage() {
 
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
             {(["DISHES", "DRINKS", "HOOKAH"] as MenuSection[])
-              .filter((section) => (categories ?? []).some((category) => category.section === section))
+              .filter((section) => (visibleCategories ?? []).some((category) => category.section === section))
               .map((section) => (
                 <FilterPill
                   key={section}
@@ -467,7 +491,7 @@ export default function StaffOrderCreatePage() {
             </button>
 
             <Link
-              href="/staff/orders"
+              href={returnTo || "/staff/orders"}
               className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
             >
               Cancel

@@ -6,9 +6,13 @@ import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
 import { requireStaffAuth } from "./staff.middleware";
 import { effectiveAvailableAt, nextPragueMidnight, summarizeLoyalty } from "../../utils/loyalty";
-import { notifyOrderCreated } from "../staff/push.service";
+import { notifyOrderCreated, notifyPaymentRequested } from "../staff/push.service";
 import { ORDER_REQUEST_MARKER, isOrderRequestMessage } from "../orders/orderRequest";
-import { parsePaymentItemsJson } from "../payments/paymentAllocation";
+import {
+  latestLegacyPaymentCutoff,
+  paidQtyByOrderItemId,
+  parsePaymentItemsJson,
+} from "../payments/paymentAllocation";
 import { publicTableCode } from "../../config/venues";
 import { getOpenShiftOrThrow } from "./shiftCache";
 import type {
@@ -60,6 +64,120 @@ function toPublicTable<T extends { code: string; label: string | null }>(table: 
     code: table.label?.trim() || publicCode,
     label: table.label && table.label.trim() && table.label.trim() !== publicCode ? table.label : null,
   };
+}
+
+function canCreateSettlement(role: StaffRole) {
+  return role === "WAITER" || role === "MANAGER" || role === "ADMIN";
+}
+
+type PayableTableItem = {
+  orderId: string;
+  orderItemId: string;
+  menuItemId: number;
+  name: string;
+  qty: number;
+  unitPriceCzk: number;
+  totalCzk: number;
+  comment?: string;
+};
+
+function buildPayableTableItems(params: {
+  orders: Array<{
+    id: string;
+    createdAt: Date;
+    status: OrderStatus;
+    items: Array<{
+      id: string;
+      qty: number;
+      priceCzk: number;
+      comment: string | null;
+      menuItem: { id: number; name: string };
+    }>;
+  }>;
+  payments: Array<{
+    status: PaymentStatus;
+    createdAt: Date;
+    confirmedAt: Date | null;
+    itemsJson: Prisma.JsonValue | null;
+    confirmation: {
+      itemsJson: Prisma.JsonValue | null;
+      createdAt: Date;
+    } | null;
+  }>;
+}) {
+  const legacyCutoff = latestLegacyPaymentCutoff(params.payments);
+  const paidQtyMap = paidQtyByOrderItemId(params.payments);
+
+  return params.orders
+    .filter((order) => {
+      if (order.status === "CANCELLED") return false;
+      if (!legacyCutoff) return true;
+      return new Date(order.createdAt).getTime() > legacyCutoff;
+    })
+    .flatMap((order) =>
+      order.items
+        .map((item) => {
+          const remainingQty = Math.max(item.qty - (paidQtyMap.get(item.id) ?? 0), 0);
+          if (remainingQty <= 0) return null;
+
+          return {
+            orderId: order.id,
+            orderItemId: item.id,
+            menuItemId: item.menuItem.id,
+            name: item.menuItem.name,
+            qty: remainingQty,
+            unitPriceCzk: item.priceCzk,
+            totalCzk: remainingQty * item.priceCzk,
+            comment: item.comment ?? undefined,
+          } satisfies PayableTableItem;
+        })
+        .filter(Boolean)
+    ) as PayableTableItem[];
+}
+
+async function getActiveTableSessionOrThrow(params: {
+  tableId: number;
+  venueId: number;
+  shiftId: string;
+}) {
+  const session = await prisma.guestSession.findFirst({
+    where: {
+      tableId: params.tableId,
+      endedAt: null,
+      shiftId: params.shiftId,
+      table: { venueId: params.venueId },
+    },
+    orderBy: { startedAt: "desc" },
+    select: {
+      id: true,
+      tableId: true,
+      userId: true,
+      shiftId: true,
+      startedAt: true,
+      endedAt: true,
+      table: {
+        select: {
+          id: true,
+          code: true,
+          label: true,
+          venueId: true,
+        },
+      },
+      user: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+        },
+      },
+    },
+  });
+
+  if (!session) {
+    throw new HttpError(404, "TABLE_SESSION_NOT_FOUND", "Active table session not found");
+  }
+
+  return session;
 }
 
 async function createOrAppendTableOrder(
@@ -346,10 +464,6 @@ staffDashboardRouter.post(
     const shift = await getActiveShiftOrThrow(venueId);
     const body = req.body as z.infer<typeof CreateTableOrderSchema>;
 
-    if (role === "HOOKAH") {
-      throw new HttpError(403, "FORBIDDEN", "Hookah role cannot create table orders");
-    }
-
     const menuItemIds = body.items.map((item) => item.menuItemId);
     const sections = orderSectionsForRole(role);
 
@@ -425,6 +539,430 @@ staffDashboardRouter.post(
     });
 
     res.json({ ok: true, order });
+  })
+);
+
+staffDashboardRouter.get(
+  "/tables",
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const role = req.staff!.role;
+    const shift = await getActiveShiftOrThrow(venueId);
+
+    const sessions = await prisma.guestSession.findMany({
+      where: {
+        shiftId: shift.id,
+        endedAt: null,
+        table: { venueId },
+      },
+      orderBy: [{ startedAt: "desc" }],
+      include: {
+        table: {
+          select: {
+            id: true,
+            code: true,
+            label: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+        orders: {
+          where: {
+            status: { in: ["NEW", "ACCEPTED", "IN_PROGRESS"] },
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            items: {
+              select: {
+                qty: true,
+              },
+            },
+          },
+        },
+        calls: {
+          where: {
+            status: { in: ["NEW", "ACKED"] },
+            ...(role === "HOOKAH"
+              ? { type: { in: ["HOOKAH", "HELP"] as CallType[] } }
+              : role === "WAITER"
+              ? { type: { in: ["WAITER", "BILL", "HELP"] as CallType[] } }
+              : {}),
+            ...excludeOrderRequestMarker(),
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            status: true,
+            type: true,
+          },
+        },
+        payments: {
+          where: {
+            status: "PENDING",
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            status: true,
+            method: true,
+          },
+        },
+      },
+    });
+
+    const latestByTable = new Map<number, (typeof sessions)[number]>();
+    for (const session of sessions) {
+      if (!latestByTable.has(session.tableId)) {
+        latestByTable.set(session.tableId, session);
+      }
+    }
+
+    const tables = Array.from(latestByTable.values())
+      .map((session) => {
+        const openItemsCount = session.orders.reduce(
+          (sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.qty, 0),
+          0
+        );
+        const lastActivityAt = [
+          session.startedAt,
+          ...session.orders.map((order) => order.createdAt),
+          ...session.calls.map((call) => call.createdAt),
+          ...session.payments.map((payment) => payment.createdAt),
+        ].reduce((latest, current) => (current > latest ? current : latest), session.startedAt);
+
+        return {
+          table: toPublicTable(session.table),
+          session: {
+            id: session.id,
+            startedAt: session.startedAt,
+            user: session.user,
+          },
+          isActive: true,
+          openItemsCount,
+          activeCallsCount: session.calls.length,
+          pendingPaymentsCount: session.payments.length,
+          lastActivityAt,
+        };
+      })
+      .sort((left, right) => left.table.code.localeCompare(right.table.code, undefined, { numeric: true }));
+
+    res.json({ ok: true, tables });
+  })
+);
+
+staffDashboardRouter.get(
+  "/tables/:id",
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const role = req.staff!.role;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const tableId = Number(req.params.id);
+
+    if (!Number.isFinite(tableId) || tableId <= 0) {
+      throw new HttpError(400, "TABLE_ID_INVALID", "Table id is invalid");
+    }
+
+    const session = await getActiveTableSessionOrThrow({
+      tableId,
+      venueId,
+      shiftId: shift.id,
+    });
+
+    const sections = orderSectionsForRole(role);
+
+    const [orders, activeCalls, pendingPayment] = await Promise.all([
+      prisma.order.findMany({
+        where: {
+          tableId,
+          sessionId: session.id,
+          status: { not: "CANCELLED" },
+          ...(sections
+            ? {
+                items: {
+                  some: {
+                    menuItem: {
+                      category: {
+                        section: { in: sections },
+                      },
+                    },
+                  },
+                },
+              }
+            : {}),
+        },
+        orderBy: { createdAt: "asc" },
+        include: {
+          items: sections
+            ? {
+                where: {
+                  menuItem: { category: { section: { in: sections } } },
+                },
+                include: {
+                  menuItem: { select: { id: true, name: true } },
+                },
+              }
+            : {
+                include: {
+                  menuItem: { select: { id: true, name: true } },
+                },
+              },
+        },
+      }),
+      prisma.staffCall.findMany({
+        where: {
+          sessionId: session.id,
+          status: { in: ["NEW", "ACKED"] },
+          ...(role === "HOOKAH"
+            ? { type: { in: ["HOOKAH", "HELP"] as CallType[] } }
+            : role === "WAITER"
+            ? { type: { in: ["WAITER", "BILL", "HELP"] as CallType[] } }
+            : {}),
+          ...excludeOrderRequestMarker(),
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          type: true,
+          status: true,
+          message: true,
+          createdAt: true,
+        },
+      }),
+      (prisma as any).paymentRequest.findFirst({
+        where: {
+          tableId,
+          sessionId: session.id,
+          status: "PENDING",
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          status: true,
+          method: true,
+          createdAt: true,
+          billTotalCzk: true,
+          useLoyalty: true,
+          loyaltyAppliedCzk: true,
+          confirmation: {
+            select: {
+              amountCzk: true,
+            },
+          },
+          itemsJson: true,
+        },
+      }),
+    ]);
+
+    const confirmedPayments = await (prisma as any).paymentRequest.findMany({
+      where: {
+        tableId,
+        status: "CONFIRMED",
+        session: { shiftId: shift.id },
+      },
+      select: {
+        status: true,
+        createdAt: true,
+        confirmedAt: true,
+        itemsJson: true,
+        confirmation: {
+          select: {
+            itemsJson: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+
+    const payableItems = buildPayableTableItems({
+      orders: orders.map((order) => ({
+        id: order.id,
+        createdAt: order.createdAt,
+        status: order.status,
+        items: order.items.map((item) => ({
+          id: item.id,
+          qty: item.qty,
+          priceCzk: item.priceCzk,
+          comment: item.comment,
+          menuItem: item.menuItem,
+        })),
+      })),
+      payments: confirmedPayments,
+    });
+
+    const billTotalCzk = payableItems.reduce((sum, item) => sum + item.totalCzk, 0);
+
+    res.json({
+      ok: true,
+      table: toPublicTable(session.table),
+      session: {
+        id: session.id,
+        startedAt: session.startedAt,
+        user: session.user,
+      },
+      orders: orders.map((order) => ({
+        ...order,
+        totalCzk: order.items.reduce((sum, item) => sum + item.qty * item.priceCzk, 0),
+      })),
+      payableItems,
+      billTotalCzk,
+      activeCalls,
+      pendingPayment: pendingPayment
+        ? {
+            ...pendingPayment,
+            selectedItems: parsePaymentItemsJson(pendingPayment.itemsJson),
+          }
+        : null,
+      capabilities: {
+        canAddItems: true,
+        canSettle: canCreateSettlement(role),
+      },
+    });
+  })
+);
+
+const CreateStaffTablePaymentSchema = z.object({
+  method: z.enum(["CARD", "CASH"]),
+});
+
+staffDashboardRouter.post(
+  "/tables/:id/request-payment",
+  validate(CreateStaffTablePaymentSchema),
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const role = req.staff!.role;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const tableId = Number(req.params.id);
+
+    if (!canCreateSettlement(role)) {
+      throw new HttpError(403, "FORBIDDEN", "Only waiter or manager can settle a table");
+    }
+    if (!Number.isFinite(tableId) || tableId <= 0) {
+      throw new HttpError(400, "TABLE_ID_INVALID", "Table id is invalid");
+    }
+
+    const body = req.body as z.infer<typeof CreateStaffTablePaymentSchema>;
+    const session = await getActiveTableSessionOrThrow({
+      tableId,
+      venueId,
+      shiftId: shift.id,
+    });
+
+    const tableWithBilling = await (prisma as any).table.findUnique({
+      where: { id: tableId },
+      select: {
+        venueId: true,
+        orders: {
+          where: {
+            sessionId: session.id,
+            status: { not: "CANCELLED" },
+          },
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            createdAt: true,
+            status: true,
+            items: {
+              select: {
+                id: true,
+                qty: true,
+                priceCzk: true,
+                comment: true,
+                menuItem: {
+                  select: { id: true, name: true },
+                },
+              },
+            },
+          },
+        },
+        payments: {
+          where: {
+            status: "CONFIRMED",
+            session: { shiftId: shift.id },
+          },
+          select: {
+            status: true,
+            createdAt: true,
+            confirmedAt: true,
+            itemsJson: true,
+            confirmation: {
+              select: {
+                itemsJson: true,
+                createdAt: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!tableWithBilling || tableWithBilling.venueId !== venueId) {
+      throw new HttpError(404, "TABLE_NOT_FOUND", "Table not found");
+    }
+
+    const payableItems = buildPayableTableItems({
+      orders: tableWithBilling.orders,
+      payments: tableWithBilling.payments,
+    });
+
+    if (!payableItems.length) {
+      throw new HttpError(409, "NOTHING_TO_PAY", "Nothing left to pay in this tab");
+    }
+
+    const billTotalCzk = payableItems.reduce((sum, item) => sum + item.totalCzk, 0);
+    const itemsJson = payableItems.map((item) => ({
+      orderItemId: item.orderItemId,
+      menuItemId: item.menuItemId,
+      name: item.name,
+      qty: item.qty,
+      unitPriceCzk: item.unitPriceCzk,
+      totalCzk: item.totalCzk,
+      comment: item.comment,
+    }));
+
+    const existing = await (prisma as any).paymentRequest.findFirst({
+      where: {
+        tableId,
+        sessionId: session.id,
+        status: "PENDING",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const payment = existing
+      ? await (prisma as any).paymentRequest.update({
+          where: { id: existing.id },
+          data: {
+            sessionId: session.id,
+            method: body.method,
+            billTotalCzk,
+            useLoyalty: false,
+            loyaltyAppliedCzk: 0,
+            itemsJson,
+          },
+        })
+      : await (prisma as any).paymentRequest.create({
+          data: {
+            sessionId: session.id,
+            tableId,
+            method: body.method,
+            billTotalCzk,
+            useLoyalty: false,
+            loyaltyAppliedCzk: 0,
+            itemsJson,
+          },
+        });
+
+    void notifyPaymentRequested(payment.id).catch((e: unknown) => {
+      console.warn("push notifyPaymentRequested failed", e);
+    });
+
+    res.json({ ok: true, payment });
   })
 );
 
