@@ -152,7 +152,7 @@ export async function getGuestSessionClosureState(
     orders,
     payments: confirmedPayments,
   });
-  const eligible = hasConfirmedPayment && pendingPaymentsCount === 0 && unpaidQty === 0;
+  const eligible = pendingPaymentsCount === 0 && unpaidQty === 0;
 
   return {
     eligible,
