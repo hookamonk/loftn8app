@@ -722,12 +722,45 @@ staffDashboardRouter.post(
       throw new HttpError(409, "TABLE_SESSION_NOT_SETTLED", disconnectBlockedReason());
     }
 
-    await prisma.guestSession.update({
-      where: { id: session.id },
-      data: { endedAt: new Date() },
+    const openSessions = await prisma.guestSession.findMany({
+      where: {
+        tableId,
+        shiftId: shift.id,
+        endedAt: null,
+        table: { venueId },
+      },
+      select: {
+        id: true,
+        endedAt: true,
+        startedAt: true,
+      },
+      orderBy: { startedAt: "desc" },
     });
 
-    res.json({ ok: true, sessionId: session.id, endedAt: new Date().toISOString() });
+    const closableSessionIds: string[] = [];
+    for (const candidate of openSessions) {
+      const candidateClosure = await getGuestSessionClosureState(candidate.id, {
+        id: candidate.id,
+        endedAt: candidate.endedAt,
+        startedAt: candidate.startedAt,
+      });
+
+      if (!("missing" in candidateClosure) && !("ended" in candidateClosure) && candidateClosure.eligible) {
+        closableSessionIds.push(candidate.id);
+      }
+    }
+
+    const endedAt = new Date();
+
+    await prisma.guestSession.updateMany({
+      where: {
+        id: { in: closableSessionIds },
+        endedAt: null,
+      },
+      data: { endedAt },
+    });
+
+    res.json({ ok: true, sessionId: session.id, closedSessionIds: closableSessionIds, endedAt: endedAt.toISOString() });
   })
 );
 
