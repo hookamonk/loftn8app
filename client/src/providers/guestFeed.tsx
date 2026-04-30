@@ -205,7 +205,7 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
 
         if (sessionExpired) {
           setFeed(null);
-          clearSession();
+          clearSession({ redirect: true });
         } else if (!silent) {
           setFeed(null);
         }

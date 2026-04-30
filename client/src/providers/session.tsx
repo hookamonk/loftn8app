@@ -8,6 +8,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { storage } from "@/lib/storage";
 import { api } from "@/lib/api";
 import { getVenueSlug, setVenueSlug, VENUE_CHANGE_EVENT } from "@/lib/venue";
@@ -32,7 +33,7 @@ type GuestSessionMeResponse =
 type SessionState = {
   tableCode: string | null;
   setTableCode: (code: string | null) => void;
-  clearSession: () => void;
+  clearSession: (opts?: { redirect?: boolean }) => void;
   sessionReady: boolean;
   sessionError: string | null;
   restoreSession: () => Promise<void>;
@@ -41,8 +42,15 @@ type SessionState = {
 const Ctx = createContext<SessionState | null>(null);
 
 const TABLE_KEY = "tableCode";
+const SESSION_WATCHDOG_MS = 2500;
+
+function isGuestProtectedPath(pathname: string) {
+  return pathname === "/menu" || pathname === "/cart" || pathname === "/call" || pathname === "/profile" || pathname === "/pay";
+}
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const pathname = usePathname();
   const [tableCode, _setTableCode] = useState<string | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -57,11 +65,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     else storage.del(TABLE_KEY);
   };
 
-  const clearSession = () => {
+  const clearSession = (opts?: { redirect?: boolean }) => {
     _setTableCode(null);
     setSessionReady(false);
     setSessionError("No table selected");
     storage.del(TABLE_KEY);
+
+    if (opts?.redirect && isGuestProtectedPath(pathname)) {
+      router.replace("/table");
+    }
   };
 
   const restoreSession = async () => {
@@ -93,7 +105,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           return;
         }
         if (guestSession.expired) {
-          clearSession();
+          clearSession({ redirect: true });
           return;
         }
       } catch {
@@ -172,6 +184,36 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener(VENUE_CHANGE_EVENT, onVenueChange as EventListener);
     return () => window.removeEventListener(VENUE_CHANGE_EVENT, onVenueChange as EventListener);
   }, []);
+
+  useEffect(() => {
+    if (!isGuestProtectedPath(pathname)) return;
+    if (!tableCode) return;
+
+    let stopped = false;
+
+    const checkSession = async () => {
+      try {
+        const guestSession = await api<GuestSessionMeResponse>("/guest/me");
+        if (stopped) return;
+
+        if (!guestSession.ok || !guestSession.session) {
+          clearSession({ redirect: true });
+        }
+      } catch {
+        // ignore transient request failures here
+      }
+    };
+
+    void checkSession();
+    const timer = window.setInterval(() => {
+      void checkSession();
+    }, SESSION_WATCHDOG_MS);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [pathname, tableCode]);
 
   const value = useMemo(
     () => ({
