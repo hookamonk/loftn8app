@@ -33,11 +33,28 @@ function vip(index: number, legacy = false): BranchTable {
   };
 }
 
+function bar(index: number): BranchTable {
+  return {
+    displayName: `Бар ${index}`,
+    slug: `bar-${index}`,
+  };
+}
+
 const BRANCH_TABLES: Record<string, BranchTable[]> = {
-  zizkov: [...numericTables(1, 10), vip(1, true)],
-  nekazanka: [...numericTables(1, 24)],
+  zizkov: [...numericTables(1, 17), vip(1, true)],
+  nekazanka: [...numericTables(1, 24), bar(1), bar(2), bar(3)],
   garden: [
     ...numericTables(1, 25),
+    composite("2.1"),
+    composite("2.2"),
+    composite("4.1"),
+    composite("4.2"),
+    composite("6.1"),
+    composite("6.2"),
+    composite("7.1"),
+    composite("7.2"),
+    composite("9.1"),
+    composite("9.2"),
     composite("11.1"),
     composite("11.2"),
     composite("12.1"),
@@ -108,6 +125,16 @@ export function normalizeTableSlugInput(raw: string) {
     };
   }
 
+  const barMatch = normalized.match(/^(?:bar|бар)(?:[\s-]?(\d+))$/i);
+  if (barMatch) {
+    const index = String(Number(barMatch[1]));
+    return {
+      slugCandidates: [`bar-${index}`],
+      legacyCodeCandidates: [],
+      displayName: `Бар ${index}`,
+    };
+  }
+
   const slug = normalized
     .toLowerCase()
     .replace(/[.]/g, "-")
@@ -124,4 +151,3 @@ export function normalizeTableSlugInput(raw: string) {
     displayName: normalized,
   };
 }
-
