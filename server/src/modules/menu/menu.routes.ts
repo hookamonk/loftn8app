@@ -3,6 +3,7 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { normalizeVenueSlug, publicVenueSlug, resolveVenueSlug, venueCandidateSlugs, venueNameBySlug } from "../../config/venues";
 import { HttpError } from "../../utils/httpError";
+import { defaultMenuCategoryDefinitions } from "../../config/menuStructure";
 
 export const menuRouter = Router();
 
@@ -53,59 +54,30 @@ async function resolveVenue(rawVenueSlug?: string | null) {
   throw new HttpError(404, "VENUE_NOT_FOUND", "Venue not found");
 }
 
-async function ensureVenueMenuSeeded(venueId: number) {
-  const existingCount = await prisma.menuCategory.count({ where: { venueId } });
-  if (existingCount > 0) return;
+async function ensureVenueMenuStructure(venueId: number) {
+  for (const category of defaultMenuCategoryDefinitions()) {
+    const existing = await prisma.menuCategory.findFirst({
+      where: { venueId, name: category.name },
+      select: { id: true },
+    });
 
-  const sourceVenue = await prisma.venue.findFirst({
-    where: {
-      isActive: true,
-      id: { not: venueId },
-      menuCategories: {
-        some: {
-          items: {
-            some: { isActive: true },
-          },
-        },
+    if (existing) {
+      await prisma.menuCategory.update({
+        where: { id: existing.id },
+        data: { sort: category.sort, section: category.section },
+      });
+      continue;
+    }
+
+    await prisma.menuCategory.create({
+      data: {
+        venueId,
+        name: category.name,
+        sort: category.sort,
+        section: category.section,
       },
-    },
-    orderBy: { id: "asc" },
-    include: {
-      menuCategories: {
-        orderBy: [{ section: "asc" }, { sort: "asc" }],
-        include: {
-          items: {
-            orderBy: { sort: "asc" },
-          },
-        },
-      },
-    },
-  });
-
-  if (!sourceVenue) return;
-
-  await prisma.$transaction(
-    sourceVenue.menuCategories.map((category) =>
-      prisma.menuCategory.create({
-        data: {
-          venueId,
-          name: category.name,
-          sort: category.sort,
-          section: category.section,
-          items: {
-            create: category.items.map((item) => ({
-              name: item.name,
-              description: item.description,
-              priceCzk: item.priceCzk,
-              imageUrl: item.imageUrl,
-              isActive: item.isActive,
-              sort: item.sort,
-            })),
-          },
-        },
-      })
-    )
-  );
+    });
+  }
 }
 
 menuRouter.get(
@@ -121,7 +93,7 @@ menuRouter.get(
       return res.json(cached.payload);
     }
 
-    await ensureVenueMenuSeeded(venue.id);
+    await ensureVenueMenuStructure(venue.id);
 
     const categories = await prisma.menuCategory.findMany({
       where: { venueId: venue.id },

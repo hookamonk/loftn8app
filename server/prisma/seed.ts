@@ -1,6 +1,7 @@
 import { PrismaClient, MenuSection } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { branchTables } from "../src/config/tables";
+import { defaultMenuCategoryDefinitions } from "../src/config/menuStructure";
 
 const prisma = new PrismaClient();
 
@@ -108,42 +109,6 @@ async function resolveSeedVenue(target: (typeof VENUES)[number]) {
   });
 }
 
-async function cloneVenueMenu(baseVenueId: number, targetVenueId: number) {
-  const categories = await prisma.menuCategory.findMany({
-    where: { venueId: baseVenueId },
-    orderBy: [{ section: "asc" }, { sort: "asc" }],
-    include: {
-      items: {
-        orderBy: { sort: "asc" },
-      },
-    },
-  });
-
-  for (const category of categories) {
-    const targetCategory = await upsertCategory(
-      targetVenueId,
-      category.name,
-      category.sort,
-      category.section
-    );
-
-    await prisma.menuItem.updateMany({
-      where: { categoryId: targetCategory.id },
-      data: { isActive: false },
-    });
-
-    for (const item of category.items) {
-      await upsertItemInCategory(targetCategory.id, {
-        name: item.name,
-        description: item.description ?? undefined,
-        priceCzk: item.priceCzk,
-        sort: item.sort,
-        imageUrl: (item as any).imageUrl ?? null,
-      });
-    }
-  }
-}
-
 function envOrFallback(primary: string, fallback: string | null, defaultValue: string) {
   return process.env[primary] || (fallback ? process.env[fallback] : undefined) || defaultValue;
 }
@@ -219,6 +184,17 @@ async function upsertCategory(
   return prisma.menuCategory.create({ data: { venueId, name, sort, section } });
 }
 
+async function ensureVenueMenuCategories(venueId: number) {
+  const cats = new Map<string, { id: number }>();
+
+  for (const category of defaultMenuCategoryDefinitions()) {
+    const upserted = await upsertCategory(venueId, category.name, category.sort, category.section);
+    cats.set(category.name, upserted);
+  }
+
+  return cats;
+}
+
 async function upsertItemInCategory(categoryId: number, data: SeedItem) {
   const desc = data.description?.trim() ? data.description.trim() : null;
 
@@ -259,7 +235,7 @@ async function upsertItemInCategory(categoryId: number, data: SeedItem) {
 }
 
 async function main() {
-  const baseVenueDef = VENUES[0];
+  const baseVenueDef = VENUES.find((venue) => venue.slug === "nekazanka")!;
 
   // ===== 0) Base Venue =====
   const venue = await resolveSeedVenue(baseVenueDef);
@@ -268,67 +244,7 @@ async function main() {
   await seedVenueTables(venue.id, venue.slug);
 
   // ===== 2) Categories structure =====
-  const DISHES: Array<[string, number]> = [
-    ["APPETIZERS / SNACKS", 1],
-    ["SALADS / SOUPS", 2],
-    ["FISH / MEAT", 3],
-    ["BURGERS / SANDWICHES", 4],
-    ["SUSHI", 5],
-    ["SPECIALITY", 6],
-    ["SIDE DISHES / SAUCES", 7],
-    ["DESSERTS", 8],
-  ];
-
-  // ✅ ВАЖНО: separator должен быть ровно " · " (пробел-точка-пробел)
-  // ✅ Тут мы делаем подкатегории для SPIRITS (7), WINE (4), HOT DRINKS (2)
-  const DRINKS: Array<[string, number]> = [
-    ["COCKTAILS", 10],
-
-    // SPIRITS (7)
-    ["SPIRITS · Rum", 20],
-    ["SPIRITS · Cognac", 21],
-    ["SPIRITS · Gin", 22],
-    ["SPIRITS · Aperetiv", 23],
-    ["SPIRITS · Tequila", 24],
-    ["SPIRITS · Vodka", 25],
-    ["SPIRITS · Whisky", 26],
-
-    ["BEER", 30],
-
-    // WINE (4)
-    ["WINE · Red", 40],
-    ["WINE · Rosé", 41],
-    ["WINE · White", 42],
-    ["WINE · Sparkling", 43],
-
-    ["SOFT DRINKS", 50],
-
-    // HOT DRINKS (2)
-    ["HOT DRINKS · Tea", 60],
-    ["HOT DRINKS · Coffee", 61],
-  ];
-
-  const HOOKAH: Array<[string, number]> = [
-    ["CLASSIC HOOKAH", 1],
-    ["WARP ELECTRONIC HOOKAH", 2],
-    ["EXTRA", 3],
-  ];
-
-  // create/update categories
-  const cats = new Map<string, { id: number }>();
-
-  for (const [name, sort] of DISHES) {
-    const c = await upsertCategory(venue.id, name, sort, MenuSection.DISHES);
-    cats.set(name, c);
-  }
-  for (const [name, sort] of DRINKS) {
-    const c = await upsertCategory(venue.id, name, sort, MenuSection.DRINKS);
-    cats.set(name, c);
-  }
-  for (const [name, sort] of HOOKAH) {
-    const c = await upsertCategory(venue.id, name, sort, MenuSection.HOOKAH);
-    cats.set(name, c);
-  }
+  const cats = await ensureVenueMenuCategories(venue.id);
 
   // ✅ SAFETY: если в базе остались старые "SPIRITS"/"WINE"/"HOT DRINKS"
   // - если в них НЕТ позиций -> удалим (чтобы не было бардака)
@@ -1168,15 +1084,15 @@ async function main() {
   // ===== 5) STAFF =====
   await seedVenueStaff(venue.id, baseVenueDef.staffPrefix, baseVenueDef.defaults, baseVenueDef.legacyPrefix);
 
-  for (const target of VENUES.slice(1)) {
+  for (const target of VENUES.filter((candidate) => candidate.slug !== baseVenueDef.slug)) {
     const targetVenue = await resolveSeedVenue(target);
 
     await seedVenueTables(targetVenue.id, targetVenue.slug);
-    await cloneVenueMenu(venue.id, targetVenue.id);
+    await ensureVenueMenuCategories(targetVenue.id);
     await seedVenueStaff(targetVenue.id, target.staffPrefix, target.defaults, target.legacyPrefix);
   }
 
-  console.log("✅ Seed done (multi-venue tables + menu items + staff)");
+  console.log("✅ Seed done (Nekázanka seeded, Garden/Žižkov menu structures isolated)");
 }
 
 main()
