@@ -10,11 +10,13 @@ const DISHES: Array<[string, number]> = [
   ["APPETIZERS / SNACKS", 1],
   ["SALADS / SOUPS", 2],
   ["FISH / MEAT", 3],
-  ["BURGERS / SANDWICHES", 4],
-  ["SUSHI", 5],
-  ["SPECIALITY", 6],
-  ["SIDE DISHES / SAUCES", 7],
-  ["DESSERTS", 8],
+  ["GRILL", 4],
+  ["PASTA", 5],
+  ["BURGERS / SANDWICHES", 6],
+  ["SUSHI", 7],
+  ["SPECIALITY", 8],
+  ["SIDE DISHES / SAUCES", 9],
+  ["DESSERTS", 10],
 ];
 
 const DRINKS: Array<[string, number]> = [
@@ -49,4 +51,3 @@ export function defaultMenuCategoryDefinitions(): MenuCategoryDefinition[] {
     ...HOOKAH.map(([name, sort]) => ({ name, sort, section: "HOOKAH" as MenuSection })),
   ];
 }
-
