@@ -236,29 +236,41 @@ async function upsertItemInCategory(categoryId: number, data: SeedItem) {
   });
 }
 
-function cloneMenuSeed(source: SeedMenuByCategory): SeedMenuByCategory {
-  return Object.fromEntries(
-    Object.entries(source).map(([category, items]) => [
-      category,
-      items.map((item) => ({ ...item })),
-    ])
-  );
+function assertNoDuplicateSeedItems(venueSlug: string, itemsByCategory: SeedMenuByCategory) {
+  for (const [categoryName, items] of Object.entries(itemsByCategory)) {
+    const seen = new Set<string>();
+
+    for (const item of items) {
+      const key = `${item.name}|||${item.description?.trim() ?? ""}`;
+
+      if (seen.has(key)) {
+        throw new Error(
+          `Seed error: duplicate item in venue "${venueSlug}", category "${categoryName}": ${item.name}`
+        );
+      }
+
+      seen.add(key);
+    }
+  }
 }
 
 async function seedVenueMenuItems(
+  venueId: number,
   cats: Map<string, { id: number }>,
   itemsByCategory: SeedMenuByCategory
 ) {
+  const categoryIds = Array.from(new Set(Array.from(cats.values()).map((cat) => cat.id)));
+
+  await prisma.menuItem.updateMany({
+    where: { categoryId: { in: categoryIds } },
+    data: { isActive: false },
+  });
+
   for (const [catName, items] of Object.entries(itemsByCategory)) {
     const cat = cats.get(catName);
     if (!cat) throw new Error(`Seed error: category not found "${catName}"`);
 
     if (!items || items.length === 0) continue;
-
-    await prisma.menuItem.updateMany({
-      where: { categoryId: cat.id },
-      data: { isActive: false },
-    });
 
     for (const item of items) {
       await upsertItemInCategory(cat.id, item);
@@ -1167,17 +1179,10 @@ async function main() {
         imageUrl: "/menu/dishes/appetizers/TOAST.jpg",
       },
       {
-        name: "VEGAN AVOCADO TOAST",
-        description: "vegan bread, avocado, cherry, balsamico (1,6) / 150g",
-        priceCzk: 85,
-        sort: 3,
-        imageUrl: "/menu/dishes/appetizers/KOREAN_CARROT.jpg",
-      },
-      {
         name: "WAKAME SEAWEED",
         description: "Wakame seaweed salad with sesame (1,5,6,8,11) / 100g",
         priceCzk: 110,
-        sort: 4,
+        sort: 3,
         imageUrl: "/menu/dishes/appetizers/WAKAME.jpg",
       },
       {
@@ -1185,7 +1190,7 @@ async function main() {
         description:
           "Argentinian aged filet, parmesan, arugula, crispy baguette, olive oil (1,3,7,11) / 110g",
         priceCzk: 445,
-        sort: 5,
+        sort: 4,
         imageUrl: "/menu/dishes/appetizers/CARPACCIO.jpg",
       },
       {
@@ -1193,7 +1198,7 @@ async function main() {
         description:
           "Chopped Argentinian aged filet, capers, balsamic, olive oil, marinated cucumber, red onion, crispy garlic toast, quail eggs (1,3,6) / 110g",
         priceCzk: 435,
-        sort: 6,
+        sort: 5,
         imageUrl: "/menu/dishes/appetizers/TARTARE.jpg",
       },
       {
@@ -1201,35 +1206,35 @@ async function main() {
         description:
           "salmon, capers, sweet onion, arugula, whole wheat baguette (1,3,4,6,7,11) / 100g",
         priceCzk: 285,
-        sort: 7,
+        sort: 6,
         imageUrl: "/menu/dishes/appetizers/SALMON_TARTARE.jpg",
       },
       {
         name: "FRIED TEMPURA SHRIMPS",
         description: "served with sweet chilli sauce (1,2,3) / 100g",
         priceCzk: 220,
-        sort: 8,
+        sort: 7,
         imageUrl: "/menu/dishes/appetizers/SHRIPS_TEMPURA.jpg",
       },
       {
         name: "FRIED TEMPURA CHICKEN STRIPS",
         description: "served with sweet chilli sauce (1,3) / 100g",
         priceCzk: 165,
-        sort: 9,
+        sort: 8,
         imageUrl: "/menu/dishes/appetizers/CHICKEN_TEMPURA.jpg",
       },
       {
         name: "CHEESE PLATTER",
         description: "4 types of cheese, honey, fig jam, apples, crackers (1,3,7)",
         priceCzk: 310,
-        sort: 10,
+        sort: 9,
         imageUrl: "/menu/dishes/appetizers/CHEESE_PLATTER.jpg",
       },
       {
         name: "PANCAKE ROLLS WITH CAVIAR",
         description: "Pancakes, red caviar, dill, mayo dip (1,3,4,7,10) / 4 pcs",
         priceCzk: 225,
-        sort: 11,
+        sort: 10,
         imageUrl: "/menu/dishes/appetizers/ROLLS_CAVIAR.jpg",
       },
       {
@@ -1237,25 +1242,25 @@ async function main() {
         description:
           "Pancakes, salmon, Philadelphia cheese, mayo, chives (1,3,4,7,10) / 4 pcs",
         priceCzk: 195,
-        sort: 12,
+        sort: 11,
         imageUrl: "/menu/dishes/appetizers/ROLLS_SALMON.jpg",
       },
       {
         name: "PANCAKES WITH BEEF",
         description: "Pancakes, beef, sour cream, dill (1,3,7) / 2 pcs",
         priceCzk: 195,
-        sort: 13,
+        sort: 12,
         imageUrl: "/menu/dishes/appetizers/BEEF_PANCAKES.jpg",
       },
       {
         name: "GRILLED SHRIMPS JOSPER GRILL",
         description: "shrimps, lemon (2)",
         priceCzk: 265,
-        sort: 14,
+        sort: 13,
         imageUrl: "/menu/dishes/appetizers/GRILLED_SHRIMPS.jpg",
       },
-      { name: "SPANISH OLIVES", description: "/ 100g", priceCzk: 175, sort: 15 },
-      { name: "PISTACHIO", description: "(8) / 60g", priceCzk: 95, sort: 16 },
+      { name: "SPANISH OLIVES", description: "/ 100g", priceCzk: 175, sort: 14 },
+      { name: "PISTACHIO", description: "(8) / 60g", priceCzk: 95, sort: 15 },
     ],
 
     "SALADS / SOUPS": [
@@ -2682,7 +2687,8 @@ async function main() {
     zizkov: zizkovMenu,
   };
 
-  await seedVenueMenuItems(cats, menuByVenueSlug[venue.slug] ?? nekazankaMenu);
+  assertNoDuplicateSeedItems(venue.slug, menuByVenueSlug[venue.slug] ?? nekazankaMenu);
+  await seedVenueMenuItems(venue.id, cats, menuByVenueSlug[venue.slug] ?? nekazankaMenu);
 
   // ===== 5) STAFF =====
   await seedVenueStaff(venue.id, baseVenueDef.staffPrefix, baseVenueDef.defaults, baseVenueDef.legacyPrefix);
@@ -2692,7 +2698,15 @@ async function main() {
 
     await seedVenueTables(targetVenue.id, targetVenue.slug);
     const targetCats = await ensureVenueMenuCategories(targetVenue.id);
-    await seedVenueMenuItems(targetCats, menuByVenueSlug[targetVenue.slug] ?? nekazankaMenu);
+    assertNoDuplicateSeedItems(
+      targetVenue.slug,
+      menuByVenueSlug[targetVenue.slug] ?? nekazankaMenu
+    );
+    await seedVenueMenuItems(
+      targetVenue.id,
+      targetCats,
+      menuByVenueSlug[targetVenue.slug] ?? nekazankaMenu
+    );
     await seedVenueStaff(targetVenue.id, target.staffPrefix, target.defaults, target.legacyPrefix);
   }
 
