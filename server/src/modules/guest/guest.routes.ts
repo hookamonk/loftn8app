@@ -905,10 +905,16 @@ guestRouter.get(
       };
     });
 
-    const feedPayments = (payments as any[]).map((payment: any) => {
+    const feedPayments = (payments as any[])
+      .filter((payment: any) => {
+        const isMine = session.userId ? payment.session?.userId === session.userId : payment.session?.id === session.id;
+        if (payment.status === "PENDING") return true;
+        return isMine;
+      })
+      .map((payment: any) => {
       const amountCzk = payment.confirmation?.amountCzk ?? null;
       const view = paymentStatusView(payment.method, payment.status, amountCzk);
-      const isMine = payment.session?.id === session.id;
+      const isMine = session.userId ? payment.session?.userId === session.userId : payment.session?.id === session.id;
 
       return {
         id: payment.id,

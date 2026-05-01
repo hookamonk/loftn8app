@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { getVenueName } from "@/lib/venue";
@@ -23,6 +23,15 @@ function paymentStatusText(status?: "PENDING" | "CONFIRMED" | "CANCELLED") {
   if (status === "CONFIRMED") return "Payment confirmed";
   if (status === "CANCELLED") return "Payment cancelled";
   return undefined;
+}
+
+const PAYMENT_STATUS_FLASH_MS = 2 * 60 * 1000;
+
+function isRecentPayment(ts?: string | null) {
+  if (!ts) return false;
+  const value = new Date(ts).getTime();
+  if (!Number.isFinite(value)) return false;
+  return Date.now() - value <= PAYMENT_STATUS_FLASH_MS;
 }
 
 function messageStatusCopy(status?: "NEW" | "ACKED" | "DONE") {
@@ -120,7 +129,10 @@ export default function CallPage() {
 
   const latestWaiter = feed?.calls.find((call) => call.type === "WAITER");
   const latestHookah = feed?.calls.find((call) => call.type === "HOOKAH");
-  const latestPayment = (feed?.payments ?? [])[0];
+  const latestPayment = useMemo(
+    () => (feed?.payments ?? []).find((payment) => payment.isMine) ?? null,
+    [feed?.payments]
+  );
   const latestMessage = feed?.calls.find((call) => call.type === "HELP");
 
   useEffect(() => {
@@ -144,7 +156,7 @@ export default function CallPage() {
   }, [feed]);
 
   useEffect(() => {
-    const latestPaymentEntry = (feed?.payments ?? [])[0];
+    const latestPaymentEntry = (feed?.payments ?? []).find((payment) => payment.isMine) ?? null;
     if (!latestPaymentEntry) {
       latestPaymentSnapshotRef.current = null;
       return;
@@ -172,7 +184,13 @@ export default function CallPage() {
 
   const waiterStatus = doneFlash.WAITER ? "Done" : requestStatusText(latestWaiter?.status);
   const hookahStatus = doneFlash.HOOKAH ? "Done" : requestStatusText(latestHookah?.status);
-  const paymentStatus = paymentStatusText(latestPayment?.status);
+  const shouldShowPaymentStatus = Boolean(
+    latestPayment &&
+      (latestPayment.status === "PENDING" ||
+        ((latestPayment.status === "CONFIRMED" || latestPayment.status === "CANCELLED") &&
+          isRecentPayment(latestPayment.confirmedAt ?? latestPayment.createdAt)))
+  );
+  const paymentStatus = shouldShowPaymentStatus ? paymentStatusText(latestPayment?.status) : undefined;
   const messageStatus = doneFlash.HELP ? "Done" : requestStatusText(latestMessage?.status);
   const hasLiveCallState = Boolean(
     latestWaiter?.status === "NEW" ||
@@ -182,7 +200,7 @@ export default function CallPage() {
       latestMessage?.status === "NEW" ||
       latestMessage?.status === "ACKED" ||
       latestPayment?.status === "PENDING" ||
-      (feed?.payments ?? []).some((payment) => payment.status === "CONFIRMED")
+      shouldShowPaymentStatus
   );
 
   useEffect(() => {
