@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { BottomNav } from "@/components/BottomNav";
 import { CartBar } from "@/components/CartBar";
 import { GuestBranchGuard } from "@/components/GuestBranchGuard";
+import { GuestOnboarding } from "@/components/GuestOnboarding";
 
 export default function GuestLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -12,6 +13,7 @@ export default function GuestLayout({ children }: { children: React.ReactNode })
       </Suspense>
       <CartBar />
       <BottomNav />
+      <GuestOnboarding />
     </>
   );
 }

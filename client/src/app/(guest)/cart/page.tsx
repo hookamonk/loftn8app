@@ -490,11 +490,11 @@ export default function CartPage() {
 
                   {effectivePendingPayment ? (
                     <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                      Ваш запрос на оплату: {effectivePendingPayment.methodLabel === "Card" ? "карта" : "наличные"}, принят, официант в пути.
+                      Your payment request: {effectivePendingPayment.methodLabel === "Card" ? "card" : "cash"}, has been accepted. The waiter is on the way.
                     </div>
                   ) : (
                     <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                      Выберите позиции для оплаты и способ оплаты.
+                      Select the items you want to pay for and choose the payment method.
                     </div>
                   )}
                 </>
@@ -595,7 +595,7 @@ export default function CartPage() {
 
                   {openTab.stage.phase === "ready" ? (
                     <div className="mt-3 rounded-xl border border-emerald-400/15 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100/90">
-                      Ваш заказ готов, официант выносит.
+                      Your order is ready. The waiter is bringing it to your table.
                     </div>
                   ) : null}
                 </>
@@ -630,15 +630,15 @@ export default function CartPage() {
               {activeOrderRequest ? (
                 <>
                   <div className="font-semibold">
-                    {activeOrderRequest.status === "ACKED" ? "Ваш запрос на заказ был принят" : "Ваш запрос на заказ был принят"}
+                    {activeOrderRequest.status === "ACKED" ? "Your order request has been accepted" : "Your order request has been accepted"}
                   </div>
                   <div className="mt-1 text-xs text-emerald-100/75">
-                    Ваш запрос на заказ был принят, официант в пути.
+                    Your order request has been accepted. The waiter is on the way.
                   </div>
                 </>
               ) : (
                 <div className="flex flex-col items-center gap-4 py-2 text-center">
-                  <div>Ваш заказ отобразится тут.</div>
+                  <div>Your order will appear here.</div>
                   <Link
                     href="/menu"
                     className="inline-flex h-11 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-black"

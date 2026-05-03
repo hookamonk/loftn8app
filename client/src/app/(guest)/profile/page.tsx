@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { restartGuestOnboarding } from "@/lib/guestOnboarding";
 import { getVenueName, setVenueSlug } from "@/lib/venue";
 import { useAuth } from "@/providers/auth";
 import { useGuestFeed } from "@/providers/guestFeed";
@@ -54,6 +55,11 @@ export default function ProfilePage() {
     }
   };
 
+  const showGuideAgain = () => {
+    restartGuestOnboarding();
+    router.push("/menu");
+  };
+
   return (
     <main className="mx-auto max-w-md px-4 pb-28 pt-5">
       <div className="mb-4">
@@ -73,6 +79,12 @@ export default function ProfilePage() {
             >
               Open personal cabinet
             </button>
+            <button
+              className="h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/85 hover:text-white"
+              onClick={showGuideAgain}
+            >
+              Show guide again
+            </button>
           </div>
         ) : (
           <div className="text-sm text-white/75">
@@ -83,6 +95,12 @@ export default function ProfilePage() {
                 onClick={() => router.replace("/auth")}
               >
                 Sign in / Register
+              </button>
+              <button
+                className="mt-3 h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/85 hover:text-white"
+                onClick={showGuideAgain}
+              >
+                Show guide again
               </button>
             </div>
           </div>
