@@ -318,7 +318,6 @@ function MenuPage() {
         <div className="mb-4">
           <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName}</div>
           <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
-          <div className="mt-1 text-xs text-white/60">Browse the menu</div>
         </div>
 
         <div className="rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">

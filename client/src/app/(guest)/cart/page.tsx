@@ -390,25 +390,24 @@ export default function CartPage() {
             <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName}</div>
             <h1 className="mt-1 text-2xl font-bold text-white">Cart</h1>
             <div className="mt-1 text-xs text-white/60">
-              {showOpenTab ? "Shared table order" : "Nothing active right now"}
+              {showOpenTab ? "Your current order" : "Nothing active right now"}
             </div>
           </div>
 
-          <Link
-            href="/menu"
-            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white"
-          >
-            Menu
-          </Link>
+          {showOpenTab || activeOrderRequest ? (
+            <Link
+              href="/menu"
+              className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white"
+            >
+              Menu
+            </Link>
+          ) : null}
         </div>
 
         <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-white">Open tab</div>
-              <div className="mt-1 text-xs text-white/50">
-                {showOpenTab ? "Everyone at the table sees the same order" : "The next staff-entered order will appear here"}
-              </div>
+              <div className="text-sm font-semibold text-white">Your bill</div>
             </div>
 
             <button
@@ -491,11 +490,11 @@ export default function CartPage() {
 
                   {effectivePendingPayment ? (
                     <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                      Payment requested: {effectivePendingPayment.methodLabel}. The selected blue positions are being processed by the staff now.
+                      Ваш запрос на оплату: {effectivePendingPayment.methodLabel === "Card" ? "карта" : "наличные"}, принят, официант в пути.
                     </div>
                   ) : (
                     <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                      Review the blue positions, then choose the payment method in the next step.
+                      Выберите позиции для оплаты и способ оплаты.
                     </div>
                   )}
                 </>
@@ -596,7 +595,7 @@ export default function CartPage() {
 
                   {openTab.stage.phase === "ready" ? (
                     <div className="mt-3 rounded-xl border border-emerald-400/15 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100/90">
-                      Your order is ready and is being brought to your table.
+                      Ваш заказ готов, официант выносит.
                     </div>
                   ) : null}
                 </>
@@ -631,14 +630,22 @@ export default function CartPage() {
               {activeOrderRequest ? (
                 <>
                   <div className="font-semibold">
-                    {activeOrderRequest.status === "ACKED" ? "A waiter is on the way" : "Order request sent"}
+                    {activeOrderRequest.status === "ACKED" ? "Ваш запрос на заказ был принят" : "Ваш запрос на заказ был принят"}
                   </div>
                   <div className="mt-1 text-xs text-emerald-100/75">
-                    Your order will appear here as soon as the staff saves it for your table.
+                    Ваш запрос на заказ был принят, официант в пути.
                   </div>
                 </>
               ) : (
-                <>No open tab right now. Tap <b>Order</b> in the menu and the staff will place the order for your table.</>
+                <div className="flex flex-col items-center gap-4 py-2 text-center">
+                  <div>Ваш заказ отобразится тут.</div>
+                  <Link
+                    href="/menu"
+                    className="inline-flex h-11 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-black"
+                  >
+                    Go to menu
+                  </Link>
+                </div>
               )}
             </div>
           )}

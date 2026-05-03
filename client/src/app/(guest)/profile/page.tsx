@@ -59,7 +59,6 @@ export default function ProfilePage() {
       <div className="mb-4">
         <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName}</div>
         <h1 className="mt-1 text-2xl font-bold text-white">Profile</h1>
-        <div className="mt-1 text-xs text-white/60">{user ? "Account, loyalty and receipts" : "Guest mode and receipts"}</div>
       </div>
 
       <section className="rounded-3xl border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
