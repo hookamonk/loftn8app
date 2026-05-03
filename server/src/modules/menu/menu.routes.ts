@@ -26,6 +26,13 @@ type MenuPayload = {
   }>;
 };
 
+function sanitizeImageUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "#") return null;
+  return trimmed;
+}
+
 const menuCache = new Map<
   number,
   {
@@ -118,7 +125,7 @@ menuRouter.get(
           name: i.name,
           description: i.description,
           priceCzk: i.priceCzk,
-          imageUrl: (i as any).imageUrl ?? null, //return it
+          imageUrl: sanitizeImageUrl((i as any).imageUrl),
         })),
       })),
     };

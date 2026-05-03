@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { createTableOrder } from "@/lib/staffApi";
+import { getStaffVenueSlug } from "@/lib/venue";
 import type { MenuResponse, MenuCategory, MenuItem, MenuSection } from "@/types";
 import { useToast } from "@/providers/toast";
 import { useStaffSession } from "@/providers/staffSession";
@@ -123,7 +124,11 @@ export default function StaffOrderCreatePage() {
       setErr(null);
 
       try {
-        const menu = await api<MenuResponse>("/menu");
+        const menu = await api<MenuResponse>("/menu", {
+          headers: {
+            "X-Venue-Slug": staff?.venueSlug ?? getStaffVenueSlug(),
+          },
+        });
         const categories = (menu.categories ?? []).filter((category) => (category.items?.length ?? 0) > 0);
         setData({ ...menu, categories });
         const first = firstSection(categories);
@@ -138,7 +143,7 @@ export default function StaffOrderCreatePage() {
     };
 
     void load();
-  }, []);
+  }, [staff]);
 
   const categories = useMemo(() => data?.categories ?? [], [data]);
   const visibleCategories = useMemo(() => {
