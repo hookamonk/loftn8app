@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
-import { getVenueName } from "@/lib/venue";
+import { getVenueName, setVenueSlug } from "@/lib/venue";
 import { useAuth } from "@/providers/auth";
 import { useGuestFeed } from "@/providers/guestFeed";
+import { useSession } from "@/providers/session";
 import { useToast } from "@/providers/toast";
 
 export default function ProfilePage() {
@@ -15,6 +16,7 @@ export default function ProfilePage() {
   const { push } = useToast();
   const { me, loading, refresh } = useAuth();
   const { feed } = useGuestFeed();
+  const { clearSession } = useSession();
   const [busy, setBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -40,9 +42,11 @@ export default function ProfilePage() {
     setBusy(true);
     try {
       await api("/auth/guest/logout", { method: "POST" });
+      clearSession();
+      setVenueSlug(null);
       await refresh();
       push({ kind: "success", title: "Done", message: "You have been logged out" });
-      router.replace("/auth");
+      router.replace("/");
     } catch (e: any) {
       push({ kind: "error", title: "Error", message: e?.message ?? "Failed" });
     } finally {
@@ -64,6 +68,12 @@ export default function ProfilePage() {
             <Field label="Name" value={user.name} />
             <Field label="Phone" value={user.phone} />
             <Field label="Email" value={user.email || "—"} />
+            <button
+              className="h-12 w-full rounded-2xl border border-white/10 bg-white/10 text-sm font-semibold text-white"
+              onClick={() => router.push("/cabinet")}
+            >
+              Open personal cabinet
+            </button>
           </div>
         ) : (
           <div className="text-sm text-white/75">

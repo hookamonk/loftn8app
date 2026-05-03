@@ -5,6 +5,7 @@ import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
 
 import { authRouter } from "./modules/auth/auth.routes";
+import { accountRouter } from "./modules/account/account.routes";
 import { guestRouter } from "./modules/guest/guest.routes";
 import { menuRouter } from "./modules/menu/menu.routes";
 import { ordersRouter } from "./modules/orders/orders.routes";
@@ -47,6 +48,7 @@ app.use(cookieParser());
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+app.use("/account", accountRouter);
 app.use("/auth", authRouter);
 app.use("/guest", guestRouter);
 app.use("/menu", menuRouter);

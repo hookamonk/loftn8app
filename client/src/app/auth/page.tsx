@@ -29,6 +29,13 @@ function isValidEmail(x: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(x).trim());
 }
 
+function sanitizeNextPath(raw: string | null | undefined) {
+  const value = String(raw ?? "").trim();
+  if (!value.startsWith("/") || value.startsWith("//")) return "/menu";
+  if (value === "/auth") return "/menu";
+  return value || "/menu";
+}
+
 function humanError(msg: string) {
   const m = String(msg || "");
   if (m.includes("NO_ACCOUNT")) return "Account not found. Please register.";
@@ -56,6 +63,7 @@ export default function AuthPage() {
   const { push } = useToast();
   const { me, loading, setAuthenticated } = useAuth();
   const { restoreSession } = useSession();
+  const [nextPath, setNextPath] = useState<string | null>(null);
 
   const [mode, setMode] = useState<Mode>("register");
   const [step, setStep] = useState<Step>("form");
@@ -79,21 +87,29 @@ export default function AuthPage() {
 
   const p = useMemo(() => normalizePhone(phone), [phone]);
   const venueName = useMemo(() => getVenueName(), []);
+  const targetPath = nextPath ?? "/menu";
+  const cabinetMode = nextPath === "/cabinet";
   const needsPasswordConfirm = mode === "register" || mode === "forgot";
   const passwordsMatch = !needsPasswordConfirm || password === passwordConfirm;
 
   useEffect(() => {
-    if (!hasVenueSelection()) {
+    if (typeof window === "undefined") return;
+    setNextPath(sanitizeNextPath(new URLSearchParams(window.location.search).get("next")));
+  }, []);
+
+  useEffect(() => {
+    if (!nextPath) return;
+    if (!hasVenueSelection() && !cabinetMode) {
       router.replace("/");
       return;
     }
     void ensureBackendWarm();
-  }, [router]);
+  }, [cabinetMode, nextPath, router]);
 
   useEffect(() => {
-    if (loading) return;
-    if (me?.authenticated) router.replace("/menu");
-  }, [loading, me, router]);
+    if (loading || !nextPath) return;
+    if (me?.authenticated) router.replace(targetPath);
+  }, [loading, me, nextPath, router, targetPath]);
 
   const canSend =
     !busy &&
@@ -173,7 +189,7 @@ export default function AuthPage() {
       });
       await restoreSession().catch(() => {});
       push({ kind: "success", title: "Done", message: "You are signed in." });
-      router.replace("/menu");
+      router.replace(targetPath);
     } catch (e: any) {
       const msg = humanError(e?.message ?? "Failed");
       const raw = String(e?.message || "");
@@ -246,7 +262,7 @@ export default function AuthPage() {
       });
       await restoreSession().catch(() => {});
       push({ kind: "success", title: "Done", message: "You are signed in." });
-      router.replace("/menu");
+      router.replace(targetPath);
     } catch (e: any) {
       const msg = humanError(e?.message ?? "Failed");
       setErr(msg);
@@ -290,7 +306,7 @@ export default function AuthPage() {
       });
       await restoreSession().catch(() => {});
       push({ kind: "success", title: "Password updated", message: "You are signed in with the new password." });
-      router.replace("/menu");
+      router.replace(targetPath);
     } catch (e: any) {
       const msg = humanError(e?.message ?? "Failed");
       const raw = String(e?.message || "");
@@ -373,17 +389,29 @@ export default function AuthPage() {
           </div>
 
           <div className="w-full">
-            <div className="text-[11px] tracking-[0.24em] text-white/45">{venueName}</div>
+            <div className="text-[11px] tracking-[0.24em] text-white/45">
+              {cabinetMode ? "LOFT№8 ACCOUNT" : venueName}
+            </div>
             <h1 className="mt-1 text-left text-2xl font-bold text-white">
-              Welcome to <span className="text-white/80">{venueName}</span>
+              {cabinetMode ? (
+                <>Sign in to your <span className="text-white/80">personal cabinet</span></>
+              ) : (
+                <>Welcome to <span className="text-white/80">{venueName}</span></>
+              )}
             </h1>
-            <button
-              type="button"
-              className="mt-2 text-xs text-white/60 underline underline-offset-4"
-              onClick={() => router.push("/")}
-            >
-              Change branch
-            </button>
+            {!cabinetMode ? (
+              <button
+                type="button"
+                className="mt-2 text-xs text-white/60 underline underline-offset-4"
+                onClick={() => router.push("/")}
+              >
+                Change branch
+              </button>
+            ) : (
+              <div className="mt-2 text-xs text-white/55">
+                Use the same email and password as in the app.
+              </div>
+            )}
           </div>
         </div>
 
@@ -593,7 +621,7 @@ export default function AuthPage() {
                 </button>
               ) : null}
 
-              {mode === "register" ? (
+              {mode === "register" && !cabinetMode ? (
                 <button
                   type="button"
                   disabled={busy}
