@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { consumeAnonBypassAuthOnce } from "@/lib/guestFlow";
 import { getVenueSlug, setVenueSlug } from "@/lib/venue";
@@ -37,6 +37,7 @@ function normalizeToTableSlug(raw: string) {
 export default function TableEntry() {
   const params = useParams<{ tableCode: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { setTableCode, restoreSession } = useSession();
   const [err, setErr] = useState<string | null>(null);
 
@@ -67,7 +68,10 @@ export default function TableEntry() {
           authenticated: false,
         } as AuthMeResponse));
 
-        if (me.authenticated || consumeAnonBypassAuthOnce()) {
+        const bypassFromQuery = searchParams.get("guest") === "1";
+        const bypassFromStorage = consumeAnonBypassAuthOnce();
+
+        if (me.authenticated || bypassFromQuery || bypassFromStorage) {
           router.replace("/menu");
           return;
         }
@@ -79,7 +83,7 @@ export default function TableEntry() {
     };
 
     void run();
-  }, [params.tableCode, restoreSession, router, setTableCode]);
+  }, [params.tableCode, restoreSession, router, searchParams, setTableCode]);
 
   return (
     <main className="mx-auto max-w-md px-4 pb-28 pt-5">

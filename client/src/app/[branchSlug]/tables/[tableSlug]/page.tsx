@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { consumeAnonBypassAuthOnce } from "@/lib/guestFlow";
 import { refreshVenueCatalog, resolveVenueSlug, setVenueSlug } from "@/lib/venue";
@@ -19,6 +19,7 @@ function normalizeSlug(raw: string) {
 export default function BranchTableEntryPage() {
   const params = useParams<{ branchSlug: string; tableSlug: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { setTableCode, restoreSession } = useSession();
   const [err, setErr] = useState<string | null>(null);
 
@@ -58,7 +59,10 @@ export default function BranchTableEntryPage() {
           authenticated: false,
         } as AuthMeResponse));
 
-        if (me.authenticated || consumeAnonBypassAuthOnce()) {
+        const bypassFromQuery = searchParams.get("guest") === "1";
+        const bypassFromStorage = consumeAnonBypassAuthOnce();
+
+        if (me.authenticated || bypassFromQuery || bypassFromStorage) {
           router.replace("/menu");
           return;
         }
@@ -70,7 +74,7 @@ export default function BranchTableEntryPage() {
     };
 
     void run();
-  }, [params.branchSlug, params.tableSlug, restoreSession, router, setTableCode]);
+  }, [params.branchSlug, params.tableSlug, restoreSession, router, searchParams, setTableCode]);
 
   return (
     <main className="mx-auto max-w-md px-4 pb-28 pt-5">

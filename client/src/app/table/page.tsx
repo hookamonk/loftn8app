@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Html5Qrcode } from "html5-qrcode";
 import { getVenueName, getVenueSlug, setVenueSlug } from "@/lib/venue";
 
@@ -74,6 +75,7 @@ function extractTableSlug(rawInput: string): { branchSlug?: string; tableSlug: s
 const SCANNER_ID = "loft-table-qr-reader";
 
 export default function TablePage() {
+  const searchParams = useSearchParams();
   const venueName = getVenueName();
   const [table, setTable] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -87,11 +89,13 @@ export default function TablePage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const canGo = useMemo(() => !!extractTableSlug(table), [table]);
+  const guestBypass = searchParams.get("guest") === "1";
 
   const goToTable = (tableSlug: string, branchSlug?: string) => {
     const nextBranch = branchSlug ?? getVenueSlug();
     setVenueSlug(nextBranch);
-    window.location.href = `/${encodeURIComponent(nextBranch)}/tables/${encodeURIComponent(tableSlug)}`;
+    const suffix = guestBypass ? "?guest=1" : "";
+    window.location.href = `/${encodeURIComponent(nextBranch)}/tables/${encodeURIComponent(tableSlug)}${suffix}`;
   };
 
   const go = () => {

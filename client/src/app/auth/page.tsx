@@ -324,7 +324,7 @@ export default function AuthPage() {
     }
 
     markAnonBypassAuthOnce();
-    router.replace("/table");
+    router.replace("/table?guest=1");
   };
 
   return (
