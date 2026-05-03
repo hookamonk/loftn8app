@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Html5Qrcode } from "html5-qrcode";
 import { getVenueName, getVenueSlug, setVenueSlug } from "@/lib/venue";
@@ -74,7 +74,7 @@ function extractTableSlug(rawInput: string): { branchSlug?: string; tableSlug: s
 
 const SCANNER_ID = "loft-table-qr-reader";
 
-export default function TablePage() {
+function TablePageContent() {
   const searchParams = useSearchParams();
   const venueName = getVenueName();
   const [table, setTable] = useState("");
@@ -328,5 +328,13 @@ export default function TablePage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function TablePage() {
+  return (
+    <Suspense fallback={null}>
+      <TablePageContent />
+    </Suspense>
   );
 }
