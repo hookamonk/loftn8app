@@ -10,7 +10,7 @@ const manrope = Manrope({
   display: "swap",
 });
 
-const APP_NAME = "LOFT №8";
+const APP_NAME = "LOFT№8";
 
 export const metadata: Metadata = {
   title: APP_NAME,

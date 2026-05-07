@@ -9,6 +9,7 @@ import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
 import { PaymentSheet } from "@/components/PaymentSheet";
+import { useI18n } from "@/providers/i18n";
 
 type OrderStatus = "NEW" | "ACCEPTED" | "IN_PROGRESS" | "DELIVERED" | "CANCELLED";
 type ItemVisualState = "preparing" | "ready";
@@ -54,18 +55,18 @@ function progressStepClass(
   return "bg-white/10";
 }
 
-function openTabStage(statuses: OrderStatus[]) {
+function openTabStage(statuses: OrderStatus[], isCz: boolean) {
   const active = statuses.filter((status) => status !== "CANCELLED");
   const allReady = active.length > 0 && active.every((status) => status === "DELIVERED");
   const hasPreparing = active.some((status) => status === "IN_PROGRESS");
 
-  if (!active.length) return { label: "Cancelled", tone: "error" as const, phase: "cancelled" as const };
-  if (allReady) return { label: "Ready", tone: "success" as const, phase: "ready" as const };
-  if (hasPreparing) return { label: "Preparing", tone: "success" as const, phase: "preparing" as const };
-  return { label: "Accepted", tone: "success" as const, phase: "accepted" as const };
+  if (!active.length) return { label: isCz ? "Zrušeno" : "Cancelled", tone: "error" as const, phase: "cancelled" as const };
+  if (allReady) return { label: isCz ? "Připraveno" : "Ready", tone: "success" as const, phase: "ready" as const };
+  if (hasPreparing) return { label: isCz ? "Příprava" : "Preparing", tone: "success" as const, phase: "preparing" as const };
+  return { label: isCz ? "Přijato" : "Accepted", tone: "success" as const, phase: "accepted" as const };
 }
 
-function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"]>["orders"]) {
+function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"]>["orders"], isCz: boolean) {
   const activeOrders = orders.filter((order) => order.status !== "CANCELLED");
   if (!activeOrders.length) return null;
 
@@ -129,7 +130,7 @@ function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"
 
   return {
     firstCreatedAt,
-    stage: openTabStage(activeOrders.map((order) => order.status)),
+    stage: openTabStage(activeOrders.map((order) => order.status), isCz),
     totalCzk: activeOrders.reduce((sum, order) => sum + order.totalCzk, 0),
     items: Array.from(itemMap.values()).sort((a, b) => {
       if (a.state === b.state) return a.name.localeCompare(b.name);
@@ -141,7 +142,8 @@ function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"
 }
 
 export default function CartPage() {
-  const venueName = getVenueName();
+  const { isCz, locale, ready } = useI18n();
+  const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const { feed, refresh } = useGuestFeed();
   const { push } = useToast();
 
@@ -151,7 +153,7 @@ export default function CartPage() {
   const [localPendingMarker, setLocalPendingMarker] = useState<PendingPaymentMarker | null>(null);
   const latestPaymentSnapshotRef = useRef<{ id: string; status: "PENDING" | "CONFIRMED" | "CANCELLED" } | null>(null);
 
-  const openTab = useMemo(() => buildOpenTab(feed?.orders ?? []), [feed]);
+  const openTab = useMemo(() => buildOpenTab(feed?.orders ?? [], isCz), [feed, isCz]);
   const pendingMarkerStorageKey = useMemo(
     () =>
       feed?.table && feed?.currentSessionId
@@ -265,16 +267,16 @@ export default function CartPage() {
     if (prev && prev.id === latestPayment.id && prev.status === "PENDING" && latestPayment.status === "CANCELLED") {
       push({
         kind: "info",
-        title: "Payment request cancelled",
-        message: "Please choose the payment method again and send a new request.",
+        title: isCz ? "Žádost o platbu zrušena" : "Payment request cancelled",
+        message: isCz ? "Vyberte prosím znovu způsob platby a odešlete nový požadavek." : "Please choose the payment method again and send a new request.",
       });
       setUseLoyalty(false);
     }
     if (prev && prev.id === latestPayment.id && prev.status === "PENDING" && latestPayment.status === "CONFIRMED") {
       push({
         kind: "success",
-        title: "Payment confirmed",
-        message: "Your payment was confirmed.",
+        title: isCz ? "Platba potvrzena" : "Payment confirmed",
+        message: isCz ? "Vaše platba byla potvrzena." : "Your payment was confirmed.",
       });
     }
 
@@ -334,8 +336,8 @@ export default function CartPage() {
     if (!selectedItems.length) {
       push({
         kind: "info",
-        title: "Select items",
-        message: "Choose at least one position for this payment.",
+        title: isCz ? "Vyberte položky" : "Select items",
+        message: isCz ? "Pro tuto platbu vyberte alespoň jednu položku." : "Choose at least one position for this payment.",
       });
       return;
     }
@@ -364,15 +366,23 @@ export default function CartPage() {
 
       push({
         kind: "success",
-        title: "Payment requested",
+        title: isCz ? "Žádost o platbu odeslána" : "Payment requested",
         message:
           method === "CARD"
-            ? `A staff member will come with the terminal for ${finalPayableCzk} Kč.`
+            ? isCz
+              ? `Obsluha přijde s terminálem na ${finalPayableCzk} Kč.`
+              : `A staff member will come with the terminal for ${finalPayableCzk} Kč.`
+            : isCz
+            ? `Obsluha přijde pro hotovostní platbu ${finalPayableCzk} Kč.`
             : `A staff member will come for cash payment of ${finalPayableCzk} Kč.`,
       });
     } catch (e: any) {
       setLocalPendingMarker(null);
-      push({ kind: "error", title: "Payment error", message: e?.message ?? "Failed" });
+      push({
+        kind: "error",
+        title: isCz ? "Chyba platby" : "Payment error",
+        message: e?.message ?? (isCz ? "Platbu se nepodařilo vyžádat" : "Failed"),
+      });
     }
   };
 
@@ -388,9 +398,9 @@ export default function CartPage() {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName}</div>
-            <h1 className="mt-1 text-2xl font-bold text-white">Cart</h1>
+            <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Účet" : "Cart"}</h1>
             <div className="mt-1 text-xs text-white/60">
-              {showOpenTab ? "Your current order" : "Nothing active right now"}
+              {showOpenTab ? (isCz ? "Vaše aktuální objednávka" : "Your current order") : isCz ? "Momentálně nic není aktivní" : "Nothing active right now"}
             </div>
           </div>
 
@@ -399,7 +409,7 @@ export default function CartPage() {
               href="/menu"
               className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white"
             >
-              Menu
+              {isCz ? "Menu" : "Menu"}
             </Link>
           ) : null}
         </div>
@@ -407,7 +417,7 @@ export default function CartPage() {
         <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-white">Your bill</div>
+              <div className="text-sm font-semibold text-white">{isCz ? "Váš účet" : "Your bill"}</div>
             </div>
 
             <button
@@ -415,7 +425,7 @@ export default function CartPage() {
               className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
               onClick={openPaymentSheet}
             >
-              {latestPendingPayment ? "Requested" : "Pay"}
+              {latestPendingPayment ? (isCz ? "Odesláno" : "Requested") : isCz ? "Zaplatit" : "Pay"}
             </button>
           </div>
 
@@ -424,16 +434,16 @@ export default function CartPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-white">
-                    {paymentSelectionActive ? "Payment selection" : "Current order"}
+                    {paymentSelectionActive ? (isCz ? "Výběr k platbě" : "Payment selection") : isCz ? "Aktuální objednávka" : "Current order"}
                   </div>
                   <div className="mt-1 text-[11px] text-white/45">
-                    {new Date(openTab.firstCreatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    {new Date(openTab.firstCreatedAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
                   </div>
                 </div>
 
                 {paymentSelectionActive ? (
                   <div className="rounded-full border border-sky-400/20 bg-sky-500/12 px-2.5 py-1 text-[11px] font-semibold text-sky-100">
-                    Awaiting confirmation
+                    {isCz ? "Čeká na potvrzení" : "Awaiting confirmation"}
                   </div>
                 ) : (
                   <div className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${stageClass(openTab.stage.tone)}`}>
@@ -451,9 +461,9 @@ export default function CartPage() {
                   </div>
 
                   <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/38">
-                    <span className="text-sky-200">Selected</span>
-                    <span className="animate-pulse text-sky-200">{effectivePendingPayment ? "Processing" : "Awaiting method"}</span>
-                    <span className={effectivePendingPayment ? "animate-pulse text-sky-200" : undefined}>Confirmation</span>
+                    <span className="text-sky-200">{isCz ? "Vybráno" : "Selected"}</span>
+                    <span className="animate-pulse text-sky-200">{effectivePendingPayment ? (isCz ? "Zpracování" : "Processing") : isCz ? "Čeká na způsob" : "Awaiting method"}</span>
+                    <span className={effectivePendingPayment ? "animate-pulse text-sky-200" : undefined}>{isCz ? "Potvrzení" : "Confirmation"}</span>
                   </div>
 
                   <div className="mt-3 space-y-1.5">
@@ -479,7 +489,7 @@ export default function CartPage() {
                                 isSelected ? "text-sky-200/90" : "text-white/35",
                               ].join(" ")}
                             >
-                              {isSelected ? "Selected for payment" : "Not selected"}
+                              {isSelected ? (isCz ? "Vybráno k platbě" : "Selected for payment") : isCz ? "Nevybráno" : "Not selected"}
                             </div>
                           </div>
                           <div className="shrink-0">{(isSelected ? selected : item.availableQty) * item.unitPriceCzk} Kč</div>
@@ -490,11 +500,13 @@ export default function CartPage() {
 
                   {effectivePendingPayment ? (
                     <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                      Your payment request: {effectivePendingPayment.methodLabel === "Card" ? "card" : "cash"}, has been accepted. The waiter is on the way.
+                      {isCz
+                        ? `Váš požadavek na platbu: ${effectivePendingPayment.methodLabel === "Card" ? "kartou" : "hotově"}, byl přijat. Číšník je na cestě.`
+                        : `Your payment request: ${effectivePendingPayment.methodLabel === "Card" ? "card" : "cash"}, has been accepted. The waiter is on the way.`}
                     </div>
                   ) : (
                     <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                      Select the items you want to pay for and choose the payment method.
+                      {isCz ? "Vyberte položky, které chcete zaplatit, a zvolte způsob platby." : "Select the items you want to pay for and choose the payment method."}
                     </div>
                   )}
                 </>
@@ -549,7 +561,7 @@ export default function CartPage() {
                           : undefined
                       }
                     >
-                      Accepted
+                      {isCz ? "Přijato" : "Accepted"}
                     </span>
                     <span
                       className={
@@ -560,9 +572,9 @@ export default function CartPage() {
                           : undefined
                       }
                     >
-                      Preparing
+                      {isCz ? "Příprava" : "Preparing"}
                     </span>
-                    <span className={openTab.stage.phase === "ready" ? "text-emerald-300" : undefined}>Ready</span>
+                    <span className={openTab.stage.phase === "ready" ? "text-emerald-300" : undefined}>{isCz ? "Hotovo" : "Ready"}</span>
                   </div>
 
                   <div className="mt-3 space-y-1.5">
@@ -585,7 +597,7 @@ export default function CartPage() {
                               item.state === "preparing" ? "text-emerald-200/85" : "text-emerald-200/65",
                             ].join(" ")}
                           >
-                            {item.state === "preparing" ? "Preparing" : "Ready"}
+                            {item.state === "preparing" ? (isCz ? "Příprava" : "Preparing") : isCz ? "Hotovo" : "Ready"}
                           </div>
                         </div>
                         <div className="shrink-0">{item.totalCzk} Kč</div>
@@ -595,7 +607,7 @@ export default function CartPage() {
 
                   {openTab.stage.phase === "ready" ? (
                     <div className="mt-3 rounded-xl border border-emerald-400/15 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100/90">
-                      Your order is ready. The waiter is bringing it to your table.
+                      {isCz ? "Vaše objednávka je hotová. Číšník ji nese ke stolu." : "Your order is ready. The waiter is bringing it to your table."}
                     </div>
                   ) : null}
                 </>
@@ -603,18 +615,20 @@ export default function CartPage() {
 
               {openTab.cancelledCount > 0 ? (
                 <div className="mt-3 rounded-xl border border-red-400/15 bg-red-500/6 px-3 py-2 text-[11px] text-red-200/85">
-                  {openTab.cancelledCount} cancelled {openTab.cancelledCount === 1 ? "group" : "groups"} not included
+                  {isCz
+                    ? `${openTab.cancelledCount} ${openTab.cancelledCount === 1 ? "zrušená skupina není" : openTab.cancelledCount >= 2 && openTab.cancelledCount <= 4 ? "zrušené skupiny nejsou" : "zrušených skupin není"} zahrnuta`
+                    : `${openTab.cancelledCount} cancelled ${openTab.cancelledCount === 1 ? "group" : "groups"} not included`}
                 </div>
               ) : null}
 
               <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3">
-                <div className="text-[11px] uppercase tracking-[0.14em] text-white/38">Due now</div>
+                <div className="text-[11px] uppercase tracking-[0.14em] text-white/38">{isCz ? "K úhradě nyní" : "Due now"}</div>
                 <div className="text-sm font-semibold text-white">{feed?.totals.dueCzk ?? openTab.totalCzk} Kč</div>
               </div>
 
               {!effectivePendingPayment && latestPendingPayment ? (
                 <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-white/65">
-                  Another guest at the table is currently handling a payment request.
+                  {isCz ? "Jiný host u stolu právě řeší žádost o platbu." : "Another guest at the table is currently handling a payment request."}
                 </div>
               ) : null}
             </div>
@@ -630,20 +644,26 @@ export default function CartPage() {
               {activeOrderRequest ? (
                 <>
                   <div className="font-semibold">
-                    {activeOrderRequest.status === "ACKED" ? "Your order request has been accepted" : "Your order request has been accepted"}
+                    {activeOrderRequest.status === "ACKED"
+                      ? isCz
+                        ? "Váš požadavek byl přijat"
+                        : "Your request has been accepted"
+                      : isCz
+                      ? "Váš požadavek byl přijat"
+                      : "Your request has been accepted"}
                   </div>
                   <div className="mt-1 text-xs text-emerald-100/75">
-                    Your order request has been accepted. The waiter is on the way.
+                    {isCz ? "Váš požadavek byl přijat. Číšník je na cestě." : "Your request has been accepted. The waiter is on the way."}
                   </div>
                 </>
               ) : (
                 <div className="flex flex-col items-center gap-4 py-2 text-center">
-                  <div>Your order will appear here.</div>
+                  <div>{isCz ? "Vaše objednávka se zobrazí zde." : "Your order will appear here."}</div>
                   <Link
                     href="/menu"
                     className="inline-flex h-11 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-black"
                   >
-                    Go to menu
+                    {isCz ? "Přejít do menu" : "Go to menu"}
                   </Link>
                 </div>
               )}

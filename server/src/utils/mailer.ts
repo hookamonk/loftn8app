@@ -40,7 +40,7 @@ export async function sendGuestOtpEmail(params: {
   purpose?: "verification" | "password-reset";
 }) {
   const transporter = getTransport();
-  const appName = env.SMTP_FROM_NAME || "LoftN8";
+  const appName = env.SMTP_FROM_NAME || "LOFT№8";
   const guestName = String(params.guestName ?? "").trim();
   const greeting = guestName ? `Hello, ${guestName}` : "Hello";
   const purpose = params.purpose ?? "verification";

@@ -3,17 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { hasVenueSelection } from "@/lib/venue";
 import { useAuth } from "@/providers/auth";
 import { useSession } from "@/providers/session";
 import { useToast } from "@/providers/toast";
+import { useI18n } from "@/providers/i18n";
 import type { AccountLoyaltyEntry, AccountOverviewResponse, AccountReceipt } from "@/types";
 
 type CabinetScreen = "home" | "account" | "bonuses" | "receipts" | "password";
 
-function formatDate(value: string | null) {
+function formatDate(value: string | null, locale: string) {
   if (!value) return "—";
-  return new Date(value).toLocaleString([], {
+  return new Date(value).toLocaleString(locale, {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -22,9 +22,9 @@ function formatDate(value: string | null) {
   });
 }
 
-function formatDateShort(value: string | null) {
+function formatDateShort(value: string | null, locale: string) {
   if (!value) return "—";
-  return new Date(value).toLocaleDateString([], {
+  return new Date(value).toLocaleDateString(locale, {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -64,6 +64,7 @@ function userInitials(name: string) {
 
 export default function CabinetPage() {
   const router = useRouter();
+  const { isCz, locale } = useI18n();
   const { push } = useToast();
   const { me, loading, refresh } = useAuth();
   const { tableCode } = useSession();
@@ -107,7 +108,7 @@ export default function CabinetPage() {
         if (!cancelled) {
           push({
             kind: "error",
-            title: "Error",
+            title: isCz ? "Chyba" : "Error",
             message: humanizeAccountError(error?.message ?? "Failed to load cabinet"),
           });
         }
@@ -149,18 +150,13 @@ export default function CabinetPage() {
     passwordsMatch;
 
   const memberSince = useMemo(
-    () => (overview ? formatDateShort(overview.user.createdAt) : "—"),
-    [overview]
+    () => (overview ? formatDateShort(overview.user.createdAt, locale) : "—"),
+    [locale, overview]
   );
 
   const openApp = () => {
     if (tableCode) {
       router.push("/menu");
-      return;
-    }
-
-    if (hasVenueSelection()) {
-      router.push("/table");
       return;
     }
 
@@ -186,12 +182,12 @@ export default function CabinetPage() {
           : current
       );
       await refresh();
-      push({ kind: "success", title: "Saved", message: "Your profile was updated." });
+      push({ kind: "success", title: isCz ? "Uloženo" : "Saved", message: isCz ? "Váš profil byl aktualizován." : "Your profile was updated." });
       setScreen("home");
     } catch (error: any) {
       push({
         kind: "error",
-        title: "Error",
+        title: isCz ? "Chyba" : "Error",
         message: humanizeAccountError(error?.message ?? "Failed to save profile"),
       });
     } finally {
@@ -217,12 +213,12 @@ export default function CabinetPage() {
         nextPassword: "",
         repeatPassword: "",
       });
-      push({ kind: "success", title: "Password updated", message: "Your new password is now active." });
+      push({ kind: "success", title: isCz ? "Heslo změněno" : "Password updated", message: isCz ? "Vaše nové heslo je nyní aktivní." : "Your new password is now active." });
       setScreen("home");
     } catch (error: any) {
       push({
         kind: "error",
-        title: "Error",
+        title: isCz ? "Chyba" : "Error",
         message: humanizeAccountError(error?.message ?? "Failed to change password"),
       });
     } finally {
@@ -234,7 +230,7 @@ export default function CabinetPage() {
     return (
       <main className="mx-auto max-w-md px-4 py-5">
         <div className="rounded-[28px] border border-white/10 bg-white/5 p-5 text-sm text-white/65 backdrop-blur-xl">
-          Loading your cabinet…
+          {isCz ? "Načítám váš osobní účet…" : "Loading your cabinet…"}
         </div>
       </main>
     );
@@ -246,8 +242,9 @@ export default function CabinetPage() {
         <CabinetHome
           overview={overview}
           memberSince={memberSince}
+          isCz={isCz}
           onOpenSite={() => {
-            window.location.href = "https://loftn8.com";
+            window.location.href = "https://loftn8.cz";
           }}
           onOpenApp={openApp}
           onOpenScreen={setScreen}
@@ -256,19 +253,19 @@ export default function CabinetPage() {
 
       {screen === "account" ? (
         <SectionScreen
-          title="Account information"
-          subtitle="Personal information used in the app and personal cabinet."
+          title={isCz ? "Informace o účtu" : "Account information"}
+          subtitle={isCz ? "Osobní údaje používané v aplikaci a v osobním účtu." : "Personal information used in the app and personal cabinet."}
           onBack={() => setScreen("home")}
         >
           <div className="space-y-3">
             <ProfilePreview overview={overview} />
             <InputField
-              label="Name"
+              label={isCz ? "Jméno" : "Name"}
               value={profileForm.name}
               onChange={(value) => setProfileForm((current) => ({ ...current, name: value }))}
             />
             <InputField
-              label="Phone"
+              label={isCz ? "Telefon" : "Phone"}
               value={profileForm.phone}
               onChange={(value) => setProfileForm((current) => ({ ...current, phone: value }))}
             />
@@ -278,10 +275,10 @@ export default function CabinetPage() {
               onChange={(value) => setProfileForm((current) => ({ ...current, email: value }))}
             />
             <PrimaryButton disabled={!canSaveProfile} onClick={saveProfile}>
-              {savingProfile ? "Saving…" : "Save changes"}
+              {savingProfile ? (isCz ? "Ukládám…" : "Saving…") : isCz ? "Uložit změny" : "Save changes"}
             </PrimaryButton>
             <SecondaryButton onClick={() => setScreen("password")}>
-              Reset password
+              {isCz ? "Obnovit heslo" : "Reset password"}
             </SecondaryButton>
           </div>
         </SectionScreen>
@@ -289,16 +286,16 @@ export default function CabinetPage() {
 
       {screen === "bonuses" ? (
         <SectionScreen
-          title="Bonuses"
-          subtitle="Available balance and personal loyalty history."
+          title={isCz ? "Bonusy" : "Bonuses"}
+          subtitle={isCz ? "Dostupný zůstatek a osobní historie cashbacku." : "Available balance and personal loyalty history."}
           onBack={() => setScreen("home")}
         >
           <div className="space-y-3">
-            <BonusSummary overview={overview} />
+            <BonusSummary overview={overview} isCz={isCz} />
             {overview.loyalty.history.length ? (
-              overview.loyalty.history.map((entry) => <LoyaltyRow key={entry.id} entry={entry} />)
+              overview.loyalty.history.map((entry) => <LoyaltyRow key={entry.id} entry={entry} isCz={isCz} locale={locale} />)
             ) : (
-              <EmptyCard text="Your loyalty history will appear after the first confirmed payment." />
+              <EmptyCard text={isCz ? "Historie cashbacku se objeví po první potvrzené platbě." : "Your loyalty history will appear after the first confirmed payment."} />
             )}
           </div>
         </SectionScreen>
@@ -306,8 +303,8 @@ export default function CabinetPage() {
 
       {screen === "receipts" ? (
         <SectionScreen
-          title="Receipts"
-          subtitle="All confirmed receipts linked to your account."
+          title={isCz ? "Účtenky" : "Receipts"}
+          subtitle={isCz ? "Všechny potvrzené účtenky spojené s vaším účtem." : "All confirmed receipts linked to your account."}
           onBack={() => setScreen("home")}
         >
           <div className="space-y-3">
@@ -317,13 +314,15 @@ export default function CabinetPage() {
                   key={receipt.id}
                   receipt={receipt}
                   open={expandedReceiptId === receipt.id}
+                  isCz={isCz}
+                  locale={locale}
                   onToggle={() =>
                     setExpandedReceiptId((current) => (current === receipt.id ? null : receipt.id))
                   }
                 />
               ))
             ) : (
-              <EmptyCard text="Confirmed receipts will appear here after payment is accepted by staff." />
+              <EmptyCard text={isCz ? "Potvrzené účtenky se zde objeví po schválení platby obsluhou." : "Confirmed receipts will appear here after payment is accepted by staff."} />
             )}
           </div>
         </SectionScreen>
@@ -331,32 +330,32 @@ export default function CabinetPage() {
 
       {screen === "password" ? (
         <SectionScreen
-          title="Reset password"
-          subtitle="Change the password used in both the app and the personal cabinet."
+          title={isCz ? "Obnovit heslo" : "Reset password"}
+          subtitle={isCz ? "Změňte heslo používané v aplikaci i v osobním účtu." : "Change the password used in both the app and the personal cabinet."}
           onBack={() => setScreen("account")}
         >
           <div className="space-y-3">
             <InputField
-              label="Current password"
+              label={isCz ? "Aktuální heslo" : "Current password"}
               value={passwordForm.currentPassword}
               type="password"
               onChange={(value) => setPasswordForm((current) => ({ ...current, currentPassword: value }))}
             />
             <InputField
-              label="New password"
+              label={isCz ? "Nové heslo" : "New password"}
               value={passwordForm.nextPassword}
               type="password"
               onChange={(value) => setPasswordForm((current) => ({ ...current, nextPassword: value }))}
             />
             <InputField
-              label="Repeat new password"
+              label={isCz ? "Zopakujte nové heslo" : "Repeat new password"}
               value={passwordForm.repeatPassword}
               type="password"
               onChange={(value) => setPasswordForm((current) => ({ ...current, repeatPassword: value }))}
             />
             {!passwordsMatch && passwordForm.repeatPassword ? (
               <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-xs text-red-200">
-                Passwords do not match.
+                {isCz ? "Hesla se neshodují." : "Passwords do not match."}
               </div>
             ) : null}
             <PrimaryButton disabled={!canChangePassword} onClick={changePassword}>
@@ -372,12 +371,14 @@ export default function CabinetPage() {
 function CabinetHome({
   overview,
   memberSince,
+  isCz,
   onOpenSite,
   onOpenApp,
   onOpenScreen,
 }: {
   overview: AccountOverviewResponse;
   memberSince: string;
+  isCz: boolean;
   onOpenSite: () => void;
   onOpenApp: () => void;
   onOpenScreen: (screen: CabinetScreen) => void;
@@ -393,42 +394,45 @@ function CabinetHome({
           <div className="min-w-0">
             <div className="truncate text-xl font-semibold text-white">{overview.user.name}</div>
             <div className="mt-1 truncate text-sm text-white/55">{overview.user.email}</div>
-            <div className="mt-1 text-xs text-white/42">Member since {memberSince}</div>
+            <div className="mt-1 text-xs text-white/42">{isCz ? `Členem od ${memberSince}` : `Member since ${memberSince}`}</div>
           </div>
         </div>
 
         <div className="mt-5 grid grid-cols-2 gap-3">
-          <ActionButton label="Site" description="Main website" onClick={onOpenSite} />
-          <ActionButton label="App" description="Open app flow" emphasized onClick={onOpenApp} />
+          <ActionButton label={isCz ? "Web" : "Site"} description={isCz ? "Hlavní web" : "Main website"} onClick={onOpenSite} />
+          <ActionButton label="App" description={isCz ? "Otevřít aplikaci" : "Open app flow"} emphasized onClick={onOpenApp} />
         </div>
       </div>
 
       <div className="mt-4">
         <HighlightCard
-          label="Available cashback"
+          label={isCz ? "Dostupný cashback" : "Available cashback"}
           value={`${overview.loyalty.availableCzk} Kč`}
           accent="from-emerald-500/30"
         />
       </div>
 
-      <div className="mt-5 text-xs uppercase tracking-[0.2em] text-white/35">Sections</div>
+      <div className="mt-5 text-xs uppercase tracking-[0.2em] text-white/35">{isCz ? "Sekce" : "Sections"}</div>
       <div className="mt-3 space-y-3">
         <MenuRow
-          title="Account information"
-          subtitle="Name, phone number and email"
+          title={isCz ? "Informace o účtu" : "Account information"}
+          subtitle={isCz ? "Jméno, telefon a e-mail" : "Name, phone number and email"}
           value={overview.user.phone}
+          isCz={isCz}
           onClick={() => onOpenScreen("account")}
         />
         <MenuRow
-          title="Bonuses"
-          subtitle="Balance and loyalty history"
+          title={isCz ? "Bonusy" : "Bonuses"}
+          subtitle={isCz ? "Zůstatek a historie cashbacku" : "Balance and loyalty history"}
           value={`${overview.loyalty.availableCzk} Kč`}
+          isCz={isCz}
           onClick={() => onOpenScreen("bonuses")}
         />
         <MenuRow
-          title="Receipt history"
-          subtitle="Confirmed bills and order details"
+          title={isCz ? "Historie účtenek" : "Receipt history"}
+          subtitle={isCz ? "Potvrzené účty a detaily objednávek" : "Confirmed bills and order details"}
           value={`${overview.receipts.length}`}
+          isCz={isCz}
           onClick={() => onOpenScreen("receipts")}
         />
       </div>
@@ -483,12 +487,12 @@ function ProfilePreview({ overview }: { overview: AccountOverviewResponse }) {
   );
 }
 
-function BonusSummary({ overview }: { overview: AccountOverviewResponse }) {
+function BonusSummary({ overview, isCz }: { overview: AccountOverviewResponse; isCz: boolean }) {
   return (
     <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-4">
       <div className="grid grid-cols-2 gap-3">
-        <MetricCard label="Available" value={`${overview.loyalty.availableCzk} Kč`} />
-        <MetricCard label="Pending" value={`${overview.loyalty.pendingCzk} Kč`} />
+        <MetricCard label={isCz ? "Dostupné" : "Available"} value={`${overview.loyalty.availableCzk} Kč`} />
+        <MetricCard label={isCz ? "Čeká" : "Pending"} value={`${overview.loyalty.pendingCzk} Kč`} />
       </div>
     </div>
   );
@@ -541,11 +545,13 @@ function MenuRow({
   title,
   subtitle,
   value,
+  isCz,
   onClick,
 }: {
   title: string;
   subtitle: string;
   value: string;
+  isCz: boolean;
   onClick: () => void;
 }) {
   return (
@@ -559,7 +565,7 @@ function MenuRow({
       </div>
       <div className="shrink-0 text-right">
         <div className="text-sm font-semibold text-white">{value}</div>
-        <div className="mt-1 text-[11px] text-white/35">Open</div>
+        <div className="mt-1 text-[11px] text-white/35">{isCz ? "Otevřít" : "Open"}</div>
       </div>
     </button>
   );
@@ -635,14 +641,14 @@ function SecondaryButton({
   );
 }
 
-function LoyaltyRow({ entry }: { entry: AccountLoyaltyEntry }) {
+function LoyaltyRow({ entry, isCz, locale }: { entry: AccountLoyaltyEntry; isCz: boolean; locale: string }) {
   return (
     <div className="rounded-[26px] border border-white/10 bg-white/[0.04] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-white">{entry.venue.name}</div>
           <div className="mt-1 text-xs text-white/48">
-            {formatDate(entry.createdAt)} • Unlock {formatDate(entry.availableAt)}
+            {formatDate(entry.createdAt, locale)} • {isCz ? "Odemčení" : "Unlock"} {formatDate(entry.availableAt, locale)}
           </div>
         </div>
         <div className="text-right">
@@ -654,10 +660,10 @@ function LoyaltyRow({ entry }: { entry: AccountLoyaltyEntry }) {
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-white/58">
-        <div>Receipt base: {entry.baseAmountCzk} Kč</div>
-        <div>Remaining: {entry.remainingCzk} Kč</div>
-        <div>Redeemed: {entry.redeemedAmountCzk} Kč</div>
-        <div>Venue: {entry.venue.slug}</div>
+        <div>{isCz ? "Základ účtenky" : "Receipt base"}: {entry.baseAmountCzk} Kč</div>
+        <div>{isCz ? "Zbývá" : "Remaining"}: {entry.remainingCzk} Kč</div>
+        <div>{isCz ? "Uplatněno" : "Redeemed"}: {entry.redeemedAmountCzk} Kč</div>
+        <div>{isCz ? "Pobočka" : "Venue"}: {entry.venue.slug}</div>
       </div>
     </div>
   );
@@ -666,10 +672,14 @@ function LoyaltyRow({ entry }: { entry: AccountLoyaltyEntry }) {
 function ReceiptCard({
   receipt,
   open,
+  isCz,
+  locale,
   onToggle,
 }: {
   receipt: AccountReceipt;
   open: boolean;
+  isCz: boolean;
+  locale: string;
   onToggle: () => void;
 }) {
   return (
@@ -678,13 +688,13 @@ function ReceiptCard({
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-white">{receipt.venue.name}</div>
           <div className="mt-1 text-xs text-white/48">
-            {formatDate(receipt.closedAt)} • {receipt.methodLabel} • {receipt.itemCount} items
+            {formatDate(receipt.closedAt, locale)} • {receipt.methodLabel} • {receipt.itemCount} {isCz ? "položek" : "items"}
           </div>
         </div>
 
         <div className="shrink-0 text-right">
           <div className="text-lg font-semibold text-white">{receipt.amountCzk} Kč</div>
-          <div className="mt-1 text-[11px] text-white/35">{open ? "Hide" : "Details"}</div>
+          <div className="mt-1 text-[11px] text-white/35">{open ? (isCz ? "Skrýt" : "Hide") : isCz ? "Detail" : "Details"}</div>
         </div>
       </button>
 
@@ -705,9 +715,9 @@ function ReceiptCard({
           </div>
 
           <div className="mt-4 space-y-1 text-xs text-white/58">
-            <div>Bill total: {receipt.billTotalCzk} Kč</div>
-            <div>Loyalty used: {receipt.loyaltyAppliedCzk} Kč</div>
-            <div>Cashback earned: {receipt.cashbackEarnedCzk} Kč</div>
+            <div>{isCz ? "Celkem účet" : "Bill total"}: {receipt.billTotalCzk} Kč</div>
+            <div>{isCz ? "Použitý cashback" : "Loyalty used"}: {receipt.loyaltyAppliedCzk} Kč</div>
+            <div>{isCz ? "Získaný cashback" : "Cashback earned"}: {receipt.cashbackEarnedCzk} Kč</div>
           </div>
         </div>
       ) : null}

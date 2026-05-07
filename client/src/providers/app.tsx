@@ -8,6 +8,8 @@ import { CartProvider } from "./cart";
 import { ToastProvider } from "./toast";
 import { GuestFeedProvider } from "./guestFeed";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
+import { I18nProvider } from "./i18n";
+import { LanguageSwitch } from "@/components/LanguageSwitch";
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -18,20 +20,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   if (isStaffSurface) {
-    return <ToastProvider>{children}</ToastProvider>;
+    return (
+      <I18nProvider>
+        <ToastProvider>
+          {children}
+        </ToastProvider>
+      </I18nProvider>
+    );
   }
 
   return (
-    <SessionProvider>
-      <AuthProvider>
-        <CartProvider>
-          <ToastProvider>
-            <GuestFeedProvider>
-              {children}
-            </GuestFeedProvider>
-          </ToastProvider>
-        </CartProvider>
-      </AuthProvider>
-    </SessionProvider>
+    <I18nProvider>
+      <SessionProvider>
+        <AuthProvider>
+          <CartProvider>
+            <ToastProvider>
+              <GuestFeedProvider>
+                <LanguageSwitch />
+                {children}
+              </GuestFeedProvider>
+            </ToastProvider>
+          </CartProvider>
+        </AuthProvider>
+      </SessionProvider>
+    </I18nProvider>
   );
 }

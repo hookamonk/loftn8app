@@ -1,13 +1,13 @@
 import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
-  const appName = "LOFT №8";
+  const appName = "LOFT№8";
 
   return {
     id: "/",
     name: appName,
     short_name: appName,
-    description: "LOFT №8 guest and staff web app with push notifications.",
+    description: "LOFT№8 guest and staff web app with push notifications.",
     start_url: "/staff/login",
     scope: "/",
     display: "standalone",

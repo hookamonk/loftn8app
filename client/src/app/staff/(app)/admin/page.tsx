@@ -527,7 +527,7 @@ export default function StaffAdminPage() {
         <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-              Loft N8 Analytics
+              LOFT№8 Analytics
             </div>
             <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
               Админ-панель

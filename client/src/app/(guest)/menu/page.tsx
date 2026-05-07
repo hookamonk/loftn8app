@@ -8,6 +8,7 @@ import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
 import { getVenueName } from "@/lib/venue";
+import { useI18n } from "@/providers/i18n";
 
 function Pill({
   active,
@@ -38,10 +39,14 @@ function OrderButton({
   disabled,
   active,
   onClick,
+  labelRequested,
+  labelOrder,
 }: {
   disabled?: boolean;
   active?: boolean;
   onClick: () => void;
+  labelRequested: string;
+  labelOrder: string;
 }) {
   return (
     <button
@@ -57,16 +62,10 @@ function OrderButton({
       ].join(" ")}
       onClick={onClick}
     >
-      {active ? "Requested" : "Order"}
+      {active ? labelRequested : labelOrder}
     </button>
   );
 }
-
-const SECTION_LABEL: Record<MenuSection, string> = {
-  DISHES: "Dishes",
-  DRINKS: "Drinks",
-  HOOKAH: "Hookah",
-};
 
 function firstSection(categories: MenuCategory[]): MenuSection {
   return (categories[0]?.section as MenuSection) ?? "DISHES";
@@ -137,7 +136,8 @@ export default function Page() {
 
 function MenuPage() {
   const router = useRouter();
-  const venueName = getVenueName();
+  const { isCz, ready } = useI18n();
+  const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const [data, setData] = useState<MenuResponse | null>(null);
   const [activeSection, setActiveSection] = useState<MenuSection>("DISHES");
   const [activeCatId, setActiveCatId] = useState<number | null>(null);
@@ -148,6 +148,14 @@ function MenuPage() {
 
   const { push } = useToast();
   const { feed, refresh } = useGuestFeed();
+  const sectionLabel: Record<MenuSection, string> = useMemo(
+    () => ({
+      DISHES: isCz ? "Jídlo" : "Dishes",
+      DRINKS: isCz ? "Nápoje" : "Drinks",
+      HOOKAH: isCz ? "Vodní dýmka" : "Hookah",
+    }),
+    [isCz]
+  );
 
   const latestOrderRequest = feed?.orderRequest ?? null;
   const activeOrderRequest =
@@ -181,12 +189,12 @@ function MenuPage() {
         applyMenu(m);
       } catch (e: any) {
         if (!cached) {
-          setErr(e?.message ?? "Failed to load menu");
+          setErr(e?.message ?? (isCz ? "Menu se nepodařilo načíst" : "Failed to load menu"));
         }
       }
     };
     void load();
-  }, [venueName]);
+  }, [isCz, venueName]);
 
   const cats = useMemo(() => data?.categories ?? [], [data]);
 
@@ -292,17 +300,21 @@ function MenuPage() {
 
       push({
         kind: "success",
-        title: "Order requested",
+        title: isCz ? "Výzva odeslána" : "Call sent",
         message: item
-          ? `${item.name}: a waiter is on the way to your table.`
+          ? isCz
+            ? `${item.name}: číšník jde k vašemu stolu.`
+            : `${item.name}: a waiter is on the way to your table.`
+          : isCz
+          ? "Číšník jde k vašemu stolu."
           : "A waiter is on the way to your table.",
       });
       router.push("/cart");
     } catch (e: any) {
       push({
         kind: "error",
-        title: "Request error",
-        message: e?.message ?? "Failed",
+        title: isCz ? "Chyba požadavku" : "Request error",
+        message: e?.message ?? (isCz ? "Požadavek se nepodařilo odeslat" : "Failed"),
       });
       setRequestedItemId(null);
     } finally {
@@ -317,13 +329,13 @@ function MenuPage() {
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
         <div className="mb-4">
           <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName}</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
+          <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Menu" : "Menu"}</h1>
         </div>
 
         <div className="rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
           <input
             className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/40 outline-none"
-            placeholder="Search the menu…"
+            placeholder={isCz ? "Hledat v menu…" : "Search the menu…"}
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -346,7 +358,7 @@ function MenuPage() {
                     setQ("");
                   }}
                 >
-                  {SECTION_LABEL[s]}
+                  {sectionLabel[s]}
                 </Pill>
               ))}
           </div>
@@ -398,13 +410,13 @@ function MenuPage() {
 
         <div className="mt-4 space-y-3">
           {isSearching ? (
-            <div className="px-1 text-xs text-white/55">Found: {filteredItems.length}</div>
+            <div className="px-1 text-xs text-white/55">{isCz ? `Nalezeno: ${filteredItems.length}` : `Found: ${filteredItems.length}`}</div>
           ) : null}
 
           {filteredItems.map((i) => {
             const meta =
               isSearching && i.__catName && i.__section
-                ? `${SECTION_LABEL[i.__section]} · ${i.__catName}`
+                ? `${sectionLabel[i.__section]} · ${i.__catName}`
                 : null;
 
             return (
@@ -428,7 +440,7 @@ function MenuPage() {
 
                     {!i.imageUrl ? (
                       <div className="grid h-full w-full place-items-center text-[10px] font-semibold tracking-[0.18em] text-white/45">
-                        LOFT №8
+                        LOFT№8
                       </div>
                     ) : null}
                   </div>
@@ -451,6 +463,8 @@ function MenuPage() {
                       <OrderButton
                         active={requestedItemId === i.id && requesting}
                         disabled={requesting || orderRequestActive}
+                        labelRequested={isCz ? "Odesláno" : "Requested"}
+                        labelOrder={isCz ? "Zavolat" : "Call"}
                         onClick={() => void requestOrder(i)}
                       />
                     </div>
@@ -462,7 +476,7 @@ function MenuPage() {
 
           {filteredItems.length === 0 ? (
             <div className="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
-              Nothing found.
+              {isCz ? "Nic nenalezeno." : "Nothing found."}
             </div>
           ) : null}
         </div>

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useCart } from "@/providers/cart";
 import { useAuth } from "@/providers/auth";
+import { useI18n } from "@/providers/i18n";
 
 function Icon({
   name,
@@ -110,6 +111,7 @@ function Item({
 export function BottomNav() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+  const { isCz } = useI18n();
 
   const { me, loading } = useAuth();
   const isAuthed = !!me?.authenticated;
@@ -124,19 +126,19 @@ export function BottomNav() {
   const nav = useMemo(() => {
     if (!loading && !isAuthed) {
       return [
-        { href: "/menu", label: "Menu", icon: "menu" as const },
-        { href: "/call", label: "Staff", icon: "call" as const },
-        { href: "/auth", label: "Sign in", icon: "profile" as const },
+        { href: "/menu", label: isCz ? "Menu" : "Menu", icon: "menu" as const },
+        { href: "/call", label: isCz ? "Obsluha" : "Staff", icon: "call" as const },
+        { href: "/auth", label: isCz ? "Přihlášení" : "Sign in", icon: "profile" as const },
       ];
     }
 
     return [
-      { href: "/menu", label: "Menu", icon: "menu" as const },
-      { href: "/cart", label: "Cart", icon: "cart" as const, badge: count || undefined },
-      { href: "/call", label: "Staff", icon: "call" as const },
-      { href: "/profile", label: "Profile", icon: "profile" as const },
+      { href: "/menu", label: isCz ? "Menu" : "Menu", icon: "menu" as const },
+      { href: "/cart", label: isCz ? "Účet" : "Cart", icon: "cart" as const, badge: count || undefined },
+      { href: "/call", label: isCz ? "Obsluha" : "Staff", icon: "call" as const },
+      { href: "/profile", label: isCz ? "Profil" : "Profile", icon: "profile" as const },
     ];
-  }, [loading, isAuthed, count]);
+  }, [loading, isAuthed, count, isCz]);
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 pb-4">

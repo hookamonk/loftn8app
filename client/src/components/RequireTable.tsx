@@ -3,10 +3,12 @@
 import React, { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSession } from "@/providers/session";
+import { useI18n } from "@/providers/i18n";
 
 export function RequireTable({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const { isCz } = useI18n();
 
   const { tableCode, sessionReady, sessionError } = useSession();
 
@@ -15,7 +17,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
 
     // не редиректим мгновенно, пока provider ещё восстанавливает session
     if (!tableCode && sessionError) {
-      router.replace("/table");
+      router.replace("/");
     }
   }, [sessionReady, tableCode, sessionError, router]);
 
@@ -28,14 +30,16 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
     return (
       <div className="mx-auto max-w-md p-4">
         <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
-          <div className="text-sm font-semibold text-white">Table required</div>
-          <div className="mt-2 text-xs text-white/70">Redirecting to table selection…</div>
+          <div className="text-sm font-semibold text-white">{isCz ? "Je třeba vybrat stůl" : "Table required"}</div>
+          <div className="mt-2 text-xs text-white/70">
+            {isCz ? "Přesměrování na skenování QR…" : "Redirecting to QR scan…"}
+          </div>
 
           <button
             className="mt-3 w-full rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-black"
-            onClick={() => router.replace("/table")}
+            onClick={() => router.replace("/")}
           >
-            Select table
+            {isCz ? "Naskenovat QR" : "Scan QR"}
           </button>
         </div>
       </div>
@@ -49,11 +53,13 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
         <div className="flex flex-col items-center">
           <img
             src="/logo.svg"
-            alt="Loft N8"
+            alt="LOFT№8"
             className="h-12 w-12 animate-pulse opacity-90"
           />
-          <div className="mt-3 text-sm font-medium text-white/85">Loading</div>
-          <div className="mt-1 text-xs text-white/50">Restoring your table session…</div>
+          <div className="mt-3 text-sm font-medium text-white/85">{isCz ? "Načítání" : "Loading"}</div>
+          <div className="mt-1 text-xs text-white/50">
+            {isCz ? "Obnovujeme relaci vašeho stolu…" : "Restoring your table session…"}
+          </div>
         </div>
       </div>
     </div>

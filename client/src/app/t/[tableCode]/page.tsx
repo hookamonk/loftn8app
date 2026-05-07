@@ -91,7 +91,7 @@ export default function TableEntry() {
         <div className="flex flex-col items-center">
           <img
             src="/logo.svg"
-            alt="Loft N8"
+            alt="LOFT№8"
             className="h-12 w-12 animate-pulse opacity-90"
           />
           <div className="mt-3 text-sm font-medium text-white/85">Loading</div>

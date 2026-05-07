@@ -10,6 +10,7 @@ import {
   type OnboardingStepId,
   writeGuestOnboardingState,
 } from "@/lib/guestOnboarding";
+import { useI18n } from "@/providers/i18n";
 
 type OnboardingStep = {
   id: OnboardingStepId;
@@ -19,31 +20,8 @@ type OnboardingStep = {
   accent: string;
 };
 
-const STEPS: OnboardingStep[] = [
-  {
-    id: "menu",
-    path: "/menu",
-    title: "Choose dishes and send the request",
-    body: "Open the categories, choose your dishes and tap Order. The waiter will see the request for your table immediately.",
-    accent: "Step 1",
-  },
-  {
-    id: "cart",
-    path: "/cart",
-    title: "Track your order here",
-    body: "Your bill, order status and payment request will appear here as soon as the waiter saves the order for your table.",
-    accent: "Step 2",
-  },
-  {
-    id: "call",
-    path: "/call",
-    title: "Call staff in one tap",
-    body: "Use this screen to call a waiter, a hookah specialist or send a payment request without extra explanation.",
-    accent: "Step 3",
-  },
-];
-
 export function GuestOnboarding() {
+  const { isCz } = useI18n();
   const pathname = usePathname();
   const router = useRouter();
   const [state, setState] = useState<OnboardingState>({
@@ -51,6 +29,39 @@ export function GuestOnboarding() {
     completed: false,
   });
   const [ready, setReady] = useState(false);
+
+  const steps = useMemo<OnboardingStep[]>(
+    () => [
+      {
+        id: "menu",
+        path: "/menu",
+        title: isCz ? "Vyberte jídlo a odešlete požadavek" : "Choose dishes and send the request",
+        body: isCz
+          ? "Otevřete kategorie, vyberte si jídlo a klepněte na Zavolat. Obsluha váš požadavek uvidí okamžitě."
+          : "Open the categories, choose your dishes and tap Call. The waiter will see the request for your table immediately.",
+        accent: isCz ? "Krok 1" : "Step 1",
+      },
+      {
+        id: "cart",
+        path: "/cart",
+        title: isCz ? "Sledujte svou objednávku zde" : "Track your order here",
+        body: isCz
+          ? "Váš účet, stav objednávky a žádost o platbu se zobrazí zde, jakmile číšník uloží objednávku ke stolu."
+          : "Your bill, order status and payment request will appear here as soon as the waiter saves the order for your table.",
+        accent: isCz ? "Krok 2" : "Step 2",
+      },
+      {
+        id: "call",
+        path: "/call",
+        title: isCz ? "Přivolejte obsluhu jedním klepnutím" : "Call staff in one tap",
+        body: isCz
+          ? "Na této obrazovce můžete přivolat číšníka, specialistu na vodní dýmku nebo odeslat žádost o platbu bez dalšího vysvětlování."
+          : "Use this screen to call a waiter, a hookah specialist or send a payment request without extra explanation.",
+        accent: isCz ? "Krok 3" : "Step 3",
+      },
+    ],
+    [isCz]
+  );
 
   useEffect(() => {
     setState(readGuestOnboardingState());
@@ -80,13 +91,13 @@ export function GuestOnboarding() {
   }, [pathname, ready]);
 
   const activeStep = useMemo(
-    () => STEPS.find((step) => step.id === state.activeStep) ?? null,
-    [state.activeStep]
+    () => steps.find((step) => step.id === state.activeStep) ?? null,
+    [state.activeStep, steps]
   );
 
   const activeIndex = useMemo(
-    () => (activeStep ? STEPS.findIndex((step) => step.id === activeStep.id) : -1),
-    [activeStep]
+    () => (activeStep ? steps.findIndex((step) => step.id === activeStep.id) : -1),
+    [activeStep, steps]
   );
 
   if (!ready || state.completed || !activeStep) return null;
@@ -101,7 +112,7 @@ export function GuestOnboarding() {
   };
 
   const goNext = () => {
-    const nextStep = STEPS[activeIndex + 1];
+    const nextStep = steps[activeIndex + 1];
     if (!nextStep) {
       close();
       return;
@@ -123,7 +134,7 @@ export function GuestOnboarding() {
             <div className="h-1 w-full bg-white/6">
               <div
                 className="h-full rounded-full bg-white transition-all"
-                style={{ width: `${((activeIndex + 1) / STEPS.length) * 100}%` }}
+                style={{ width: `${((activeIndex + 1) / steps.length) * 100}%` }}
               />
             </div>
 
@@ -146,13 +157,13 @@ export function GuestOnboarding() {
                   onClick={close}
                   className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-white/65 transition hover:bg-white/6 hover:text-white"
                 >
-                  Skip
+                  {isCz ? "Přeskočit" : "Skip"}
                 </button>
               </div>
 
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  {STEPS.map((step, index) => (
+                  {steps.map((step, index) => (
                     <div
                       key={step.id}
                       className={[
@@ -168,7 +179,7 @@ export function GuestOnboarding() {
                   onClick={goNext}
                   className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-white/92"
                 >
-                  {activeIndex === STEPS.length - 1 ? "Got it" : "Next"}
+                  {activeIndex === steps.length - 1 ? (isCz ? "Rozumím" : "Got it") : isCz ? "Další" : "Next"}
                 </button>
               </div>
             </div>

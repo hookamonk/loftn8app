@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useAuth } from "@/providers/auth";
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { useI18n } from "@/providers/i18n";
 
 const KEY = "authGateDismissed_v1";
 
@@ -24,6 +25,7 @@ export function AuthGateSheet() {
   const { loading, me } = useAuth();
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const { isCz } = useI18n();
 
   useEffect(() => {
     if (pathname === "/auth") return setOpen(false);
@@ -39,9 +41,13 @@ export function AuthGateSheet() {
       <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#0d0d0d] p-4 shadow-[0_30px_120px_rgba(0,0,0,0.7)]">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-base font-bold text-white">Sign in and get bonuses</div>
+            <div className="text-base font-bold text-white">
+              {isCz ? "Přihlaste se a získejte bonusy" : "Sign in and get bonuses"}
+            </div>
             <div className="mt-1 text-xs text-white/65">
-              In V1, rewards are added after payment is confirmed by the staff.
+              {isCz
+                ? "Cashback se připíše po potvrzení platby obsluhou."
+                : "Cashback is added after payment is confirmed by the staff."}
             </div>
           </div>
           <button
@@ -51,22 +57,22 @@ export function AuthGateSheet() {
               setOpen(false);
             }}
           >
-            Later
+            {isCz ? "Později" : "Later"}
           </button>
         </div>
 
         <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-            <div className="font-semibold text-white">Cashback</div>
-            <div className="mt-1 text-white/60">after payment</div>
+            <div className="font-semibold text-white">{isCz ? "Cashback" : "Cashback"}</div>
+            <div className="mt-1 text-white/60">{isCz ? "po platbě" : "after payment"}</div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-            <div className="font-semibold text-white">Profile</div>
-            <div className="mt-1 text-white/60">name + history</div>
+            <div className="font-semibold text-white">{isCz ? "Profil" : "Profile"}</div>
+            <div className="mt-1 text-white/60">{isCz ? "jméno + historie" : "name + history"}</div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-            <div className="font-semibold text-white">Faster</div>
-            <div className="mt-1 text-white/60">orders/staff</div>
+            <div className="font-semibold text-white">{isCz ? "Rychleji" : "Faster"}</div>
+            <div className="mt-1 text-white/60">{isCz ? "objednávky / obsluha" : "orders / staff"}</div>
           </div>
         </div>
 
@@ -74,7 +80,7 @@ export function AuthGateSheet() {
           href="/auth"
           className="mt-3 block w-full rounded-3xl bg-white px-4 py-3 text-center text-sm font-semibold text-black"
         >
-          Sign in / Register
+          {isCz ? "Přihlášení / Registrace" : "Sign in / Register"}
         </Link>
       </div>
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useI18n } from "@/providers/i18n";
 
 function Stars({
   value,
@@ -40,6 +41,7 @@ export function RatingSheet({
   onSubmit: (p: { food: number; drinks: number; hookah: number; comment?: string }) => void;
   googleReviewUrl?: string;
 }) {
+  const { isCz } = useI18n();
   const [food, setFood] = useState(5);
   const [drinks, setDrinks] = useState(5);
   const [hookah, setHookah] = useState(5);
@@ -53,28 +55,30 @@ export function RatingSheet({
         className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#0d0d0d] p-4 shadow-[0_30px_120px_rgba(0,0,0,0.7)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="text-base font-bold text-white">Rating</div>
-        <div className="mt-1 text-xs text-white/60">This helps us improve the service.</div>
+        <div className="text-base font-bold text-white">{isCz ? "Hodnocení" : "Rating"}</div>
+        <div className="mt-1 text-xs text-white/60">
+          {isCz ? "Pomáhá nám to zlepšovat servis." : "This helps us improve the service."}
+        </div>
 
         <div className="mt-4 space-y-3">
           <div>
-            <div className="text-xs text-white/65">Food</div>
+            <div className="text-xs text-white/65">{isCz ? "Jídlo" : "Food"}</div>
             <div className="mt-2"><Stars value={food} onChange={setFood} /></div>
           </div>
           <div>
-            <div className="text-xs text-white/65">Drinks</div>
+            <div className="text-xs text-white/65">{isCz ? "Nápoje" : "Drinks"}</div>
             <div className="mt-2"><Stars value={drinks} onChange={setDrinks} /></div>
           </div>
           <div>
-            <div className="text-xs text-white/65">Hookah</div>
+            <div className="text-xs text-white/65">{isCz ? "Vodní dýmka" : "Hookah"}</div>
             <div className="mt-2"><Stars value={hookah} onChange={setHookah} /></div>
           </div>
 
           <div>
-            <div className="text-xs text-white/65">Comment</div>
+            <div className="text-xs text-white/65">{isCz ? "Poznámka" : "Comment"}</div>
             <textarea
               className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/40 outline-none"
-              placeholder="1–2 sentences (optional)"
+              placeholder={isCz ? "1–2 věty (volitelné)" : "1–2 sentences (optional)"}
               rows={4}
               value={comment}
               onChange={(e) => setComment(e.target.value)}
@@ -89,7 +93,7 @@ export function RatingSheet({
             onClose();
           }}
         >
-          Submit rating
+          {isCz ? "Odeslat hodnocení" : "Submit rating"}
         </button>
 
         {googleReviewUrl ? (
@@ -99,7 +103,7 @@ export function RatingSheet({
             target="_blank"
             rel="noreferrer"
           >
-            Leave a review on Google
+            {isCz ? "Zanechat recenzi na Googlu" : "Leave a review on Google"}
           </a>
         ) : null}
 
@@ -107,7 +111,7 @@ export function RatingSheet({
           className="mt-3 w-full rounded-3xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/70"
           onClick={onClose}
         >
-          Close
+          {isCz ? "Zavřít" : "Close"}
         </button>
       </div>
     </div>

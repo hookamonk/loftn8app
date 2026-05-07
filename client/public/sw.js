@@ -8,7 +8,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("push", (event) => {
   let payload = {
-    title: "Loft N8",
+    title: "LOFT№8",
     body: "Новое событие",
     url: "/staff/summary",
     tag: null,
@@ -27,7 +27,7 @@ self.addEventListener("push", (event) => {
     payload = event.data ? event.data.json() : payload;
   } catch {}
 
-  const title = payload.title || "Loft N8";
+  const title = payload.title || "LOFT№8";
   const tag = payload.tag || `evt:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
   const ts = payload.ts || Date.now();
   const url = payload.url || "/staff/summary";

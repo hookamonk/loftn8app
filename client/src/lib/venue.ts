@@ -2,9 +2,9 @@ export const VENUE_CHANGE_EVENT = "loftn8:venue-change";
 export const STAFF_VENUE_CHANGE_EVENT = "loftn8:staff-venue-change";
 
 export const VENUE_OPTIONS = [
-  { slug: "loft-zizkov", name: "LoftN8 Žižkov", shortName: "Žižkov" },
-  { slug: "loft-garden", name: "LoftN8 Garden", shortName: "Garden" },
-  { slug: "loft-nekazanka", name: "LoftN8 Nekázanka", shortName: "Nekázanka" },
+  { slug: "loft-zizkov", name: "LOFT№8 Žižkov", shortName: "Žižkov" },
+  { slug: "loft-garden", name: "LOFT№8 Garden", shortName: "Garden" },
+  { slug: "loft-nekazanka", name: "LOFT№8 Nekázanka", shortName: "Nekázanka" },
 ] as const;
 
 export type VenueSlug = (typeof VENUE_OPTIONS)[number]["slug"];
@@ -66,14 +66,8 @@ function normalizeVenueCatalog(input: unknown): VenueOption[] {
     const fallback = VENUE_OPTIONS.find((venue) => venue.slug === slug);
     deduped.set(slug, {
       slug,
-      name:
-        typeof (item as any).name === "string" && (item as any).name.trim()
-          ? String((item as any).name).trim()
-          : fallback?.name ?? "LoftN8 Žižkov",
-      shortName:
-        typeof (item as any).shortName === "string" && (item as any).shortName.trim()
-          ? String((item as any).shortName).trim()
-          : fallback?.shortName ?? "Žižkov",
+      name: fallback?.name ?? "LOFT№8 Žižkov",
+      shortName: fallback?.shortName ?? "Žižkov",
       internalSlug:
         typeof (item as any).internalSlug === "string" && (item as any).internalSlug.trim()
           ? String((item as any).internalSlug).trim()
@@ -241,7 +235,7 @@ export function setStaffVenueSlug(slug: string | null) {
 
 export function getVenueName(raw?: string | null) {
   const slug = normalizeVenueSlug(raw ?? getVenueSlug());
-  return getVenueCatalog().find((venue) => venue.slug === slug)?.name ?? "LoftN8 Žižkov";
+  return getVenueCatalog().find((venue) => venue.slug === slug)?.name ?? "LOFT№8 Žižkov";
 }
 
 export function getVenueShortName(raw?: string | null) {

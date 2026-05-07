@@ -10,13 +10,13 @@ import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 const STATUSES: PaymentStatus[] = ["PENDING", "CONFIRMED", "CANCELLED"];
 
 function statusLabel(s: PaymentStatus) {
-  if (s === "PENDING") return "Pending";
-  if (s === "CONFIRMED") return "Confirmed";
-  return "Cancelled";
+  if (s === "PENDING") return "Ожидает";
+  if (s === "CONFIRMED") return "Подтверждена";
+  return "Отменена";
 }
 
 function methodLabel(m: StaffPayment["method"]) {
-  return m === "CARD" ? "Card" : "Cash";
+  return m === "CARD" ? "Карта" : "Наличные";
 }
 
 const card =
@@ -82,14 +82,14 @@ export default function StaffPaymentsPage() {
     setBusyAction(null);
 
     if (!r.ok) {
-      push({ kind: "error", title: "Error", message: r.error });
+      push({ kind: "error", title: "Ошибка", message: r.error });
       return;
     }
 
     push({
       kind: "success",
-      title: "Payment confirmed",
-      message: "The bill was closed successfully.",
+      title: "Оплата подтверждена",
+      message: "Счет закрыт.",
     });
 
     emitStaffLiveSync("payment-confirmed");
@@ -104,14 +104,14 @@ export default function StaffPaymentsPage() {
     setBusyAction(null);
 
     if (!r.ok) {
-      push({ kind: "error", title: "Error", message: r.error });
+      push({ kind: "error", title: "Ошибка", message: r.error });
       return;
     }
 
     push({
       kind: "info",
-      title: "Request cancelled",
-      message: "The guest can now choose the payment method again.",
+      title: "Запрос отменен",
+      message: "Гость снова может выбрать способ оплаты.",
     });
 
     emitStaffLiveSync("payment-cancelled");
@@ -123,16 +123,16 @@ export default function StaffPaymentsPage() {
       <div className={card}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-xl font-semibold text-white">Payments</div>
+            <div className="text-xl font-semibold text-white">Оплаты</div>
             <div className="mt-1 text-xs text-white/50">
-              Auto refresh: {isRunning ? "on" : "off"}
+              Автообновление: {isRunning ? "вкл" : "выкл"}
               {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
             </div>
-            <div className="mt-2 text-xs text-white/60">Requests: {payments.length}</div>
+            <div className="mt-2 text-xs text-white/60">Запросов: {payments.length}</div>
           </div>
 
           <button className={btnGhost} onClick={() => void tick()}>
-            Refresh
+            Обновить
           </button>
         </div>
 
@@ -160,7 +160,7 @@ export default function StaffPaymentsPage() {
         ) : null}
       </div>
 
-      {loading ? <div className="mt-4 text-sm text-white/60">Loading…</div> : null}
+      {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
 
       <div className="mt-4 space-y-3">
         {payments.map((p) => (
@@ -172,7 +172,7 @@ export default function StaffPaymentsPage() {
             <div className="mt-1 flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-lg font-semibold text-white">
-                  Table {p.table.code}
+                  Стол {p.table.code}
                   {p.table.label ? ` • ${p.table.label}` : ""}
                 </div>
 
@@ -183,14 +183,14 @@ export default function StaffPaymentsPage() {
                 <div className="mt-2 text-sm text-white/60">
                   {p.session?.user
                     ? `${p.session.user.name} • ${p.session.user.phone}`
-                    : "Guest without account"}
+                    : "Гость без аккаунта"}
                 </div>
               </div>
             </div>
 
             {p.items.length ? (
               <div className="mt-4 rounded-2xl border border-sky-400/15 bg-sky-500/[0.06] p-3">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-sky-100/60">Selected items</div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-sky-100/60">Выбрано</div>
                 <div className="mt-3 space-y-2">
                   {p.items.map((item) => (
                     <div
@@ -214,17 +214,17 @@ export default function StaffPaymentsPage() {
 
             <div className="mt-4 grid gap-2 text-sm">
               <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-white/70">
-                <span>Bill total</span>
+                <span>Сумма счета</span>
                 <span className="font-semibold text-white">{p.billTotalCzk} Kč</span>
               </div>
               {p.useLoyalty && p.loyaltyAppliedCzk > 0 ? (
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-sky-100/90">
-                  <span>Cashback used</span>
+                  <span>Списан кэшбэк</span>
                   <span className="font-semibold">{p.loyaltyAppliedCzk} Kč</span>
                 </div>
               ) : null}
               <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-400/15 bg-emerald-500/8 px-3 py-2 text-emerald-100/90">
-                <span>{p.status === "CONFIRMED" ? "Paid" : "To pay"}</span>
+                <span>{p.status === "CONFIRMED" ? "Оплачено" : "К оплате"}</span>
                 <span className="font-semibold text-white">{p.requestedAmountCzk} Kč</span>
               </div>
             </div>
@@ -236,14 +236,14 @@ export default function StaffPaymentsPage() {
                   disabled={busyId === p.id}
                   onClick={() => void onConfirm(p.id)}
                 >
-                  {busyId === p.id && busyAction === "confirm" ? "Saving…" : "Confirm payment"}
+                  {busyId === p.id && busyAction === "confirm" ? "Сохраняем…" : "Подтвердить"}
                 </button>
                 <button
                   className={`${btn} flex-1`}
                   disabled={busyId === p.id}
                   onClick={() => void onCancel(p.id)}
                 >
-                  {busyId === p.id && busyAction === "cancel" ? "Cancelling…" : "Cancel request"}
+                  {busyId === p.id && busyAction === "cancel" ? "Отменяем…" : "Отменить"}
                 </button>
               </div>
             ) : null}
@@ -251,7 +251,7 @@ export default function StaffPaymentsPage() {
         ))}
 
         {!loading && payments.length === 0 ? (
-          <div className={`${card} text-sm text-white/60`}>No payments in this section.</div>
+          <div className={`${card} text-sm text-white/60`}>В этом разделе пока пусто.</div>
         ) : null}
       </div>
     </div>

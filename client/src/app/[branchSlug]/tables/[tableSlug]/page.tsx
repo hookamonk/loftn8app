@@ -80,7 +80,7 @@ export default function BranchTableEntryPage() {
     <main className="mx-auto max-w-md px-4 pb-28 pt-5">
       <div className="flex min-h-[40vh] items-start justify-center pt-10">
         <div className="flex flex-col items-center">
-          <img src="/logo.svg" alt="Loft N8" className="h-12 w-12 animate-pulse opacity-90" />
+          <img src="/logo.svg" alt="LOFT№8" className="h-12 w-12 animate-pulse opacity-90" />
           <div className="mt-3 text-sm font-medium text-white/85">Loading</div>
           <div className="mt-1 text-xs text-white/50">Starting your table session…</div>
           {err ? (

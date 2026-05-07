@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { useI18n } from "@/providers/i18n";
 
 function Stars({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   return (
@@ -21,6 +22,7 @@ function Stars({ value, onChange }: { value: number; onChange: (v: number) => vo
 }
 
 export default function PayPage() {
+  const { isCz } = useI18n();
   const [step, setStep] = useState<"pay" | "rate">("pay");
   const [status, setStatus] = useState<string | null>(null);
 
@@ -36,7 +38,7 @@ export default function PayPage() {
       await api("/payments/request", { method: "POST", body: JSON.stringify({ method }) });
       setStep("rate");
     } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? "Failed"}`);
+      setStatus(`❌ ${e?.message ?? (isCz ? "Nepodařilo se odeslat žádost" : "Failed")}`);
     }
   };
 
@@ -53,51 +55,51 @@ export default function PayPage() {
           comment: comment || undefined,
         }),
       });
-      setStatus("✅ Thanks! Rating sent.");
+      setStatus(isCz ? "✅ Děkujeme! Hodnocení bylo odesláno." : "✅ Thanks! Rating sent.");
     } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? "Failed"}`);
+      setStatus(`❌ ${e?.message ?? (isCz ? "Nepodařilo se odeslat hodnocení" : "Failed")}`);
     }
   };
 
   return (
     <main className="mx-auto max-w-md p-4 pb-24">
-      <h1 className="text-xl font-bold">Payment</h1>
+      <h1 className="text-xl font-bold">{isCz ? "Platba" : "Payment"}</h1>
 
       {step === "pay" ? (
         <div className="mt-4 space-y-3">
           <button className="w-full rounded-xl bg-black px-4 py-3 text-left text-white" onClick={() => requestPay("CARD")}>
-            Pay by card (Terminal)
+            {isCz ? "Zaplatit kartou (terminál)" : "Pay by card (Terminal)"}
           </button>
           <button className="w-full rounded-xl border bg-white px-4 py-3 text-left" onClick={() => requestPay("CASH")}>
-            Pay by cash (call staff)
+            {isCz ? "Zaplatit hotově (přivolat obsluhu)" : "Pay by cash (call staff)"}
           </button>
           {status ? <div className="text-sm">{status}</div> : null}
         </div>
       ) : (
         <div className="mt-4 rounded-xl border bg-white p-4">
-          <div className="text-sm font-semibold">Rate your visit</div>
+          <div className="text-sm font-semibold">{isCz ? "Ohodnoťte svou návštěvu" : "Rate your visit"}</div>
 
-          <div className="mt-3 text-sm">Overall</div>
+          <div className="mt-3 text-sm">{isCz ? "Celkově" : "Overall"}</div>
           <Stars value={overall} onChange={setOverall} />
 
-          <div className="mt-3 text-sm">Food</div>
+          <div className="mt-3 text-sm">{isCz ? "Jídlo" : "Food"}</div>
           <Stars value={food} onChange={setFood} />
 
-          <div className="mt-3 text-sm">Drinks</div>
+          <div className="mt-3 text-sm">{isCz ? "Nápoje" : "Drinks"}</div>
           <Stars value={drinks} onChange={setDrinks} />
 
-          <div className="mt-3 text-sm">Hookah</div>
+          <div className="mt-3 text-sm">{isCz ? "Vodní dýmka" : "Hookah"}</div>
           <Stars value={hookah} onChange={setHookah} />
 
           <textarea
             className="mt-3 w-full rounded-lg border px-3 py-2 text-sm"
-            placeholder="Comment (optional)"
+            placeholder={isCz ? "Komentář (volitelné)" : "Comment (optional)"}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
           />
 
           <button className="mt-3 w-full rounded-lg bg-black px-3 py-2 text-white" onClick={sendRating}>
-            Send rating
+            {isCz ? "Odeslat hodnocení" : "Send rating"}
           </button>
 
           {status ? <div className="mt-3 text-sm">{status}</div> : null}

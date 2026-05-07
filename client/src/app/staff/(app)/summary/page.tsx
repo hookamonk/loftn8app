@@ -50,7 +50,7 @@ function roleLabel(role?: string) {
   if (role === "HOOKAH") return "Кальянщик";
   if (role === "MANAGER") return "Менеджер";
   if (role === "ADMIN") return "Администратор";
-  return role ?? "Staff";
+  return role ?? "Персонал";
 }
 
 function humanizePushError(error?: string | null) {

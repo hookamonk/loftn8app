@@ -57,7 +57,17 @@ function roleLabel(role?: string) {
   if (role === "HOOKAH") return "Кальянщик";
   if (role === "MANAGER") return "Менеджер";
   if (role === "ADMIN") return "Администратор";
-  return role ?? "Staff";
+  return role ?? "Персонал";
+}
+
+function normalizeVenueName(name?: string | null, venueId?: number) {
+  if (!name) return venueId ? `Точка #${venueId}` : "Точка";
+
+  return name
+    .replace(/LoftN8/gi, "LOFT№8")
+    .replace(/Loft N8/gi, "LOFT№8")
+    .replace(/LOFT N8/gi, "LOFT№8")
+    .replace(/LOFT №8/gi, "LOFT№8");
 }
 
 export function StaffShell({ children }: { children: React.ReactNode }) {
@@ -139,7 +149,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
           <div className="flex flex-col gap-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[11px] tracking-[0.24em] text-white/45">LOFT №8 • STAFF</div>
+                <div className="text-[11px] tracking-[0.24em] text-white/45">LOFT№8 • ПЕРСОНАЛ</div>
                 <div className="mt-2 text-xl font-semibold">
                   {isAdminPage ? "Админ-панель" : "Рабочая панель"}
                 </div>
@@ -150,7 +160,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                       {staff.username} • {roleLabel(staff.role)}
                     </div>
                     <div className="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/85">
-                      Текущая точка: {staff.venueName ?? `venue #${staff.venueId}`}
+                      Текущая точка: {normalizeVenueName(staff.venueName, staff.venueId)}
                     </div>
                   </div>
                 ) : null}
@@ -203,7 +213,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
               )}
 
               {isAdmin && (
-                <NavLink href="/staff/summary" label="Staff view" active={pathname === "/staff/summary"} />
+                <NavLink href="/staff/summary" label="Сводка" active={pathname === "/staff/summary"} />
               )}
             </div>
           </div>

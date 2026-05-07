@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useCart } from "@/providers/cart";
 import { useAuth } from "@/providers/auth";
+import { useI18n } from "@/providers/i18n";
 
 export function CartBar() {
   const [mounted, setMounted] = useState(false);
@@ -11,6 +12,7 @@ export function CartBar() {
 
   const { me, loading } = useAuth();
   const { items } = useCart();
+  const { isCz } = useI18n();
 
   const { count, total } = useMemo(() => {
     if (!mounted) return { count: 0, total: 0 };
@@ -31,7 +33,7 @@ export function CartBar() {
           href="/cart"
           className="flex items-center justify-between rounded-3xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.45)]"
         >
-          <div className="text-sm font-semibold text-white">Cart · {count}</div>
+          <div className="text-sm font-semibold text-white">{isCz ? "Účet" : "Cart"} · {count}</div>
           <div className="text-sm font-semibold text-white">{total} Kč</div>
         </Link>
       </div>

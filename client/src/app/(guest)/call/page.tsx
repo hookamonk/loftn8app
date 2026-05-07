@@ -9,19 +9,20 @@ import { RequireTable } from "@/components/RequireTable";
 import { RatingSheet } from "@/components/RatingSheet";
 import { useAuth } from "@/providers/auth";
 import { useGuestFeed } from "@/providers/guestFeed";
+import { useI18n } from "@/providers/i18n";
 
 const GOOGLE_REVIEW_URL = process.env.NEXT_PUBLIC_GOOGLE_REVIEW_URL;
 
-function requestStatusText(status?: "NEW" | "ACKED" | "DONE") {
-  if (status === "ACKED") return "On the way";
-  if (status === "NEW") return "Request sent";
+function requestStatusText(status?: "NEW" | "ACKED" | "DONE", isCz?: boolean) {
+  if (status === "ACKED") return isCz ? "Na cestě" : "On the way";
+  if (status === "NEW") return isCz ? "Požadavek odeslán" : "Request sent";
   return undefined;
 }
 
-function paymentStatusText(status?: "PENDING" | "CONFIRMED" | "CANCELLED") {
-  if (status === "PENDING") return "Payment requested";
-  if (status === "CONFIRMED") return "Payment confirmed";
-  if (status === "CANCELLED") return "Payment cancelled";
+function paymentStatusText(status?: "PENDING" | "CONFIRMED" | "CANCELLED", isCz?: boolean) {
+  if (status === "PENDING") return isCz ? "Platba vyžádána" : "Payment requested";
+  if (status === "CONFIRMED") return isCz ? "Platba potvrzena" : "Payment confirmed";
+  if (status === "CANCELLED") return isCz ? "Platba zrušena" : "Payment cancelled";
   return undefined;
 }
 
@@ -34,10 +35,10 @@ function isRecentPayment(ts?: string | null) {
   return Date.now() - value <= PAYMENT_STATUS_FLASH_MS;
 }
 
-function messageStatusCopy(status?: "NEW" | "ACKED" | "DONE") {
-  if (status === "ACKED") return "Your message was seen and taken into work.";
-  if (status === "DONE") return "Your message thread was marked as completed.";
-  if (status === "NEW") return "Your message was sent to the staff.";
+function messageStatusCopy(status?: "NEW" | "ACKED" | "DONE", isCz?: boolean) {
+  if (status === "ACKED") return isCz ? "Vaše zpráva byla přijata a obsluha ji řeší." : "Your message was seen and taken into work.";
+  if (status === "DONE") return isCz ? "Vaše zpráva byla označena jako vyřešená." : "Your message thread was marked as completed.";
+  if (status === "NEW") return isCz ? "Vaše zpráva byla odeslána obsluze." : "Your message was sent to the staff.";
   return "";
 }
 
@@ -112,8 +113,9 @@ function SmallIcon({ name }: { name: "user" | "zap" | "card" }) {
 }
 
 export default function CallPage() {
-  const venueName = getVenueName();
   const router = useRouter();
+  const { isCz, ready } = useI18n();
+  const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const { me, loading } = useAuth();
   const canRate = !loading && !!me?.authenticated;
   const { feed, refresh } = useGuestFeed();
@@ -171,8 +173,8 @@ export default function CallPage() {
     ) {
       push({
         kind: "info",
-        title: "Payment request cancelled",
-        message: "Please choose cashback or the payment method again.",
+        title: isCz ? "Žádost o platbu zrušena" : "Payment request cancelled",
+        message: isCz ? "Vyberte prosím cashback nebo znovu způsob platby." : "Please choose cashback or the payment method again.",
       });
     }
 
@@ -182,16 +184,16 @@ export default function CallPage() {
     };
   }, [feed?.payments, push]);
 
-  const waiterStatus = doneFlash.WAITER ? "Done" : requestStatusText(latestWaiter?.status);
-  const hookahStatus = doneFlash.HOOKAH ? "Done" : requestStatusText(latestHookah?.status);
+  const waiterStatus = doneFlash.WAITER ? (isCz ? "Hotovo" : "Done") : requestStatusText(latestWaiter?.status, isCz);
+  const hookahStatus = doneFlash.HOOKAH ? (isCz ? "Hotovo" : "Done") : requestStatusText(latestHookah?.status, isCz);
   const shouldShowPaymentStatus = Boolean(
     latestPayment &&
       (latestPayment.status === "PENDING" ||
         ((latestPayment.status === "CONFIRMED" || latestPayment.status === "CANCELLED") &&
           isRecentPayment(latestPayment.confirmedAt ?? latestPayment.createdAt)))
   );
-  const paymentStatus = shouldShowPaymentStatus ? paymentStatusText(latestPayment?.status) : undefined;
-  const messageStatus = doneFlash.HELP ? "Done" : requestStatusText(latestMessage?.status);
+  const paymentStatus = shouldShowPaymentStatus ? paymentStatusText(latestPayment?.status, isCz) : undefined;
+  const messageStatus = doneFlash.HELP ? (isCz ? "Hotovo" : "Done") : requestStatusText(latestMessage?.status, isCz);
   const hasLiveCallState = Boolean(
     latestWaiter?.status === "NEW" ||
       latestWaiter?.status === "ACKED" ||
@@ -237,16 +239,16 @@ export default function CallPage() {
 
       push({
         kind: "success",
-        title: "Sent",
-        message: "The staff can already see your table.",
+        title: isCz ? "Odesláno" : "Sent",
+        message: isCz ? "Obsluha už vidí váš stůl." : "The staff can already see your table.",
       });
 
       setMsg("");
     } catch (e: any) {
       push({
         kind: "error",
-        title: "Error",
-        message: e?.message ?? "Failed",
+        title: isCz ? "Chyba" : "Error",
+        message: e?.message ?? (isCz ? "Nepodařilo se odeslat požadavek" : "Failed"),
       });
     } finally {
       window.setTimeout(() => setCooldown(false), 1400);
@@ -262,9 +264,9 @@ export default function CallPage() {
     if (!canRate) {
       push({
         kind: "info",
-        title: "Account required",
-        message: "Rating is available only after sign in.",
-        action: { label: "Sign in", href: "/auth" },
+        title: isCz ? "Je vyžadován účet" : "Account required",
+        message: isCz ? "Hodnocení je dostupné až po přihlášení." : "Rating is available only after sign in.",
+        action: { label: isCz ? "Přihlásit se" : "Sign in", href: "/auth" },
       });
       return;
     }
@@ -277,14 +279,14 @@ export default function CallPage() {
 
       push({
         kind: "success",
-        title: "Thank you!",
-        message: "Your rating has been submitted",
+        title: isCz ? "Děkujeme!" : "Thank you!",
+        message: isCz ? "Vaše hodnocení bylo odesláno" : "Your rating has been submitted",
       });
     } catch (e: any) {
       push({
         kind: "error",
-        title: "Error",
-        message: e?.message ?? "Failed",
+        title: isCz ? "Chyba" : "Error",
+        message: e?.message ?? (isCz ? "Nepodařilo se odeslat hodnocení" : "Failed"),
       });
     }
   };
@@ -296,11 +298,13 @@ export default function CallPage() {
           <div className="text-[11px] tracking-[0.28em] text-white/55">
             {venueName}
           </div>
-          <h1 className="mt-1 text-2xl font-bold text-white">Staff</h1>
+          <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Obsluha" : "Staff"}</h1>
 
           {!loading && !me?.authenticated ? (
             <div className="mt-2 text-xs text-white/60">
-              You are in guest mode — staff assistance is available. Orders and ratings are available after sign in.
+              {isCz
+                ? "Jste v režimu hosta — přivolání obsluhy je dostupné. Objednávky a hodnocení jsou dostupné po přihlášení."
+                : "You are in guest mode — staff assistance is available. Orders and ratings are available after sign in."}
             </div>
           ) : null}
         </div>
@@ -308,8 +312,8 @@ export default function CallPage() {
         <div className="grid gap-3">
           <ActionCard
             disabled={cooldown}
-            title="Call waiter"
-            subtitle="Quick request"
+            title={isCz ? "Zavolat číšníka" : "Call waiter"}
+            subtitle={isCz ? "Rychlý požadavek" : "Quick request"}
             statusText={waiterStatus}
             icon={<SmallIcon name="user" />}
             onClick={() => send("WAITER")}
@@ -317,8 +321,8 @@ export default function CallPage() {
 
           <ActionCard
             disabled={cooldown}
-            title="Urgent hookah service"
-            subtitle="Quick request"
+            title={isCz ? "Urgentní servis vodní dýmky" : "Urgent hookah service"}
+            subtitle={isCz ? "Rychlý požadavek" : "Quick request"}
             statusText={hookahStatus}
             icon={<SmallIcon name="zap" />}
             onClick={() => send("HOOKAH")}
@@ -326,8 +330,8 @@ export default function CallPage() {
 
           <ActionCard
             disabled={cooldown}
-            title="Payment"
-            subtitle="Choose items and payment method in Cart"
+            title={isCz ? "Platba" : "Payment"}
+            subtitle={isCz ? "Vyberte položky a způsob platby v sekci Cart" : "Choose items and payment method in Cart"}
             statusText={paymentStatus}
             icon={<SmallIcon name="card" />}
             onClick={() => router.push("/cart")}
@@ -336,12 +340,12 @@ export default function CallPage() {
 
         <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
           <div className="text-sm font-semibold text-white">
-            Message to staff
+            {isCz ? "Zpráva pro obsluhu" : "Message to staff"}
           </div>
 
           <textarea
             className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/40 outline-none"
-            placeholder='For example: "Hookah is burning", "Please come to the table"'
+            placeholder={isCz ? 'Například: "Vodní dýmka pálí", "Prosím přijďte ke stolu"' : 'For example: "Hookah is burning", "Please come to the table"'}
             value={msg}
             onChange={(e) => setMsg(e.target.value)}
             rows={3}
@@ -352,14 +356,14 @@ export default function CallPage() {
             className="mt-3 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
             onClick={() => send("HELP", msg)}
           >
-            Send
+            {isCz ? "Odeslat" : "Send"}
           </button>
 
           {latestMessage ? (
             <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-xs text-white/70">
-              <div className="font-medium text-white">{messageStatus ?? "Message sent"}</div>
+              <div className="font-medium text-white">{messageStatus ?? (isCz ? "Zpráva odeslána" : "Message sent")}</div>
               <div className="mt-1">
-                {doneFlash.HELP ? "This request has been completed." : messageStatusCopy(latestMessage.status)}
+                {doneFlash.HELP ? (isCz ? "Tento požadavek byl dokončen." : "This request has been completed.") : messageStatusCopy(latestMessage.status)}
               </div>
             </div>
           ) : null}

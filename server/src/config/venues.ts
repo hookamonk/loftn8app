@@ -1,21 +1,21 @@
 export const VENUE_DEFS = [
   {
     slug: "zizkov",
-    name: "LoftN8 Žižkov",
+    name: "LOFT№8 Žižkov",
     shortName: "Žižkov",
     publicSlug: "loft-zizkov",
     aliases: ["pilot", "loft-zizkov"],
   },
   {
     slug: "garden",
-    name: "LoftN8 Garden",
+    name: "LOFT№8 Garden",
     shortName: "Garden",
     publicSlug: "loft-garden",
     aliases: ["loft-garden"],
   },
   {
     slug: "nekazanka",
-    name: "LoftN8 Nekázanka",
+    name: "LOFT№8 Nekázanka",
     shortName: "Nekázanka",
     publicSlug: "loft-nekazanka",
     aliases: ["loft-nekazanka"],
@@ -46,7 +46,7 @@ export function normalizeVenueSlug(raw?: string | null): AppVenueSlug {
 
 export function venueNameBySlug(raw?: string | null) {
   const slug = normalizeVenueSlug(raw);
-  return VENUE_DEFS.find((venue) => venue.slug === slug)?.name ?? "LoftN8 Žižkov";
+  return VENUE_DEFS.find((venue) => venue.slug === slug)?.name ?? "LOFT№8 Žižkov";
 }
 
 export function venueShortNameBySlug(raw?: string | null) {

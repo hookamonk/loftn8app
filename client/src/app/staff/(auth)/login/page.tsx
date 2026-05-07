@@ -62,7 +62,7 @@ export default function StaffLoginPage() {
     setLoading(false);
 
     if (!r.ok) {
-      setErr(r.error || "Something went wrong");
+      setErr(r.error || "Что-то пошло не так");
       return;
     }
 
@@ -96,8 +96,8 @@ export default function StaffLoginPage() {
 
       <div className="relative mx-auto flex min-h-screen max-w-md items-center px-4 py-10">
         <div className="w-full rounded-3xl border border-white/10 bg-white/5 p-5 shadow-2xl backdrop-blur">
-          <div className="text-xs tracking-[0.22em] text-white/45">LOFT №8</div>
-          <h1 className="mt-2 text-2xl font-semibold">Вход в систему</h1>
+          <div className="text-xs tracking-[0.22em] text-white/45">LOFT№8</div>
+          <h1 className="mt-2 text-2xl font-semibold">Вход для персонала</h1>
           <p className="mt-1 text-sm text-white/60">Официант, кальянщик, менеджер</p>
 
           {err ? (
@@ -108,7 +108,7 @@ export default function StaffLoginPage() {
 
           <form className="mt-5 space-y-3" onSubmit={onSubmit}>
             <div className="space-y-2">
-              <label className="text-xs text-white/60">Branch</label>
+              <label className="text-xs text-white/60">Точка</label>
               <div className="grid grid-cols-1 gap-2">
                 {venues.map((venue) => {
                   const active = selectedVenue === venue.slug;
@@ -132,10 +132,10 @@ export default function StaffLoginPage() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs text-white/60">Username</label>
+              <label className="text-xs text-white/60">Логин</label>
               <input
                 className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
-                placeholder="login"
+                placeholder="логин"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 autoCapitalize="none"
@@ -145,7 +145,7 @@ export default function StaffLoginPage() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs text-white/60">Password</label>
+              <label className="text-xs text-white/60">Пароль</label>
               <input
                 className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
                 placeholder="••••••••"

@@ -1,36 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { GuestQrEntry } from "@/components/GuestQrEntry";
 
 export default function DevTablePage() {
-  const [code, setCode] = useState("T1");
-  const router = useRouter();
-
-  return (
-    <main className="mx-auto max-w-md p-4">
-      <div className="rounded-2xl border bg-white p-4">
-        <div className="text-sm text-gray-500">Dev</div>
-        <h1 className="text-xl font-bold">Select table</h1>
-
-        <input
-          className="mt-3 w-full rounded-2xl border bg-white px-4 py-3 text-sm outline-none"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="For example T1"
-        />
-
-        <button
-          className="mt-3 w-full rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white"
-          onClick={() => router.push(`/menu?table=${encodeURIComponent(code.trim())}`)}
-        >
-          Open menu for table
-        </button>
-
-        <div className="mt-3 text-xs text-gray-500">
-          Open: <span className="font-mono">/dev/table</span>
-        </div>
-      </div>
-    </main>
-  );
+  return <GuestQrEntry />;
 }

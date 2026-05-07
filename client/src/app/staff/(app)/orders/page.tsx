@@ -19,14 +19,14 @@ import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 const STATUSES: OrderStatus[] = ["IN_PROGRESS", "DELIVERED", "CANCELLED"];
 
 function statusLabel(s: OrderStatus) {
-  if (s === "NEW") return "Preparing";
-  if (s === "IN_PROGRESS") return "Preparing";
-  if (s === "DELIVERED") return "Ready";
-  return "Cancelled";
+  if (s === "NEW") return "Готовится";
+  if (s === "IN_PROGRESS") return "Готовится";
+  if (s === "DELIVERED") return "Готов";
+  return "Отменен";
 }
 
 function nextAction(s: OrderStatus) {
-  if (s === "IN_PROGRESS") return { status: "DELIVERED" as OrderStatus, label: "Mark as ready" };
+  if (s === "IN_PROGRESS") return { status: "DELIVERED" as OrderStatus, label: "Отметить готовым" };
   return null;
 }
 
@@ -128,7 +128,7 @@ export default function StaffOrdersPage() {
     setBusyId(null);
 
     if (!result.ok) {
-      push({ kind: "error", title: "Error", message: result.error });
+      push({ kind: "error", title: "Ошибка", message: result.error });
       return;
     }
 
@@ -146,18 +146,18 @@ export default function StaffOrdersPage() {
       <div className={card}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-xl font-semibold text-white">Orders</div>
+            <div className="text-xl font-semibold text-white">Заказы</div>
             <div className="mt-1 text-xs text-white/50">
-              Auto refresh: {isRunning ? "on" : "off"}
+              Автообновление: {isRunning ? "вкл" : "выкл"}
               {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
             </div>
             <div className="mt-2 text-xs text-white/60">
-              Orders: {orders.length} • Items: {totalItems}
+              Заказов: {orders.length} • Позиций: {totalItems}
             </div>
           </div>
 
           <button className={btnGhost} onClick={() => void tick()}>
-            Refresh
+            Обновить
           </button>
         </div>
 
@@ -188,13 +188,13 @@ export default function StaffOrdersPage() {
         ) : null}
       </div>
 
-      {loading ? <div className="mt-4 text-sm text-white/60">Loading…</div> : null}
+      {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
 
       <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-white">Order requests</div>
-            <div className="mt-1 text-xs text-white/55">Tables waiting for a staff member to take the order</div>
+            <div className="text-sm font-semibold text-white">Запросы на заказ</div>
+            <div className="mt-1 text-xs text-white/55">Столы, которые ждут официанта</div>
           </div>
           <div className="rounded-full border border-white/10 bg-white/8 px-3 py-1 text-[11px] font-semibold text-white/75">
             {requests.length}
@@ -210,16 +210,16 @@ export default function StaffOrdersPage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-white">
-                    Table {request.table.code}
+                    Стол {request.table.code}
                     {request.table.label ? ` • ${request.table.label}` : ""}
                   </div>
                   <div className="mt-1 text-xs text-white/55">
-                    {new Date(request.createdAt).toLocaleTimeString()} • {request.status === "ACKED" ? "On the way" : "Requested"}
+                    {new Date(request.createdAt).toLocaleTimeString()} • {request.status === "ACKED" ? "В пути" : "Запрошен"}
                   </div>
                   <div className="mt-2 text-sm text-white/70">
                     {request.session.user
                       ? `${request.session.user.name} • ${request.session.user.phone}`
-                      : "Guest without account"}
+                      : "Гость без аккаунта"}
                   </div>
                 </div>
 
@@ -228,7 +228,7 @@ export default function StaffOrdersPage() {
                   disabled={busyId === request.id}
                   onClick={() => void connectToTable(request)}
                 >
-                  {busyId === request.id ? "Connecting…" : "Connect to table"}
+                  {busyId === request.id ? "Подключаем…" : "Подключиться"}
                 </button>
               </div>
             </div>
@@ -236,7 +236,7 @@ export default function StaffOrdersPage() {
 
           {!loading && requests.length === 0 ? (
             <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
-              No active order requests right now.
+              Активных запросов сейчас нет.
             </div>
           ) : null}
         </div>
@@ -256,26 +256,26 @@ export default function StaffOrdersPage() {
                   </div>
 
                   <div className="mt-1 text-lg font-semibold text-white">
-                    Table {o.table.code}
+                    Стол {o.table.code}
                     {o.table.label ? ` • ${o.table.label}` : ""}
                   </div>
 
                   <div className="mt-1 text-sm text-white/70">
                     {o.session?.user
                       ? `${o.session.user.name} • ${o.session.user.phone}`
-                      : "Guest without account"}
+                      : "Гость без аккаунта"}
                   </div>
                 </div>
 
                 <div className="shrink-0 text-right">
-                  <div className="text-xs text-white/50">Amount</div>
+                  <div className="text-xs text-white/50">Сумма</div>
                   <div className="mt-1 text-lg font-semibold text-white">{sum} Kč</div>
                 </div>
               </div>
 
               {o.comment ? (
                 <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/85">
-                  Order comment: {o.comment}
+                  Комментарий: {o.comment}
                 </div>
               ) : null}
 
@@ -290,7 +290,7 @@ export default function StaffOrdersPage() {
                         {it.menuItem.name} × {it.qty}
                       </div>
                       {it.comment ? (
-                        <div className="mt-1 text-xs text-white/60">Comment: {it.comment}</div>
+                        <div className="mt-1 text-xs text-white/60">Комментарий: {it.comment}</div>
                       ) : null}
                     </div>
 
@@ -310,11 +310,11 @@ export default function StaffOrdersPage() {
                       void setTo(
                         o.id,
                         action.status,
-                        action.status === "IN_PROGRESS" ? "Order moved to preparing" : "Order marked as ready"
+                        action.status === "IN_PROGRESS" ? "Заказ переведен в готовку." : "Заказ отмечен как готовый."
                       )
                     }
                   >
-                    {busyId === o.id ? "Saving…" : action.label}
+                    {busyId === o.id ? "Сохраняем…" : action.label}
                   </button>
                 ) : null}
 
@@ -322,9 +322,9 @@ export default function StaffOrdersPage() {
                   <button
                     className={btnGhost}
                     disabled={busyId === o.id}
-                    onClick={() => void setTo(o.id, "CANCELLED", "Order cancelled")}
+                    onClick={() => void setTo(o.id, "CANCELLED", "Заказ отменен.")}
                   >
-                    Cancel order
+                    Отменить заказ
                   </button>
                 ) : null}
               </div>
@@ -333,7 +333,7 @@ export default function StaffOrdersPage() {
         })}
 
         {!loading && orders.length === 0 ? (
-          <div className={`${card} text-sm text-white/60`}>No orders in this section.</div>
+          <div className={`${card} text-sm text-white/60`}>Заказов в этом разделе пока нет.</div>
         ) : null}
       </div>
     </div>

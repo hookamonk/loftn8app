@@ -18,7 +18,7 @@ type SeedMenuByCategory = Record<string, SeedItem[]>;
 const VENUES = [
   {
     slug: "zizkov",
-    name: "LoftN8 Žižkov",
+    name: "LOFT№8 Žižkov",
     staffPrefix: "ZIZKOV",
     legacyPrefix: null,
     defaults: {
@@ -29,7 +29,7 @@ const VENUES = [
   },
   {
     slug: "garden",
-    name: "LoftN8 Garden",
+    name: "LOFT№8 Garden",
     staffPrefix: "GARDEN",
     legacyPrefix: null,
     defaults: {
@@ -40,7 +40,7 @@ const VENUES = [
   },
   {
     slug: "nekazanka",
-    name: "LoftN8 Nekázanka",
+    name: "LOFT№8 Nekázanka",
     staffPrefix: "NEKAZANKA",
     legacyPrefix: null,
     defaults: {

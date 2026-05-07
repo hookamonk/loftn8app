@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useI18n } from "@/providers/i18n";
 
 function QtyInline({
   qty,
@@ -68,6 +69,7 @@ export function PaymentSheet({
   finalPayableCzk?: number;
   onChangeSelectedQty?: (key: string, qty: number) => void;
 }) {
+  const { isCz } = useI18n();
   const [step, setStep] = useState<"select" | "method">("select");
   const [query, setQuery] = useState("");
 
@@ -102,18 +104,18 @@ export function PaymentSheet({
       >
         {step === "select" ? (
           <>
-            <div className="text-sm font-semibold text-white">Choose items to pay</div>
+            <div className="text-sm font-semibold text-white">{isCz ? "Vyberte položky k platbě" : "Choose items to pay"}</div>
 
             {items.length ? (
               <div className="mt-3 rounded-3xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-white">Shared table order</div>
+                  <div className="text-sm font-semibold text-white">{isCz ? "Sdílená objednávka stolu" : "Shared table order"}</div>
                   <div className="text-sm font-semibold text-white">{selectedTotalCzk} Kč</div>
                 </div>
 
                 <input
                   className="mt-3 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/40 outline-none"
-                  placeholder="Find a dish or drink…"
+                  placeholder={isCz ? "Najít jídlo nebo nápoj…" : "Find a dish or drink…"}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
@@ -142,11 +144,13 @@ export function PaymentSheet({
                               </div>
                             ) : null}
                             <div className={["mt-1 text-[11px]", qty > 0 ? "text-sky-100/75" : "text-white/50"].join(" ")}>
-                              {item.availableQty} available • {item.unitPriceCzk} Kč each
+                              {isCz
+                                ? `${item.availableQty} k dispozici • ${item.unitPriceCzk} Kč za kus`
+                                : `${item.availableQty} available • ${item.unitPriceCzk} Kč each`}
                             </div>
                             {qty > 0 ? (
                               <div className="mt-2 inline-flex rounded-full border border-sky-400/25 bg-sky-500/12 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-100">
-                                Selected
+                                {isCz ? "Vybráno" : "Selected"}
                               </div>
                             ) : null}
                           </div>
@@ -166,12 +170,14 @@ export function PaymentSheet({
 
                 {filteredItems.length === 0 ? (
                   <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/55">
-                    Nothing found for this search.
+                    {isCz ? "Pro toto hledání nebylo nic nalezeno." : "Nothing found for this search."}
                   </div>
                 ) : null}
 
                 <div className="mt-3 rounded-2xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-xs text-sky-100/85">
-                  Selected: {selectedItemsCount} item{selectedItemsCount === 1 ? "" : "s"} • {selectedTotalCzk} Kč
+                  {isCz
+                    ? `Vybráno: ${selectedItemsCount} ${selectedItemsCount === 1 ? "položka" : selectedItemsCount >= 2 && selectedItemsCount <= 4 ? "položky" : "položek"} • ${selectedTotalCzk} Kč`
+                    : `Selected: ${selectedItemsCount} item${selectedItemsCount === 1 ? "" : "s"} • ${selectedTotalCzk} Kč`}
                 </div>
               </div>
             ) : null}
@@ -184,7 +190,7 @@ export function PaymentSheet({
                 setStep("method");
               }}
             >
-              Pay all
+              {isCz ? "Zaplatit vše" : "Pay all"}
             </button>
 
             <button
@@ -192,37 +198,37 @@ export function PaymentSheet({
               className="mt-2 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
               onClick={() => setStep("method")}
             >
-              Select and pay
+              {isCz ? "Vybrat a zaplatit" : "Select and pay"}
             </button>
 
             <button
               className="mt-3 w-full rounded-3xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/70"
               onClick={onClose}
             >
-              Close
+              {isCz ? "Zavřít" : "Close"}
             </button>
           </>
         ) : (
           <>
-            <div className="text-sm font-semibold text-white">Choose how you want to pay</div>
+            <div className="text-sm font-semibold text-white">{isCz ? "Zvolte způsob platby" : "Choose how you want to pay"}</div>
 
             <div className="mt-3 rounded-3xl border border-white/10 bg-white/[0.04] p-3">
               <div className="flex items-center justify-between gap-3 text-sm text-white/70">
-                <span>Selected items</span>
+                <span>{isCz ? "Vybrané položky" : "Selected items"}</span>
                 <span className="font-semibold text-white">{selectedItemsCount}</span>
               </div>
               <div className="mt-2 flex items-center justify-between gap-3 text-sm text-white/70">
-                <span>Bill total</span>
+                <span>{isCz ? "Celkem" : "Bill total"}</span>
                 <span className="font-semibold text-white">{selectedTotalCzk} Kč</span>
               </div>
               {useLoyalty && cashbackAppliedCzk > 0 ? (
                 <div className="mt-2 flex items-center justify-between gap-3 text-sm text-emerald-300/90">
-                  <span>Cashback used</span>
+                  <span>{isCz ? "Použitý cashback" : "Cashback used"}</span>
                   <span className="font-semibold">{cashbackAppliedCzk} Kč</span>
                 </div>
               ) : null}
               <div className="mt-2 flex items-center justify-between gap-3 text-sm text-white/70">
-                <span>To pay</span>
+                <span>{isCz ? "K úhradě" : "To pay"}</span>
                 <span className="font-semibold text-white">{finalPayableCzk} Kč</span>
               </div>
             </div>
@@ -237,12 +243,14 @@ export function PaymentSheet({
                 ].join(" ")}
                 onClick={() => onToggleLoyalty(!useLoyalty)}
               >
-                <div className="font-semibold">{useLoyalty ? "Using cashback" : "Use cashback"}</div>
-                <div className="mt-1 text-xs opacity-75">{availablePointsCzk} Kč available</div>
+                <div className="font-semibold">
+                  {useLoyalty ? (isCz ? "Používáte cashback" : "Using cashback") : isCz ? "Použít cashback" : "Use cashback"}
+                </div>
+                <div className="mt-1 text-xs opacity-75">{isCz ? `${availablePointsCzk} Kč k dispozici` : `${availablePointsCzk} Kč available`}</div>
               </button>
             ) : (
               <div className="mt-3 rounded-3xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white/55">
-                Cashback available after midnight
+                {isCz ? "Cashback bude dostupný po půlnoci" : "Cashback available after midnight"}
               </div>
             )}
 
@@ -251,7 +259,7 @@ export function PaymentSheet({
               className="mt-3 w-full rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-black disabled:opacity-40"
               onClick={() => onPick("CARD")}
             >
-              Card (terminal)
+              {isCz ? "Karta (terminál)" : "Card (terminal)"}
             </button>
 
             <button
@@ -259,14 +267,14 @@ export function PaymentSheet({
               className="mt-2 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
               onClick={() => onPick("CASH")}
             >
-              Cash
+              {isCz ? "Hotově" : "Cash"}
             </button>
 
             <button
               disabled
               className="mt-2 w-full rounded-3xl border border-dashed border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-white/35"
             >
-              Apple Pay (coming soon)
+              Apple Pay {isCz ? "(již brzy)" : "(coming soon)"}
             </button>
 
             <div className="mt-3 flex gap-3">
@@ -274,13 +282,13 @@ export function PaymentSheet({
                 className="flex-1 rounded-3xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/70"
                 onClick={() => setStep("select")}
               >
-                Back
+                {isCz ? "Zpět" : "Back"}
               </button>
               <button
                 className="flex-1 rounded-3xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/70"
                 onClick={onClose}
               >
-                Close
+                {isCz ? "Zavřít" : "Close"}
               </button>
             </div>
           </>

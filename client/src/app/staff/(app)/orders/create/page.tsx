@@ -18,9 +18,9 @@ type DraftItem = {
 };
 
 const SECTION_LABEL: Record<MenuSection, string> = {
-  DISHES: "Dishes",
-  DRINKS: "Drinks",
-  HOOKAH: "Hookah",
+  DISHES: "Еда",
+  DRINKS: "Напитки",
+  HOOKAH: "Кальян",
 };
 
 function firstSection(categories: MenuCategory[]): MenuSection {
@@ -300,14 +300,14 @@ export default function StaffOrderCreatePage() {
       });
 
       if (!result.ok) {
-        push({ kind: "error", title: "Error", message: result.error });
+        push({ kind: "error", title: "Ошибка", message: result.error });
         return;
       }
 
       push({
         kind: "success",
-        title: "Order saved",
-        message: `Table ${tableCode} now has an updated order.`,
+        title: "Заказ сохранен",
+        message: `Стол ${tableCode} обновлен.`,
       });
 
       router.replace(returnTo || "/staff/orders?status=IN_PROGRESS");
@@ -323,23 +323,23 @@ export default function StaffOrderCreatePage() {
       <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-[11px] tracking-[0.24em] text-white/45">TABLE ORDER</div>
-            <div className="mt-2 text-xl font-semibold text-white">Table {tableCode || "—"}</div>
-            <div className="mt-1 text-sm text-white/60">Build the full order for this table, then save it at the end.</div>
+            <div className="text-[11px] tracking-[0.24em] text-white/45">ЗАКАЗ</div>
+            <div className="mt-2 text-xl font-semibold text-white">Стол {tableCode || "—"}</div>
+            <div className="mt-1 text-sm text-white/60">Соберите заказ и сохраните его.</div>
           </div>
 
           <Link
             href={returnTo || "/staff/orders"}
             className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
           >
-            Back
+            Назад
           </Link>
         </div>
 
         <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-3">
           <input
             className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/40 outline-none"
-            placeholder="Search the menu…"
+            placeholder="Поиск по меню…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -402,7 +402,7 @@ export default function StaffOrderCreatePage() {
         <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">{err}</div>
       ) : null}
 
-      {loading ? <div className="mt-4 text-sm text-white/60">Loading menu…</div> : null}
+      {loading ? <div className="mt-4 text-sm text-white/60">Загрузка меню…</div> : null}
 
       <div className="mt-4 space-y-3">
         <div className="space-y-3">
@@ -438,7 +438,7 @@ export default function StaffOrderCreatePage() {
 
           {!loading && filteredItems.length === 0 ? (
             <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 text-sm text-white/65">
-              Nothing found in this section.
+              В этом разделе ничего не найдено.
             </div>
           ) : null}
         </div>
@@ -446,13 +446,13 @@ export default function StaffOrderCreatePage() {
         <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-white">Order summary</div>
+              <div className="text-sm font-semibold text-white">Состав заказа</div>
               <div className="mt-1 text-xs text-white/55">
-                {selectedQty > 0 ? `${selectedQty} item${selectedQty === 1 ? "" : "s"} ready to save` : "Select dishes or drinks above"}
+                {selectedQty > 0 ? `Позиций: ${selectedQty}` : "Выберите позиции выше"}
               </div>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-right">
-              <div className="text-[10px] uppercase tracking-[0.2em] text-white/45">Draft total</div>
+              <div className="text-[10px] uppercase tracking-[0.2em] text-white/45">ИТОГО</div>
               <div className="mt-1 text-lg font-bold text-white">{totalCzk} Kč</div>
             </div>
           </div>
@@ -463,7 +463,7 @@ export default function StaffOrderCreatePage() {
                 <div className="flex items-center justify-between gap-3 text-sm text-white">
                   <div className="min-w-0">
                     <div className="truncate font-medium">{item.name}</div>
-                    <div className="mt-1 text-xs text-white/50">Qty {item.qty}</div>
+                    <div className="mt-1 text-xs text-white/50">Кол-во: {item.qty}</div>
                   </div>
                   <div className="font-semibold">{item.priceCzk * item.qty} Kč</div>
                 </div>
@@ -472,14 +472,14 @@ export default function StaffOrderCreatePage() {
 
             {items.length === 0 ? (
               <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/55">
-                Select dishes or drinks above to build the table order.
+                Выберите позиции выше.
               </div>
             ) : null}
           </div>
 
           <textarea
             className="mt-3 w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/40 outline-none"
-            placeholder="Order note for the kitchen or bar (optional)"
+            placeholder="Комментарий к заказу (необязательно)"
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             rows={3}
@@ -492,14 +492,14 @@ export default function StaffOrderCreatePage() {
               className="flex-1 rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-black disabled:opacity-60"
               onClick={() => void submit()}
             >
-              {submitting ? "Saving…" : "Save table order"}
+              {submitting ? "Сохраняем…" : "Сохранить"}
             </button>
 
             <Link
               href={returnTo || "/staff/orders"}
               className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
             >
-              Cancel
+              Отмена
             </Link>
           </div>
         </div>
