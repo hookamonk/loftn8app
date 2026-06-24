@@ -461,7 +461,7 @@ staffDashboardRouter.patch(
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
     const role = req.staff!.role;
-    const shift = await getActiveShiftOrThrow(venueId);
+    await getActiveShiftOrThrow(venueId);
 
     const { id } = IdParamSchema.parse(req.params);
     const { status } = req.body as any;
@@ -485,7 +485,6 @@ staffDashboardRouter.patch(
 
     if (!order) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
     if (order.table.venueId !== venueId) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
-    if (order.session?.shiftId !== shift.id) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
 
     if (sections) {
       const allowed = order.items.some((it) => sections.includes(it.menuItem.category.section));
@@ -537,11 +536,14 @@ staffDashboardRouter.post(
       }),
     ]);
 
+    // Venue + active-session is the real boundary. The shift is only used to
+    // scope dashboard lists, so do NOT reject when the session's shiftId drifted
+    // (e.g. the guest selected items before the shift opened, or a shift cache
+    // race) — instead adopt the active session into the current shift below.
     if (
       !session ||
       session.tableId !== body.tableId ||
       session.table.venueId !== venueId ||
-      session.shiftId !== shift.id ||
       session.endedAt
     ) {
       throw new HttpError(404, "SESSION_NOT_FOUND", "Session not found for this table");
@@ -553,6 +555,13 @@ staffDashboardRouter.post(
     const priceMap = new Map(menuItems.map((item) => [item.id, item.priceCzk]));
 
     const order = await prisma.$transaction(async (tx) => {
+      if (session.shiftId !== shift.id) {
+        await tx.guestSession.update({
+          where: { id: session.id },
+          data: { shiftId: shift.id },
+        });
+      }
+
       const created = await createOrAppendTableOrder(tx as typeof prisma, {
         tableId: body.tableId,
         sessionId: session.id,
@@ -1281,7 +1290,7 @@ staffDashboardRouter.patch(
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
     const role = req.staff!.role;
-    const shift = await getActiveShiftOrThrow(venueId);
+    await getActiveShiftOrThrow(venueId);
 
     const { id } = IdParamSchema.parse(req.params);
     const { status } = req.body as any;
@@ -1301,7 +1310,6 @@ staffDashboardRouter.patch(
 
     if (!call) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
     if (call.table.venueId !== venueId) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
-    if (call.session?.shiftId !== shift.id) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
     if (!allowedTypes.includes(call.type)) throw new HttpError(404, "CALL_NOT_FOUND", "Call not found");
 
     await prisma.staffCall.update({
@@ -1533,7 +1541,6 @@ staffDashboardRouter.post(
 
       if (!pr) throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
       if (pr.table.venueId !== venueId) throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
-      if (pr.session?.shiftId !== shift.id) throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
 
       if (pr.status !== "PENDING") {
         throw new HttpError(409, "PAYMENT_NOT_PENDING", "Payment request is not pending");
@@ -1668,7 +1675,7 @@ staffDashboardRouter.post(
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
     const role = req.staff!.role;
-    const shift = await getActiveShiftOrThrow(venueId);
+    await getActiveShiftOrThrow(venueId);
 
     if (role === "HOOKAH") {
       throw new HttpError(403, "FORBIDDEN", "Hookah role cannot cancel payments");
@@ -1695,7 +1702,7 @@ staffDashboardRouter.post(
     });
 
     if (!payment) throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
-    if (payment.session?.shiftId !== shift.id || payment.session.table.venueId !== venueId) {
+    if (payment.session?.table.venueId !== venueId) {
       throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
     }
     if (payment.status !== "PENDING") {
