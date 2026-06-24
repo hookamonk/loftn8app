@@ -8,18 +8,23 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { HttpError } from "../../utils/httpError";
 import { clearStaffCookie, requireStaffAuth, setStaffCookie } from "./staff.middleware";
 import { normalizeVenueSlug, publicVenueSlug, resolveVenueSlug, venueNameBySlug } from "../../config/venues";
+import { env } from "../../config/env";
+import { rateLimit } from "../../middleware/rateLimit";
 
 export const staffAuthRouter = Router();
+
+const staffLoginLimiter = rateLimit({ windowMs: 15 * 60_000, max: 15, keyPrefix: "staff-login" });
 
 const LoginSchema = z.object({
   username: z.string().min(3),
   password: z.string().min(4),
 });
 
-const JWT_STAFF_SECRET = process.env.JWT_STAFF_SECRET || "dev_staff_secret";
+const JWT_STAFF_SECRET = env.JWT_STAFF_SECRET;
 
 staffAuthRouter.post(
   "/login",
+  staffLoginLimiter,
   validate(LoginSchema),
   asyncHandler(async (req, res) => {
     const { username, password } = req.body as any;

@@ -5,6 +5,7 @@ import { listPayments, confirmPayment, cancelPayment, type StaffPayment, type Pa
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 
 const STATUSES: PaymentStatus[] = ["PENDING", "CONFIRMED", "CANCELLED"];
@@ -56,9 +57,9 @@ export default function StaffPaymentsPage() {
     setLast(Date.now());
   };
 
-  const { tick, isRunning } = usePolling(() => load({ silent: true }), {
-    activeMs: 15000,
-    idleMs: 45000,
+  const { tick } = usePolling(() => load({ silent: true }), {
+    activeMs: 8000,
+    idleMs: 20000,
     immediate: false,
     enabled: true,
   });
@@ -70,6 +71,12 @@ export default function StaffPaymentsPage() {
 
   useStaffPushEvents((payload) => {
     if (payload.kind === "PAYMENT_REQUESTED") {
+      void tick();
+    }
+  });
+
+  useStaffEvents((e) => {
+    if (e.kind === "PAYMENT_REQUESTED" || e.kind === "DATA_CHANGED") {
       void tick();
     }
   });
@@ -124,11 +131,10 @@ export default function StaffPaymentsPage() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xl font-semibold text-white">Оплаты</div>
-            <div className="mt-1 text-xs text-white/50">
-              Автообновление: {isRunning ? "вкл" : "выкл"}
-              {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
+            <div className="mt-1.5 text-xs text-white/55">
+              Запросов: {payments.length}
+              {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
             </div>
-            <div className="mt-2 text-xs text-white/60">Запросов: {payments.length}</div>
           </div>
 
           <button className={btnGhost} onClick={() => void tick()}>

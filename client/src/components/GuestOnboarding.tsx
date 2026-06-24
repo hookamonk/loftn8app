@@ -17,7 +17,6 @@ type OnboardingStep = {
   path: string;
   title: string;
   body: string;
-  accent: string;
 };
 
 export function GuestOnboarding() {
@@ -29,35 +28,41 @@ export function GuestOnboarding() {
     completed: false,
   });
   const [ready, setReady] = useState(false);
+  const [shown, setShown] = useState(false);
 
   const steps = useMemo<OnboardingStep[]>(
     () => [
       {
         id: "menu",
         path: "/menu",
-        title: isCz ? "Vyberte jídlo a odešlete požadavek" : "Choose dishes and send the request",
+        title: isCz ? "Vyberte si v menu" : "Pick from the menu",
         body: isCz
-          ? "Otevřete kategorie, vyberte si jídlo a klepněte na Zavolat. Obsluha váš požadavek uvidí okamžitě."
-          : "Open the categories, choose your dishes and tap Call. The waiter will see the request for your table immediately.",
-        accent: isCz ? "Krok 1" : "Step 1",
+          ? "Vyberte jídla a nápoje — přidají se do košíku. Objednávku u stolu pak přijme obsluha."
+          : "Choose dishes and drinks — they go to your cart. The waiter then takes the order at your table.",
       },
       {
         id: "cart",
         path: "/cart",
-        title: isCz ? "Sledujte svou objednávku zde" : "Track your order here",
+        title: isCz ? "Váš účet a objednávka" : "Your bill & order",
         body: isCz
-          ? "Váš účet, stav objednávky a žádost o platbu se zobrazí zde, jakmile číšník uloží objednávku ke stolu."
-          : "Your bill, order status and payment request will appear here as soon as the waiter saves the order for your table.",
-        accent: isCz ? "Krok 2" : "Step 2",
+          ? "Tady je vaše objednávka i účet. Stav se aktualizuje, jakmile ji obsluha potvrdí — a tady také zaplatíte."
+          : "Here's your order and bill. The status updates once staff confirms it — and you pay right here too.",
       },
       {
         id: "call",
         path: "/call",
-        title: isCz ? "Přivolejte obsluhu jedním klepnutím" : "Call staff in one tap",
+        title: isCz ? "Přivolejte obsluhu" : "Call the staff",
         body: isCz
-          ? "Na této obrazovce můžete přivolat číšníka, specialistu na vodní dýmku nebo odeslat žádost o platbu bez dalšího vysvětlování."
-          : "Use this screen to call a waiter, a hookah specialist or send a payment request without extra explanation.",
-        accent: isCz ? "Krok 3" : "Step 3",
+          ? "Zavolejte číšníka, vyžádejte si servis vodní dýmky nebo napište zprávu — obsluha hned uvidí váš stůl."
+          : "Call a waiter, request hookah service, or send a message — staff sees your table instantly.",
+      },
+      {
+        id: "profile",
+        path: "/profile",
+        title: isCz ? "Profil a cashback" : "Profile & cashback",
+        body: isCz
+          ? "Váš profil a osobní účet: dostupný cashback, historie účtenek a nastavení účtu."
+          : "Your profile and personal account: available cashback, receipt history and account settings.",
       },
     ],
     [isCz]
@@ -76,19 +81,9 @@ export function GuestOnboarding() {
     return () => window.removeEventListener(GUEST_ONBOARDING_SYNC_EVENT, sync as EventListener);
   }, []);
 
-  useEffect(() => {
-    if (!ready) return;
-
-    setState((current) => {
-      if (current.completed) return current;
-      if (current.activeStep) return current;
-      if (pathname !== "/menu") return current;
-
-      const next = { ...current, activeStep: "menu" as const };
-      writeGuestOnboardingState(next);
-      return next;
-    });
-  }, [pathname, ready]);
+  // No auto-start on first visit — onboarding is triggered only right after
+  // registration (auth page calls restartGuestOnboarding), so returning /
+  // already-registered guests never see it.
 
   const activeStep = useMemo(
     () => steps.find((step) => step.id === state.activeStep) ?? null,
@@ -100,15 +95,28 @@ export function GuestOnboarding() {
     [activeStep, steps]
   );
 
-  if (!ready || state.completed || !activeStep) return null;
-  if (pathname !== activeStep.path) return null;
+  const visible = ready && !state.completed && !!activeStep && pathname === activeStep.path;
+
+  // Drive the enter transition once the card is on the right screen.
+  useEffect(() => {
+    if (!visible) {
+      setShown(false);
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => setShown(true));
+    return () => window.cancelAnimationFrame(raf);
+  }, [visible, activeStep?.id]);
+
+  if (!visible || !activeStep) return null;
 
   const close = () => {
-    const next = completeGuestOnboarding();
-    setState(next);
-    if (pathname !== "/menu") {
-      router.push("/menu");
-    }
+    // Fade out, then complete and glide back to the menu.
+    setShown(false);
+    window.setTimeout(() => {
+      completeGuestOnboarding();
+      setState({ activeStep: null, completed: true });
+      if (pathname !== "/menu") router.push("/menu");
+    }, 240);
   };
 
   const goNext = () => {
@@ -118,22 +126,35 @@ export function GuestOnboarding() {
       return;
     }
 
+    setShown(false);
     const next = { activeStep: nextStep.id, completed: false };
-    writeGuestOnboardingState(next);
-    setState(next);
-    router.push(nextStep.path);
+    window.setTimeout(() => {
+      writeGuestOnboardingState(next);
+      setState(next);
+      router.push(nextStep.path);
+    }, 180);
   };
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[60]">
-      <div className="absolute inset-0 bg-black/35 backdrop-blur-[1.5px]" />
+      <div
+        className={[
+          "absolute inset-0 bg-black/40 backdrop-blur-[1.5px] transition-opacity duration-300",
+          shown ? "opacity-100" : "opacity-0",
+        ].join(" ")}
+      />
 
       <div className="pointer-events-auto absolute inset-x-0 bottom-24">
         <div className="mx-auto max-w-md px-4">
-          <div className="overflow-hidden rounded-[30px] border border-white/10 bg-[#151515]/95 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
+          <div
+            className={[
+              "overflow-hidden rounded-[30px] border border-white/10 bg-[#151515]/95 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl transition-all duration-300 ease-out",
+              shown ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
+            ].join(" ")}
+          >
             <div className="h-1 w-full bg-white/6">
               <div
-                className="h-full rounded-full bg-white transition-all"
+                className="h-full rounded-full bg-white transition-all duration-300"
                 style={{ width: `${((activeIndex + 1) / steps.length) * 100}%` }}
               />
             </div>
@@ -142,7 +163,9 @@ export function GuestOnboarding() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-white/45">
-                    {activeStep.accent}
+                    {isCz
+                      ? `Krok ${activeIndex + 1} ze ${steps.length}`
+                      : `Step ${activeIndex + 1} of ${steps.length}`}
                   </div>
                   <div className="mt-2 text-[22px] font-semibold leading-[1.05] text-white">
                     {activeStep.title}
@@ -155,7 +178,7 @@ export function GuestOnboarding() {
                 <button
                   type="button"
                   onClick={close}
-                  className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-white/65 transition hover:bg-white/6 hover:text-white"
+                  className="shrink-0 rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-white/65 transition hover:bg-white/6 hover:text-white"
                 >
                   {isCz ? "Přeskočit" : "Skip"}
                 </button>
@@ -177,7 +200,7 @@ export function GuestOnboarding() {
                 <button
                   type="button"
                   onClick={goNext}
-                  className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-white/92"
+                  className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-white/92 active:scale-[0.98]"
                 >
                   {activeIndex === steps.length - 1 ? (isCz ? "Rozumím" : "Got it") : isCz ? "Další" : "Next"}
                 </button>

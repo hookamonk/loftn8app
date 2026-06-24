@@ -1,6 +1,7 @@
 import { env } from "../../config/env";
 import { prisma } from "../../db/prisma";
 import { latestLegacyPaymentCutoff, paidQtyByOrderItemId } from "../payments/paymentAllocation";
+import { ORDER_REQUEST_MARKER } from "../orders/orderRequest";
 
 const SESSION_AUTO_END_AFTER_INACTIVITY_MS =
   env.GUEST_SESSION_AUTO_END_AFTER_PAYMENT_MINUTES * 60 * 1000;
@@ -43,6 +44,57 @@ function remainingUnpaidQty(params: {
         ),
       0
     );
+}
+
+/**
+ * When a table's bill is fully settled (no pending payment requests and no
+ * unpaid order items), end ALL active guest sessions at that table so it's
+ * freed for the next guests and no one stays "connected" in the staff app.
+ * Returns the number of sessions that were ended.
+ */
+export async function endTableSessionsIfFullyPaid(tableId: number, shiftId: string) {
+  // Don't free the table while a fresh order request is still open (guest is
+  // mid "order more"): they'd be kicked before staff handles it.
+  const openRequests = await prisma.staffCall.count({
+    where: {
+      tableId,
+      type: "HELP",
+      message: ORDER_REQUEST_MARKER,
+      status: { in: ["NEW", "ACKED"] },
+      session: { shiftId },
+    },
+  });
+  if (openRequests > 0) return 0;
+
+  const [orders, confirmedPayments, pendingCount] = await Promise.all([
+    prisma.order.findMany({
+      where: { tableId, status: { not: "CANCELLED" }, session: { shiftId } },
+      select: { createdAt: true, status: true, items: { select: { id: true, qty: true } } },
+    }),
+    prisma.paymentRequest.findMany({
+      where: { tableId, status: "CONFIRMED", session: { shiftId } },
+      select: {
+        status: true,
+        createdAt: true,
+        confirmedAt: true,
+        itemsJson: true,
+        confirmation: { select: { itemsJson: true, createdAt: true } },
+      },
+    }),
+    prisma.paymentRequest.count({ where: { tableId, status: "PENDING", session: { shiftId } } }),
+  ]);
+
+  // Nothing ordered, still-pending payment, or unpaid items left → keep open.
+  if (orders.length === 0) return 0;
+  if (pendingCount > 0) return 0;
+  if (remainingUnpaidQty({ orders, payments: confirmedPayments as any }) > 0) return 0;
+
+  const result = await prisma.guestSession.updateMany({
+    where: { tableId, shiftId, endedAt: null },
+    data: { endedAt: new Date() },
+  });
+
+  return result.count;
 }
 
 export async function getGuestSessionClosureState(

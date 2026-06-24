@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
 import { markAnonBypassAuthOnce } from "@/lib/guestFlow";
-import { getVenueName, hasVenueSelection } from "@/lib/venue";
+import { restartGuestOnboarding } from "@/lib/guestOnboarding";
+import { getVenueName } from "@/lib/venue";
 import { useToast } from "@/providers/toast";
 import { useAuth } from "@/providers/auth";
 import { useSession } from "@/providers/session";
@@ -80,6 +81,9 @@ export default function AuthPage() {
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
   const [code, setCode] = useState("");
+  // Dev only: when e-mail isn't configured the server returns the OTP so we can
+  // show it on the code step (in production with SMTP this stays null).
+  const [devCode, setDevCode] = useState<string | null>(null);
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -101,12 +105,11 @@ export default function AuthPage() {
 
   useEffect(() => {
     if (!nextPath) return;
-    if (!hasVenueSelection() && !cabinetMode) {
-      router.replace("/");
-      return;
-    }
+    // Registration/sign-in is the entry screen and works without a table
+    // context (the table is bound later when the guest scans the QR), so we
+    // don't bounce away when no venue is selected.
     void ensureBackendWarm();
-  }, [cabinetMode, nextPath, router]);
+  }, [nextPath]);
 
   useEffect(() => {
     if (loading || !nextPath) return;
@@ -156,12 +159,26 @@ export default function AuthPage() {
       });
 
       setStep("code");
-      setCode("");
-      push({
-        kind: "success",
-        title: isCz ? "Kód odeslán" : "Code sent",
-        message: isCz ? "Zkontrolujte e-mail a zadejte kód." : "Check your email and enter the code.",
-      });
+      // Demo/dev: if e-mail isn't configured, the server returns the code so the
+      // flow works without inbox access — prefill it.
+      if (r?.devCode) {
+        setCode(String(r.devCode));
+        setDevCode(String(r.devCode));
+        push({
+          kind: "info",
+          title: isCz ? "Demo kód" : "Demo code",
+          message: isCz
+            ? `E-mail není nastaven. Váš kód: ${r.devCode}`
+            : `Email is not configured. Your code: ${r.devCode}`,
+        });
+      } else {
+        setCode("");
+        push({
+          kind: "success",
+          title: isCz ? "Kód odeslán" : "Code sent",
+          message: isCz ? "Zkontrolujte e-mail a zadejte kód." : "Check your email and enter the code.",
+        });
+      }
     } catch (e: any) {
       const raw = String(e?.message || "");
       const msg = humanError(e?.message ?? "Failed", isCz);
@@ -216,19 +233,31 @@ export default function AuthPage() {
   const requestPasswordReset = async () => {
     setBusy(true);
     try {
-      await post("/auth/guest/request-password-reset", {
+      const r: any = await post("/auth/guest/request-password-reset", {
         email: email.trim(),
       });
 
       setStep("code");
-      setCode("");
       setPassword("");
       setPasswordConfirm("");
-      push({
-        kind: "success",
-        title: isCz ? "Kód odeslán" : "Code sent",
-        message: isCz ? "Zkontrolujte e-mail a vytvořte nové heslo." : "Check your email and create a new password.",
-      });
+      if (r?.devCode) {
+        setCode(String(r.devCode));
+        setDevCode(String(r.devCode));
+        push({
+          kind: "info",
+          title: isCz ? "Demo kód" : "Demo code",
+          message: isCz
+            ? `E-mail není nastaven. Váš kód: ${r.devCode}`
+            : `Email is not configured. Your code: ${r.devCode}`,
+        });
+      } else {
+        setCode("");
+        push({
+          kind: "success",
+          title: isCz ? "Kód odeslán" : "Code sent",
+          message: isCz ? "Zkontrolujte e-mail a vytvořte nové heslo." : "Check your email and create a new password.",
+        });
+      }
     } catch (e: any) {
       const msg = humanError(e?.message ?? "Failed", isCz);
       const raw = String(e?.message || "");
@@ -275,6 +304,8 @@ export default function AuthPage() {
         },
       });
       await restoreSession().catch(() => {});
+      // Show the short onboarding once, right after a fresh registration.
+      restartGuestOnboarding();
       push({
         kind: "success",
         title: isCz ? "Hotovo" : "Done",
@@ -362,7 +393,7 @@ export default function AuthPage() {
     }
 
     markAnonBypassAuthOnce();
-    router.replace("/table?guest=1");
+    router.replace("/");
   };
 
   return (
@@ -668,6 +699,18 @@ export default function AuthPage() {
             </>
           ) : (
             <>
+              {devCode ? (
+                <div className="mt-4 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-[0.18em] text-amber-200/70">
+                    {isCz ? "Demo režim · kód" : "Demo mode · code"}
+                  </div>
+                  <div className="mt-1 text-2xl font-bold tracking-[0.3em] text-amber-100">{devCode}</div>
+                  <div className="mt-1 text-[11px] text-amber-100/70">
+                    {isCz ? "E-mail není nastaven, kód je zde." : "Email isn't configured — your code is here."}
+                  </div>
+                </div>
+              ) : null}
+
               <div className="mt-4">
                 <div className="text-xs text-white/60">
                   {mode === "forgot" ? (isCz ? "Kód pro obnovu hesla" : "Password reset code") : isCz ? "E-mailový kód" : "Email code"}

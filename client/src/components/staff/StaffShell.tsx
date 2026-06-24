@@ -7,6 +7,8 @@ import { staffLogout, getStaffSummary, type StaffSummary } from "@/lib/staffApi"
 import { useStaffSession } from "@/providers/staffSession";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { useStaffEvents } from "@/lib/useStaffEvents";
+import { fireInAppAlert } from "@/lib/staffAlerts";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 
 function Badge({ value }: { value?: number }) {
@@ -76,6 +78,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   const { staff, clear } = useStaffSession();
 
   const [summary, setSummary] = useState<StaffSummary | null>(null);
+  const [noShift, setNoShift] = useState(false);
 
   const onLogout = async () => {
     await staffLogout();
@@ -86,7 +89,10 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   const isAdmin = staff?.role === "ADMIN";
   const isManager = staff?.role === "MANAGER";
   const isAdminPage = pathname.startsWith("/staff/admin");
-  const shouldPollSummary = !isAdmin && !pathname.startsWith("/staff/summary");
+  // Poll the summary on every non-admin screen (including «Сводка») so the nav
+  // badges are always live — SSE ticks are no-ops when polling is disabled, and
+  // disabling it on the summary page made badges update only «через раз».
+  const shouldPollSummary = !isAdmin;
 
   const loadSummary = async (opts?: { silent?: boolean }) => {
     if (isAdmin) return;
@@ -94,15 +100,23 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
     const r = await getStaffSummary();
     if (!r.ok) {
       if (r.status === 409) {
+        // No open shift — surface it instead of silently showing zeros, so
+        // staff understand why nothing appears.
+        setNoShift(true);
         setSummary({
           newOrders: 0,
           newCalls: 0,
           pendingPayments: 0,
         });
       }
+      // Network/server failure — signal the poller so it backs off.
+      if (r.status === undefined || r.status >= 500) {
+        throw new Error(r.error || "SUMMARY_FAILED");
+      }
       return;
     }
 
+    setNoShift(false);
     setSummary(r.data);
   };
 
@@ -123,6 +137,23 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
       void tick();
     }
   });
+
+  // Realtime SSE channel — the reliable in-app signal while the dashboard is
+  // open, independent of (flaky) web-push. Refresh badges and beep on visible.
+  useStaffEvents(
+    (e) => {
+      if (
+        document.visibilityState === "visible" &&
+        (e.kind === "CALL_CREATED" ||
+          e.kind === "ORDER_CREATED" ||
+          e.kind === "PAYMENT_REQUESTED")
+      ) {
+        fireInAppAlert({ kind: e.kind, tableCode: e.tableCode ?? null });
+      }
+      void tick();
+    },
+    { enabled: !isAdmin }
+  );
 
   useEffect(() => {
     if (!shouldPollSummary) return;
@@ -151,7 +182,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
               <div className="min-w-0">
                 <div className="text-[11px] tracking-[0.24em] text-white/45">LOFT№8 • ПЕРСОНАЛ</div>
                 <div className="mt-2 text-xl font-semibold">
-                  {isAdminPage ? "Админ-панель" : "Рабочая панель"}
+                  {isAdminPage ? "Гости" : "Рабочая панель"}
                 </div>
 
                 {staff ? (
@@ -209,15 +240,22 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
               )}
 
               {(isAdmin || isManager) && (
-                <NavLink href="/staff/admin" label="Админ" active={pathname.startsWith("/staff/admin")} />
-              )}
-
-              {isAdmin && (
-                <NavLink href="/staff/summary" label="Сводка" active={pathname === "/staff/summary"} />
+                <NavLink href="/staff/admin" label="Гости" active={pathname.startsWith("/staff/admin")} />
               )}
             </div>
           </div>
         </div>
+
+        {!isAdmin && noShift ? (
+          <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
+            <div className="font-semibold">Смена не открыта</div>
+            <div className="mt-1 text-amber-100/80">
+              {isManager
+                ? "Откройте смену в разделе «Сводка», иначе новые вызовы, заказы и оплаты не отображаются."
+                : "Дождитесь, пока менеджер откроет смену — до этого новые вызовы, заказы и оплаты не отображаются."}
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-4">{children}</div>
       </div>

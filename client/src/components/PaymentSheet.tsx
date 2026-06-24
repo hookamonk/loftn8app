@@ -13,18 +13,20 @@ function QtyInline({
   onPlus: () => void;
 }) {
   return (
-    <div className="flex h-10 items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-2">
+    <div className="flex h-11 items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-1.5">
       <button
         type="button"
-        className="grid h-7 w-7 place-items-center rounded-xl border border-white/10 bg-white/5 text-base text-white"
+        aria-label="−"
+        className="grid h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-lg text-white active:bg-white/15"
         onClick={onMinus}
       >
         −
       </button>
-      <div className="w-7 text-center text-sm font-semibold text-white">{qty}</div>
+      <div className="w-8 text-center text-sm font-semibold text-white">{qty}</div>
       <button
         type="button"
-        className="grid h-7 w-7 place-items-center rounded-xl border border-white/10 bg-white/5 text-base text-white"
+        aria-label="+"
+        className="grid h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-lg text-white active:bg-white/15"
         onClick={onPlus}
       >
         +

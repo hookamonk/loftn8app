@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomInt } from "node:crypto";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -7,9 +8,15 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
-import { sendGuestOtpEmail } from "../../utils/mailer";
+import { sendGuestOtpEmail, isEmailConfigured } from "../../utils/mailer";
+import { rateLimit } from "../../middleware/rateLimit";
 
 export const authRouter = Router();
+
+// Throttle OTP issuance/verification and password auth to stop brute-force / e-mail spam.
+const otpRequestLimiter = rateLimit({ windowMs: 15 * 60_000, max: 5, keyPrefix: "otp-request" });
+const otpVerifyLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "otp-verify" });
+const passwordLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "auth-pw" });
 
 type Intent = "login" | "register";
 
@@ -106,7 +113,8 @@ function assertEmail(email: string | null) {
 }
 
 function genOtpCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  // Cryptographically secure 6-digit code (Math.random is predictable).
+  return String(randomInt(100_000, 1_000_000));
 }
 
 function assertRegisterAllowed(existingUser: { id: string } | null) {
@@ -115,18 +123,53 @@ function assertRegisterAllowed(existingUser: { id: string } | null) {
   }
 }
 
+const OTP_MAX_ATTEMPTS = 5;
+
 async function issueOtpForPhone(phone: string) {
   const code = genOtpCode();
   const codeHash = await bcrypt.hash(code, 10);
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
+  // Opportunistic cleanup: drop this phone's used/expired codes so the table
+  // doesn't grow unbounded and only the freshest code stays active.
+  await prisma.otpCode
+    .deleteMany({ where: { phone, OR: [{ usedAt: { not: null } }, { expiresAt: { lt: new Date() } }] } })
+    .catch(() => {});
+
   await prisma.otpCode.create({ data: { phone, codeHash, expiresAt } });
   return { code, expiresInSec: 600 };
+}
+
+// Verify a submitted code against the freshest active OTP, counting failed
+// attempts so the 6-digit code can't be brute-forced. Returns on success;
+// throws HttpError otherwise.
+async function consumeOtpOrThrow(phone: string, code: string) {
+  const otp = await prisma.otpCode.findFirst({
+    where: { phone, usedAt: null, expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!otp) throw new HttpError(400, "OTP_NOT_FOUND", "OTP code not found or expired");
+
+  if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+    // Burn the code so a fresh one must be requested.
+    await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } }).catch(() => {});
+    throw new HttpError(429, "OTP_TOO_MANY_ATTEMPTS", "Too many attempts. Request a new code.");
+  }
+
+  const ok = await bcrypt.compare(String(code), otp.codeHash);
+  if (!ok) {
+    await prisma.otpCode.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } }).catch(() => {});
+    throw new HttpError(400, "OTP_INVALID", "OTP code is invalid");
+  }
+
+  await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
 }
 
 // POST /auth/guest/request-otp
 authRouter.post(
   "/guest/request-otp",
+  otpRequestLimiter,
   validate(RequestOtpSchema),
   asyncHandler(async (req, res) => {
     const phone = normalizePhone((req.body as any).phone);
@@ -142,6 +185,14 @@ authRouter.post(
     }
 
     const { code, expiresInSec } = await issueOtpForPhone(phone);
+
+    if (!isEmailConfigured()) {
+      // No SMTP configured (demo/dev) — surface the code so registration works
+      // without email. In production with SMTP set, this never runs.
+      console.log(`[DEV OTP] register phone=${phone} email=${email} code=${code}`);
+      return res.json({ ok: true, expiresInSec, delivery: "none", devCode: code });
+    }
+
     await sendGuestOtpEmail({
       to: email,
       guestName: nameRaw || user?.name || null,
@@ -159,6 +210,7 @@ authRouter.post(
 // POST /auth/guest/verify-otp
 authRouter.post(
   "/guest/verify-otp",
+  otpVerifyLimiter,
   validate(VerifyOtpSchema),
   asyncHandler(async (req, res) => {
     const { phone: rawPhone, code } = req.body as any;
@@ -170,17 +222,7 @@ authRouter.post(
     const phone = normalizePhone(rawPhone);
     const email = assertEmail(normalizeEmail((req.body as any).email));
 
-    const otp = await prisma.otpCode.findFirst({
-      where: { phone, usedAt: null, expiresAt: { gt: new Date() } },
-      orderBy: { createdAt: "desc" },
-    });
-
-    if (!otp) throw new HttpError(400, "OTP_NOT_FOUND", "OTP code not found or expired");
-
-    const ok = await bcrypt.compare(String(code), otp.codeHash);
-    if (!ok) throw new HttpError(400, "OTP_INVALID", "OTP code is invalid");
-
-    await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+    await consumeOtpOrThrow(phone, String(code));
 
     let user = await prisma.user.findUnique({ where: { phone } });
 
@@ -292,12 +334,13 @@ const guestPasswordLoginHandler = asyncHandler(async (req, res) => {
     });
   });
 
-authRouter.post("/guest/login-password", validate(PasswordLoginSchema), guestPasswordLoginHandler);
-authRouter.post("/guest/password-login", validate(PasswordLoginSchema), guestPasswordLoginHandler);
-authRouter.post("/guest/login", validate(PasswordLoginSchema), guestPasswordLoginHandler);
+authRouter.post("/guest/login-password", passwordLimiter, validate(PasswordLoginSchema), guestPasswordLoginHandler);
+authRouter.post("/guest/password-login", passwordLimiter, validate(PasswordLoginSchema), guestPasswordLoginHandler);
+authRouter.post("/guest/login", passwordLimiter, validate(PasswordLoginSchema), guestPasswordLoginHandler);
 
 authRouter.post(
   "/guest/request-password-reset",
+  otpRequestLimiter,
   validate(RequestPasswordResetSchema),
   asyncHandler(async (req, res) => {
     const email = assertEmail(normalizeEmail((req.body as any).email));
@@ -308,6 +351,12 @@ authRouter.post(
     }
 
     const { code, expiresInSec } = await issueOtpForPhone(user.phone);
+
+    if (!isEmailConfigured()) {
+      console.log(`[DEV OTP] reset email=${email} code=${code}`);
+      return res.json({ ok: true, expiresInSec, delivery: "none", devCode: code });
+    }
+
     await sendGuestOtpEmail({
       to: email,
       guestName: user.name,
@@ -325,6 +374,7 @@ authRouter.post(
 
 authRouter.post(
   "/guest/reset-password",
+  otpVerifyLimiter,
   validate(ConfirmPasswordResetSchema),
   asyncHandler(async (req, res) => {
     const email = assertEmail(normalizeEmail((req.body as any).email));
@@ -336,17 +386,7 @@ authRouter.post(
       throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
     }
 
-    const otp = await prisma.otpCode.findFirst({
-      where: { phone: user.phone, usedAt: null, expiresAt: { gt: new Date() } },
-      orderBy: { createdAt: "desc" },
-    });
-
-    if (!otp) throw new HttpError(400, "OTP_NOT_FOUND", "OTP code not found or expired");
-
-    const ok = await bcrypt.compare(code, otp.codeHash);
-    if (!ok) throw new HttpError(400, "OTP_INVALID", "OTP code is invalid");
-
-    await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+    await consumeOtpOrThrow(user.phone, code);
 
     const passwordHash = await bcrypt.hash(passwordRaw, 10);
     const updatedUser = await prisma.user.update({

@@ -46,7 +46,7 @@ export default function StaffTablesPage() {
     setLast(Date.now());
   };
 
-  const { tick, isRunning } = usePolling(() => load({ silent: true }), {
+  const { tick } = usePolling(() => load({ silent: true }), {
     activeMs: 5000,
     idleMs: 12000,
     immediate: false,
@@ -109,11 +109,10 @@ export default function StaffTablesPage() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xl font-semibold text-white">Столы</div>
-            <div className="mt-1 text-xs text-white/50">
-              Автообновление: {isRunning ? "включено" : "выключено"}
-              {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
+            <div className="mt-1.5 text-xs text-white/55">
+              Активных столов: {tables.length}
+              {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
             </div>
-            <div className="mt-2 text-xs text-white/60">Активных столов: {tables.length}</div>
           </div>
 
           <button className={btnGhost} onClick={() => void tick()}>

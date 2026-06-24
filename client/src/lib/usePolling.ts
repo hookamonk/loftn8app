@@ -29,6 +29,7 @@ export function usePolling(
   const inFlightRef = useRef(false);
   const rerunRequestedRef = useRef(false);
   const lastTickAtRef = useRef(0);
+  const failuresRef = useRef(0);
   const [isRunning, setIsRunning] = useState(false);
 
   const clear = useCallback(() => {
@@ -41,7 +42,17 @@ export function usePolling(
   const getNextDelay = useCallback(() => {
     const visible = typeof document !== "undefined" ? document.visibilityState === "visible" : true;
     const online = typeof navigator !== "undefined" ? navigator.onLine : true;
-    return visible && online ? activeMs : idleMs;
+    const base = visible && online ? activeMs : idleMs;
+
+    // Exponential backoff while the poll keeps failing (e.g. server/network
+    // down) so we don't hammer a dead endpoint. Resets on the first success.
+    const fails = failuresRef.current;
+    if (fails > 0) {
+      const factor = 2 ** Math.min(fails, 4);
+      return Math.min(60_000, base * factor);
+    }
+
+    return base;
   }, [activeMs, idleMs]);
 
   const schedule = useCallback((ms: number) => {
@@ -66,6 +77,10 @@ export function usePolling(
 
     try {
       await fnRef.current();
+      failuresRef.current = 0;
+    } catch {
+      // Treat a thrown poll as a transient failure and back off (see getNextDelay).
+      failuresRef.current += 1;
     } finally {
       inFlightRef.current = false;
 

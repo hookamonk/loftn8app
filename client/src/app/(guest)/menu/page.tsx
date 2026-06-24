@@ -8,6 +8,7 @@ import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
 import { getVenueName } from "@/lib/venue";
+import { storage } from "@/lib/storage";
 import { useI18n } from "@/providers/i18n";
 
 function Pill({
@@ -35,35 +36,49 @@ function Pill({
   );
 }
 
-function OrderButton({
-  disabled,
-  active,
-  onClick,
-  labelRequested,
-  labelOrder,
+function SelectControl({
+  qty,
+  onAdd,
+  onRemove,
+  labelSelect,
 }: {
-  disabled?: boolean;
-  active?: boolean;
-  onClick: () => void;
-  labelRequested: string;
-  labelOrder: string;
+  qty: number;
+  onAdd: () => void;
+  onRemove: () => void;
+  labelSelect: string;
 }) {
+  if (qty <= 0) {
+    return (
+      <button
+        type="button"
+        className="h-10 shrink-0 rounded-2xl bg-white px-5 text-sm font-semibold text-black transition active:scale-[0.97] hover:bg-white/90"
+        onClick={onAdd}
+      >
+        {labelSelect}
+      </button>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      className={[
-        "h-10 w-[112px] shrink-0 rounded-2xl px-4 text-sm font-semibold transition",
-        active
-          ? "border border-emerald-400/20 bg-emerald-500/15 text-emerald-100"
-          : disabled
-          ? "bg-white/10 text-white/35"
-          : "bg-white text-black hover:bg-white/90",
-      ].join(" ")}
-      onClick={onClick}
-    >
-      {active ? labelRequested : labelOrder}
-    </button>
+    <div className="flex h-10 shrink-0 items-center gap-1 rounded-2xl border border-emerald-400/25 bg-emerald-500/15 px-1.5">
+      <button
+        type="button"
+        aria-label="−"
+        className="grid h-8 w-8 place-items-center rounded-xl text-lg font-semibold text-emerald-100 active:bg-white/10"
+        onClick={onRemove}
+      >
+        −
+      </button>
+      <div className="min-w-6 text-center text-sm font-bold text-emerald-50">{qty}</div>
+      <button
+        type="button"
+        aria-label="+"
+        className="grid h-8 w-8 place-items-center rounded-xl text-lg font-semibold text-emerald-100 active:bg-white/10"
+        onClick={onAdd}
+      >
+        +
+      </button>
+    </div>
   );
 }
 
@@ -138,16 +153,53 @@ function MenuPage() {
   const router = useRouter();
   const { isCz, ready } = useI18n();
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
+
+  // Show Czech content when CZ is selected, fall back to the base (English) text.
+  const tName = (it: { name: string; nameCs?: string | null }) => (isCz ? it.nameCs || it.name : it.name);
+  const tDesc = (it: { description?: string | null; descriptionCs?: string | null }) =>
+    (isCz ? it.descriptionCs || it.description : it.description) ?? null;
+  const tCat = (c: { name: string; nameCs?: string | null }) => (isCz ? c.nameCs || c.name : c.name);
   const [data, setData] = useState<MenuResponse | null>(null);
   const [activeSection, setActiveSection] = useState<MenuSection>("DISHES");
   const [activeCatId, setActiveCatId] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [requesting, setRequesting] = useState(false);
-  const [requestedItemId, setRequestedItemId] = useState<number | null>(null);
+
+  // Guest "selection" — dishes the guest picks for cashback. The actual order
+  // is taken by the waiter; this is a local wishlist persisted per session.
+  const [selection, setSelection] = useState<Record<number, number>>({});
 
   const { push } = useToast();
   const { feed, refresh } = useGuestFeed();
+
+  const selectionKey = feed?.currentSessionId ? `menuSelection:${feed.currentSessionId}` : null;
+
+  useEffect(() => {
+    if (!selectionKey) return;
+    setSelection(storage.get<Record<number, number>>(selectionKey, {}));
+  }, [selectionKey]);
+
+  useEffect(() => {
+    if (!selectionKey) return;
+    storage.set(selectionKey, selection);
+  }, [selectionKey, selection]);
+
+  const selectionCount = useMemo(
+    () => Object.values(selection).reduce((sum, qty) => sum + (qty > 0 ? qty : 0), 0),
+    [selection]
+  );
+
+  const addToSelection = (itemId: number) =>
+    setSelection((cur) => ({ ...cur, [itemId]: (cur[itemId] ?? 0) + 1 }));
+  const decFromSelection = (itemId: number) =>
+    setSelection((cur) => {
+      const next = (cur[itemId] ?? 0) - 1;
+      const copy = { ...cur };
+      if (next <= 0) delete copy[itemId];
+      else copy[itemId] = next;
+      return copy;
+    });
   const sectionLabel: Record<MenuSection, string> = useMemo(
     () => ({
       DISHES: isCz ? "Jídlo" : "Dishes",
@@ -269,13 +321,15 @@ function MenuPage() {
     for (const c of cats) {
       const sec = c.section as MenuSection;
       for (const i of c.items ?? []) {
-        const name = (i.name ?? "").toLowerCase();
-        const desc = (i.description ?? "").toLowerCase();
-        if (name.includes(query) || desc.includes(query)) {
+        const haystack = [i.name, i.nameCs, i.description, i.descriptionCs]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (haystack.includes(query)) {
           hits.push({
             ...(i as any),
             __catId: c.id,
-            __catName: c.name,
+            __catName: tCat(c),
             __section: sec,
           });
         }
@@ -286,28 +340,26 @@ function MenuPage() {
 
   const isSearching = q.trim().length > 0;
 
-  const requestOrder = async (item?: MenuItem) => {
+  const requestOrder = async () => {
     if (orderRequestActive || requesting) return;
-    setRequestedItemId(item?.id ?? null);
     setRequesting(true);
+
+    const items = Object.entries(selection)
+      .map(([id, qty]) => ({ menuItemId: Number(id), qty }))
+      .filter((it) => Number.isFinite(it.menuItemId) && it.qty > 0);
 
     try {
       await api("/orders/request", {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify({ items }),
       });
+      setSelection({});
       await refresh();
 
       push({
         kind: "success",
         title: isCz ? "Výzva odeslána" : "Call sent",
-        message: item
-          ? isCz
-            ? `${item.name}: číšník jde k vašemu stolu.`
-            : `${item.name}: a waiter is on the way to your table.`
-          : isCz
-          ? "Číšník jde k vašemu stolu."
-          : "A waiter is on the way to your table.",
+        message: isCz ? "Číšník jde k vašemu stolu." : "A waiter is on the way to your table.",
       });
       router.push("/cart");
     } catch (e: any) {
@@ -316,13 +368,15 @@ function MenuPage() {
         title: isCz ? "Chyba požadavku" : "Request error",
         message: e?.message ?? (isCz ? "Požadavek se nepodařilo odeslat" : "Failed"),
       });
-      setRequestedItemId(null);
     } finally {
       setRequesting(false);
     }
   };
 
   const showSubDropdown = (activeGroup?.cats?.length ?? 0) > 1;
+  const availableSections = (["DISHES", "DRINKS", "HOOKAH"] as MenuSection[]).filter(
+    (s) => (groupsBySection.get(s)?.length ?? 0) > 0
+  );
 
   return (
     <RequireTable>
@@ -332,13 +386,34 @@ function MenuPage() {
           <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Menu" : "Menu"}</h1>
         </div>
 
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
-          <input
-            className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/40 outline-none"
-            placeholder={isCz ? "Hledat v menu…" : "Search the menu…"}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
+        <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3">
+          <div className="mt-0.5 text-base">★</div>
+          <div className="text-xs leading-5 text-amber-100/90">
+            {isCz
+              ? "Vyberte si jídla a nápoje pro cashback. Objednávku u stolu přijme obsluha."
+              : "Pick your dishes and drinks to earn cashback. The waiter will take your order at the table."}
+          </div>
+        </div>
+
+        <div className="sticky top-2 z-30 rounded-3xl border border-white/10 bg-[#0c0c11]/90 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+          <div className="relative">
+            <svg
+              className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3-3" strokeLinecap="round" />
+            </svg>
+            <input
+              className="w-full rounded-2xl border border-white/10 bg-black/30 py-3 pl-10 pr-4 text-sm text-white placeholder:text-white/40 outline-none focus:border-white/25"
+              placeholder={isCz ? "Hledat v menu…" : "Search the menu…"}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
 
           {err ? (
             <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs text-red-200">
@@ -346,64 +421,67 @@ function MenuPage() {
             </div>
           ) : null}
 
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {(["DISHES", "DRINKS", "HOOKAH"] as MenuSection[])
-              .filter((s) => (groupsBySection.get(s)?.length ?? 0) > 0)
-              .map((s) => (
-                <Pill
+          {/* Sections — сегмент-контрол (равные доли, без скролла) */}
+          {availableSections.length > 1 ? (
+            <div className="mt-3 flex gap-1 rounded-2xl border border-white/10 bg-black/30 p-1">
+              {availableSections.map((s) => (
+                <button
                   key={s}
-                  active={s === activeSection}
+                  type="button"
                   onClick={() => {
                     setActiveSection(s);
                     setQ("");
                   }}
+                  className={[
+                    "h-9 flex-1 rounded-xl text-xs font-semibold transition",
+                    s === activeSection
+                      ? "bg-white text-black shadow-[0_4px_16px_rgba(0,0,0,0.35)]"
+                      : "text-white/65 hover:text-white",
+                  ].join(" ")}
                 >
                   {sectionLabel[s]}
-                </Pill>
+                </button>
               ))}
-          </div>
+            </div>
+          ) : null}
 
-          <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-            {sectionGroups.map((g) => (
-              <Pill
-                key={g.key}
-                active={g.key === activeGroupKey}
-                onClick={() => {
-                  setActiveCatId(g.cats[0]?.id ?? null);
-                  setQ("");
-                }}
-              >
-                {g.label}
-              </Pill>
-            ))}
-          </div>
-
-          {showSubDropdown && activeGroup ? (
-            <div className="mt-2">
-              <div className="relative">
-                <select
-                  value={activeCat?.id ?? ""}
-                  onChange={(e) => {
-                    const next = Number(e.target.value);
-                    setActiveCatId(Number.isFinite(next) ? next : null);
+          {/* Groups — чипсы (горизонтальный скролл) */}
+          {sectionGroups.length > 1 ? (
+            <div className="mt-2 flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {sectionGroups.map((g) => (
+                <Pill
+                  key={g.key}
+                  active={g.key === activeGroupKey}
+                  onClick={() => {
+                    setActiveCatId(g.cats[0]?.id ?? null);
                     setQ("");
                   }}
-                  className="w-full appearance-none rounded-2xl border border-white/10 bg-black/30 px-4 py-3 pr-10 text-sm text-white outline-none"
                 >
-                  {activeGroup.cats.map((c) => {
-                    const { sub } = splitCatName(c.name);
-                    return (
-                      <option key={c.id} value={c.id} className="text-black">
-                        {sub ?? c.name}
-                      </option>
-                    );
-                  })}
-                </select>
+                  {g.cats[0] ? splitCatName(tCat(g.cats[0])).group : g.label}
+                </Pill>
+              ))}
+            </div>
+          ) : null}
 
-                <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/60">
-                  ▾
-                </div>
-              </div>
+          {/* Subcategories — чипсы вместо select */}
+          {showSubDropdown && activeGroup ? (
+            <div className="mt-2 flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {activeGroup.cats.map((c) => {
+                const localized = tCat(c);
+                const { sub } = splitCatName(localized);
+                return (
+                  <Pill
+                    key={c.id}
+                    active={activeCat?.id === c.id}
+                    onClick={() => {
+                      setActiveCatId(c.id);
+                      setQ("");
+                    }}
+                  >
+                    {sub ?? localized}
+                  </Pill>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -449,23 +527,22 @@ function MenuPage() {
                     {meta ? <div className="text-[11px] text-white/55">{meta}</div> : null}
 
                     <div className="line-clamp-2 text-[15px] font-semibold leading-5 text-white">
-                      {i.name}
+                      {tName(i)}
                     </div>
 
-                    {i.description ? (
+                    {tDesc(i) ? (
                       <div className="mt-1 line-clamp-3 text-xs leading-5 text-white/65">
-                        {i.description}
+                        {tDesc(i)}
                       </div>
                     ) : null}
 
                     <div className="mt-3 flex items-center justify-between gap-3">
                       <div className="text-base font-semibold text-white">{i.priceCzk} Kč</div>
-                      <OrderButton
-                        active={requestedItemId === i.id && requesting}
-                        disabled={requesting || orderRequestActive}
-                        labelRequested={isCz ? "Odesláno" : "Requested"}
-                        labelOrder={isCz ? "Zavolat" : "Call"}
-                        onClick={() => void requestOrder(i)}
+                      <SelectControl
+                        qty={selection[i.id] ?? 0}
+                        onAdd={() => addToSelection(i.id)}
+                        onRemove={() => decFromSelection(i.id)}
+                        labelSelect={isCz ? "Vybrat" : "Select"}
                       />
                     </div>
                   </div>
@@ -481,6 +558,39 @@ function MenuPage() {
           ) : null}
         </div>
       </main>
+
+      {selectionCount > 0 ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-24 z-40 px-4">
+          <div className="pointer-events-auto mx-auto flex max-w-md items-center gap-3 rounded-3xl border border-white/10 bg-[#101014]/95 p-2 pl-4 shadow-[0_20px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+            <div className="min-w-0 flex-1 text-sm text-white">
+              <span className="font-semibold">
+                {isCz ? `Vybráno: ${selectionCount}` : `Selected: ${selectionCount}`}
+              </span>
+              <span className="ml-1 text-white/55">
+                {isCz ? "· obsluha přijme objednávku" : "· waiter will take the order"}
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={requesting || orderRequestActive}
+              className="h-11 shrink-0 rounded-2xl bg-white px-5 text-sm font-semibold text-black transition active:scale-[0.97] hover:bg-white/90 disabled:opacity-50"
+              onClick={() => void requestOrder()}
+            >
+              {orderRequestActive
+                ? isCz
+                  ? "Odesláno"
+                  : "Sent"
+                : requesting
+                ? isCz
+                  ? "Odesílám…"
+                  : "Sending…"
+                : isCz
+                ? "Objednat"
+                : "Order"}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </RequireTable>
   );
 }

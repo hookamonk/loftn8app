@@ -194,37 +194,7 @@ export default function CallPage() {
   );
   const paymentStatus = shouldShowPaymentStatus ? paymentStatusText(latestPayment?.status, isCz) : undefined;
   const messageStatus = doneFlash.HELP ? (isCz ? "Hotovo" : "Done") : requestStatusText(latestMessage?.status, isCz);
-  const hasLiveCallState = Boolean(
-    latestWaiter?.status === "NEW" ||
-      latestWaiter?.status === "ACKED" ||
-      latestHookah?.status === "NEW" ||
-      latestHookah?.status === "ACKED" ||
-      latestMessage?.status === "NEW" ||
-      latestMessage?.status === "ACKED" ||
-      latestPayment?.status === "PENDING" ||
-      shouldShowPaymentStatus
-  );
-
-  useEffect(() => {
-    if (!hasLiveCallState) return;
-
-    let cancelled = false;
-    let timer: number | null = null;
-
-    const run = async () => {
-      if (document.visibilityState !== "visible") return;
-      await refresh().catch(() => {});
-      if (cancelled) return;
-      timer = window.setTimeout(run, 1200);
-    };
-
-    timer = window.setTimeout(run, 1200);
-
-    return () => {
-      cancelled = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [hasLiveCallState, refresh]);
+  // Live updates come from GuestFeedProvider's central polling; no local loop.
 
   const send = async (type: string, message?: string) => {
     if (cooldown) return;
@@ -295,7 +265,7 @@ export default function CallPage() {
     <RequireTable>
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
         <div className="mb-4">
-          <div className="text-[11px] tracking-[0.28em] text-white/55">
+          <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">
             {venueName}
           </div>
           <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Obsluha" : "Staff"}</h1>
@@ -331,7 +301,7 @@ export default function CallPage() {
           <ActionCard
             disabled={cooldown}
             title={isCz ? "Platba" : "Payment"}
-            subtitle={isCz ? "Vyberte položky a způsob platby v sekci Cart" : "Choose items and payment method in Cart"}
+            subtitle={isCz ? "Vyberte položky a způsob platby na účtu" : "Choose items and payment on your bill"}
             statusText={paymentStatus}
             icon={<SmallIcon name="card" />}
             onClick={() => router.push("/cart")}
@@ -363,10 +333,17 @@ export default function CallPage() {
             <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-xs text-white/70">
               <div className="font-medium text-white">{messageStatus ?? (isCz ? "Zpráva odeslána" : "Message sent")}</div>
               <div className="mt-1">
-                {doneFlash.HELP ? (isCz ? "Tento požadavek byl dokončen." : "This request has been completed.") : messageStatusCopy(latestMessage.status)}
+                {doneFlash.HELP ? (isCz ? "Tento požadavek byl dokončen." : "This request has been completed.") : messageStatusCopy(latestMessage.status, isCz)}
               </div>
             </div>
           ) : null}
+
+          <button
+            className="mt-3 w-full rounded-3xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white"
+            onClick={() => setRatingOpen(true)}
+          >
+            {isCz ? "Ohodnotit návštěvu" : "Rate your visit"}
+          </button>
         </div>
 
         <RatingSheet

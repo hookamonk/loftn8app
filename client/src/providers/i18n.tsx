@@ -18,7 +18,9 @@ type I18nContextValue = {
 const I18nContext = createContext<I18nContextValue | null>(null);
 
 function resolveInitialLanguage(): AppLanguage {
-  if (typeof window === "undefined") return "en";
+  // Czech venue: default to Czech, switch to English only for English browsers
+  // (or an explicit user choice). The language toggle stays available.
+  if (typeof window === "undefined") return "cs";
 
   try {
     const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
@@ -28,11 +30,11 @@ function resolveInitialLanguage(): AppLanguage {
   }
 
   const browserLang = window.navigator.language.toLowerCase();
-  return browserLang.startsWith("cs") ? "cs" : "en";
+  return browserLang.startsWith("en") ? "en" : "cs";
 }
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [lang, setLangState] = useState<AppLanguage>("en");
+  const [lang, setLangState] = useState<AppLanguage>("cs");
   const [ready, setReady] = useState(false);
 
   useEffect(() => {

@@ -118,25 +118,67 @@ export default function StaffOrderCreatePage() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Prefill the draft with the guest's selection passed from the order request.
   useEffect(() => {
+    if (!requestId) return;
+    try {
+      const raw = sessionStorage.getItem(`orderPrefill:${requestId}`);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Array<{ menuItemId: number; name: string; qty: number; priceCzk: number }>;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setItems(
+          parsed
+            .filter((p) => Number.isFinite(p.menuItemId) && p.qty > 0)
+            .map((p) => ({ menuItemId: p.menuItemId, name: p.name, priceCzk: p.priceCzk, qty: p.qty }))
+        );
+      }
+      sessionStorage.removeItem(`orderPrefill:${requestId}`);
+    } catch {
+      // ignore malformed prefill
+    }
+  }, [requestId]);
+
+  useEffect(() => {
+    const venueSlug = staff?.venueSlug ?? getStaffVenueSlug();
+    const cacheKey = `staffMenuCache:${venueSlug}`;
+
+    const applyMenu = (menu: MenuResponse) => {
+      const categories = (menu.categories ?? []).filter((category) => (category.items?.length ?? 0) > 0);
+      setData({ ...menu, categories });
+      const first = firstSection(categories);
+      setActiveSection(first);
+      const firstCatInSection = categories.find((category) => category.section === first);
+      setActiveCatId(firstCatInSection?.id ?? categories[0]?.id ?? null);
+    };
+
+    // Instant paint from cache (the menu rarely changes mid-shift), then refresh.
+    let hadCache = false;
+    try {
+      const raw = sessionStorage.getItem(cacheKey);
+      if (raw) {
+        applyMenu(JSON.parse(raw) as MenuResponse);
+        hadCache = true;
+      }
+    } catch {
+      // ignore cache read errors
+    }
+
     const load = async () => {
-      setLoading(true);
+      if (!hadCache) setLoading(true);
       setErr(null);
 
       try {
         const menu = await api<MenuResponse>("/menu", {
-          headers: {
-            "X-Venue-Slug": staff?.venueSlug ?? getStaffVenueSlug(),
-          },
+          headers: { "X-Venue-Slug": venueSlug },
         });
-        const categories = (menu.categories ?? []).filter((category) => (category.items?.length ?? 0) > 0);
-        setData({ ...menu, categories });
-        const first = firstSection(categories);
-        setActiveSection(first);
-        const firstCatInSection = categories.find((category) => category.section === first);
-        setActiveCatId(firstCatInSection?.id ?? categories[0]?.id ?? null);
+        applyMenu(menu);
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify(menu));
+        } catch {
+          // ignore cache write errors
+        }
       } catch (e: any) {
-        setErr(e?.message ?? "Failed to load menu");
+        if (!hadCache) setErr(e?.message ?? "Failed to load menu");
       } finally {
         setLoading(false);
       }

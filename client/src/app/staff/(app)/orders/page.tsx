@@ -6,6 +6,7 @@ import {
   listOrders,
   listOrderRequests,
   connectOrderRequest,
+  createTableOrder,
   updateOrderStatus,
   type StaffOrder,
   type StaffOrderRequest,
@@ -14,6 +15,7 @@ import {
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 
 const STATUSES: OrderStatus[] = ["IN_PROGRESS", "DELIVERED", "CANCELLED"];
@@ -74,9 +76,9 @@ export default function StaffOrdersPage() {
     setLast(Date.now());
   };
 
-  const { tick, isRunning } = usePolling(() => load({ silent: true }), {
-    activeMs: 15000,
-    idleMs: 45000,
+  const { tick } = usePolling(() => load({ silent: true }), {
+    activeMs: 8000,
+    idleMs: 20000,
     immediate: false,
     enabled: true,
   });
@@ -88,6 +90,12 @@ export default function StaffOrdersPage() {
 
   useStaffPushEvents((payload) => {
     if (payload.kind === "ORDER_CREATED") {
+      void tick();
+    }
+  });
+
+  useStaffEvents((e) => {
+    if (e.kind === "ORDER_CREATED" || e.kind === "CALL_CREATED" || e.kind === "DATA_CHANGED") {
       void tick();
     }
   });
@@ -122,6 +130,33 @@ export default function StaffOrdersPage() {
     await load({ silent: false });
   };
 
+  // "Принять" — создать заказ сразу из того, что гость выбрал, и закрыть запрос.
+  const acceptRequest = async (request: StaffOrderRequest) => {
+    if (!request.items || request.items.length === 0) return;
+    setBusyId(request.id);
+    const result = await createTableOrder({
+      tableId: request.table.id,
+      sessionId: request.session.id,
+      requestId: request.id,
+      items: request.items.map((it) => ({ menuItemId: it.menuItemId, qty: it.qty })),
+    });
+    setBusyId(null);
+
+    if (!result.ok) {
+      push({
+        kind: "error",
+        title: "Не удалось принять",
+        message: result.error || "Проверьте позиции (возможно, не ваша секция) — используйте «Дополнить».",
+      });
+      return;
+    }
+
+    push({ kind: "success", title: "Заказ подтверждён", message: `Стол ${request.table.code} — готовится.` });
+    emitStaffLiveSync("order-accepted");
+    await load({ silent: false });
+  };
+
+  // "Дополнить" / "Собрать" — открыть форму, предзаполнив выбором гостя.
   const connectToTable = async (request: StaffOrderRequest) => {
     setBusyId(request.id);
     const result = await connectOrderRequest(request.id);
@@ -133,6 +168,13 @@ export default function StaffOrdersPage() {
     }
 
     const connected = result.data.request;
+    // Передаём выбор гостя в форму создания (предзаполнение).
+    try {
+      if (request.items && request.items.length > 0) {
+        sessionStorage.setItem(`orderPrefill:${connected.id}`, JSON.stringify(request.items));
+      }
+    } catch {}
+
     emitStaffLiveSync("order-request-connected");
     router.push(
       `/staff/orders/create?requestId=${encodeURIComponent(connected.id)}&tableId=${connected.table.id}&tableCode=${encodeURIComponent(
@@ -147,12 +189,9 @@ export default function StaffOrdersPage() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xl font-semibold text-white">Заказы</div>
-            <div className="mt-1 text-xs text-white/50">
-              Автообновление: {isRunning ? "вкл" : "выкл"}
-              {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
-            </div>
-            <div className="mt-2 text-xs text-white/60">
+            <div className="mt-1.5 text-xs text-white/55">
               Заказов: {orders.length} • Позиций: {totalItems}
+              {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
             </div>
           </div>
 
@@ -223,14 +262,49 @@ export default function StaffOrdersPage() {
                   </div>
                 </div>
 
-                <button
-                  className={btnPrimary}
-                  disabled={busyId === request.id}
-                  onClick={() => void connectToTable(request)}
-                >
-                  {busyId === request.id ? "Подключаем…" : "Подключиться"}
-                </button>
+                {request.items && request.items.length > 0 ? (
+                  <div className="flex shrink-0 flex-col gap-2">
+                    <button
+                      className={btnPrimary}
+                      disabled={busyId === request.id}
+                      onClick={() => void acceptRequest(request)}
+                    >
+                      {busyId === request.id ? "…" : "Подтвердить"}
+                    </button>
+                    <button
+                      className={btnGhost}
+                      disabled={busyId === request.id}
+                      onClick={() => void connectToTable(request)}
+                    >
+                      Дополнить
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className={btnPrimary}
+                    disabled={busyId === request.id}
+                    onClick={() => void connectToTable(request)}
+                  >
+                    {busyId === request.id ? "…" : "Собрать заказ"}
+                  </button>
+                )}
               </div>
+
+              {request.items && request.items.length > 0 ? (
+                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-white/50">Гость выбрал</div>
+                  <div className="mt-2 space-y-1">
+                    {request.items.map((it) => (
+                      <div key={it.menuItemId} className="flex items-center justify-between text-sm text-white/85">
+                        <span className="min-w-0 truncate">
+                          {it.name} × {it.qty}
+                        </span>
+                        <span className="shrink-0 text-white/55">{it.qty * it.priceCzk} Kč</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ))}
 

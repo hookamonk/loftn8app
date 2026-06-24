@@ -4,7 +4,6 @@ import React, { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { SessionProvider } from "./session";
 import { AuthProvider } from "./auth";
-import { CartProvider } from "./cart";
 import { ToastProvider } from "./toast";
 import { GuestFeedProvider } from "./guestFeed";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
@@ -33,14 +32,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <I18nProvider>
       <SessionProvider>
         <AuthProvider>
-          <CartProvider>
-            <ToastProvider>
-              <GuestFeedProvider>
-                <LanguageSwitch />
-                {children}
-              </GuestFeedProvider>
-            </ToastProvider>
-          </CartProvider>
+          <ToastProvider>
+            <GuestFeedProvider>
+              <LanguageSwitch />
+              {children}
+            </GuestFeedProvider>
+          </ToastProvider>
         </AuthProvider>
       </SessionProvider>
     </I18nProvider>

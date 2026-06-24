@@ -103,6 +103,8 @@ model GuestSession {
   @@index([tableId, endedAt])
   @@index([userId, endedAt])
   @@index([shiftId, endedAt])
+  // Active-session-by-table lookups across a shift (dashboard /tables).
+  @@index([shiftId, endedAt, tableId])
 }
 
 model User {
@@ -128,6 +130,7 @@ model OtpCode {
   codeHash  String
   expiresAt DateTime
   usedAt    DateTime?
+  attempts  Int       @default(0)
   createdAt DateTime  @default(now())
 
   @@index([phone, createdAt])
@@ -137,6 +140,7 @@ model MenuCategory {
   id        Int         @id @default(autoincrement())
   venueId   Int
   name      String
+  nameCs    String?
   sort      Int         @default(0)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
@@ -152,6 +156,9 @@ model MenuItem {
   categoryId  Int
   name        String
   description String?
+  // Czech translations (base name/description are English). Null → fall back to base.
+  nameCs        String?
+  descriptionCs String?
   priceCzk    Int
   imageUrl    String?
   isActive    Boolean      @default(true)
@@ -202,6 +209,9 @@ model StaffCall {
   tableId   Int
   type      CallType
   message   String?
+  // For order requests: the dishes the guest picked in the menu, so staff can
+  // see the selection and place the actual order. Shape: [{ menuItemId, qty }].
+  requestedItemsJson Json?
   status    CallStatus   @default(NEW)
   createdAt DateTime     @default(now())
   updatedAt DateTime     @default(now()) @updatedAt
@@ -211,6 +221,9 @@ model StaffCall {
   @@index([tableId, status, createdAt])
   @@index([tableId, type, status])
   @@index([sessionId, createdAt])
+  // Supports the dashboard /summary and /order-requests filters
+  // (type + status + createdAt, scoped by venue via join).
+  @@index([type, status, createdAt])
 }
 
 model PaymentRequest {
@@ -234,6 +247,8 @@ model PaymentRequest {
   @@index([tableId, status, createdAt])
   @@index([sessionId, status, createdAt])
   @@index([confirmedAt])
+  // "latest confirmed payment for table" sorts by confirmedAt.
+  @@index([tableId, status, confirmedAt])
 }
 
 model Rating {
@@ -328,7 +343,8 @@ model StaffPushSubscription {
   venue     Venue     @relation(fields: [venueId], references: [id])
 
   @@index([staffId])
-  @@index([venueId])
+  // pushToVenueRoles filters by (venueId, staffId in [...]).
+  @@index([venueId, staffId])
 }
 
 enum UserRole {

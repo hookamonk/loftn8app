@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { useCart } from "@/providers/cart";
+import { useMemo } from "react";
 import { useAuth } from "@/providers/auth";
 import { useI18n } from "@/providers/i18n";
 
@@ -109,19 +108,10 @@ function Item({
 }
 
 export function BottomNav() {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
   const { isCz } = useI18n();
 
   const { me, loading } = useAuth();
   const isAuthed = !!me?.authenticated;
-
-  const { items } = useCart();
-
-  const count = useMemo(() => {
-    if (!mounted) return 0;
-    return items.reduce((s, x) => s + x.qty, 0);
-  }, [items, mounted]);
 
   const nav = useMemo(() => {
     if (!loading && !isAuthed) {
@@ -134,11 +124,11 @@ export function BottomNav() {
 
     return [
       { href: "/menu", label: isCz ? "Menu" : "Menu", icon: "menu" as const },
-      { href: "/cart", label: isCz ? "Účet" : "Cart", icon: "cart" as const, badge: count || undefined },
+      { href: "/cart", label: isCz ? "Účet" : "Cart", icon: "cart" as const },
       { href: "/call", label: isCz ? "Obsluha" : "Staff", icon: "call" as const },
       { href: "/profile", label: isCz ? "Profil" : "Profile", icon: "profile" as const },
     ];
-  }, [loading, isAuthed, count, isCz]);
+  }, [loading, isAuthed, isCz]);
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 pb-4">

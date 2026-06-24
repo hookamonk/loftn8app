@@ -35,12 +35,6 @@ function stageClass(tone: "success" | "info" | "error") {
   return "border-white/10 bg-white/8 text-white/80";
 }
 
-function progressBarClass(tone: "success" | "info" | "error") {
-  if (tone === "success") return "bg-emerald-300";
-  if (tone === "error") return "bg-red-400";
-  return "bg-white";
-}
-
 function progressStepClass(
   state: "idle" | "done" | "active" | "error",
   variant: "accepted" | "preparing" | "ready"
@@ -98,7 +92,7 @@ function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"
 
       itemMap.set(key, {
         key,
-        name: item.menuItem.name,
+        name: isCz ? item.menuItem.nameCs || item.menuItem.name : item.menuItem.name,
         qty: item.qty,
         totalCzk: item.totalCzk,
         comment: item.comment ?? undefined,
@@ -114,7 +108,7 @@ function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"
       } else {
         payableMap.set(payableKey, {
           key: payableKey,
-          name: item.menuItem.name,
+          name: isCz ? item.menuItem.nameCs || item.menuItem.name : item.menuItem.name,
           comment: item.comment ?? undefined,
           availableQty: item.qty,
           unitPriceCzk: item.priceCzk,
@@ -226,13 +220,6 @@ export default function CartPage() {
       .filter((item) => item.selectedQty > 0);
   }, [openTab, activeSelectionQtyByKey]);
   const paymentSelectionActive = Boolean(effectivePendingPayment) || (payOpen && selectedPayableItems.length > 0);
-  const hasLiveOrderState = Boolean(
-    activeOrderRequest ||
-      openTab ||
-      latestPendingPayment ||
-      (feed?.payments ?? []).some((payment) => payment.status === "CONFIRMED")
-  );
-
   useEffect(() => {
     if (!pendingMarkerStorageKey) {
       setLocalPendingMarker(null);
@@ -292,26 +279,9 @@ export default function CartPage() {
     }
   }, [latestPendingPayment, localPendingMarker]);
 
-  useEffect(() => {
-    if (!hasLiveOrderState) return;
-
-    let cancelled = false;
-    let timer: number | null = null;
-
-    const run = async () => {
-      if (document.visibilityState !== "visible") return;
-      await refresh().catch(() => {});
-      if (cancelled) return;
-      timer = window.setTimeout(run, 1200);
-    };
-
-    timer = window.setTimeout(run, 1200);
-
-    return () => {
-      cancelled = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [hasLiveOrderState, refresh]);
+  // Live updates are driven centrally by GuestFeedProvider's polling (which
+  // already speeds up while there's an active order/payment). No local timer
+  // here — a second loop just doubled the requests.
 
   const requestPayment = async (method: "CARD" | "CASH") => {
     if (latestPendingPayment || !showOpenTab || !openTab) return;
@@ -395,24 +365,40 @@ export default function CartPage() {
   return (
     <RequireTable>
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName}</div>
-            <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Účet" : "Cart"}</h1>
-            <div className="mt-1 text-xs text-white/60">
-              {showOpenTab ? (isCz ? "Vaše aktuální objednávka" : "Your current order") : isCz ? "Momentálně nic není aktivní" : "Nothing active right now"}
-            </div>
+        {/* pr-24 — оставляем место справа под плавающий переключатель языка */}
+        <div className="pr-24">
+          <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">{venueName}</div>
+          <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Účet" : "Cart"}</h1>
+          <div className="mt-1 text-xs text-white/60">
+            {showOpenTab ? (isCz ? "Vaše aktuální objednávka" : "Your current order") : isCz ? "Momentálně nic není aktivní" : "Nothing active right now"}
           </div>
-
-          {showOpenTab || activeOrderRequest ? (
-            <Link
-              href="/menu"
-              className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white"
-            >
-              {isCz ? "Menu" : "Menu"}
-            </Link>
-          ) : null}
         </div>
+
+        {/* Дозаказ: запрос ещё не подтверждён, но заказ уже идёт — показываем обе вещи. */}
+        {activeOrderRequest && showOpenTab ? (
+          <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+            <div className="font-semibold text-emerald-100">
+              {isCz ? "Nový výběr odeslán" : "New selection sent"}
+            </div>
+            <div className="mt-1 text-xs text-emerald-100/80">
+              {isCz
+                ? "Obsluha vidí váš výběr a je na cestě domluvit detaily."
+                : "The waiter sees your selection and is on the way to discuss the details."}
+            </div>
+            {activeOrderRequest.items.length > 0 ? (
+              <div className="mt-3 space-y-1">
+                {activeOrderRequest.items.map((it) => (
+                  <div key={it.menuItemId} className="flex items-center justify-between text-sm text-white/85">
+                    <span className="min-w-0 truncate">
+                      {isCz ? it.nameCs || it.name : it.name} × {it.qty}
+                    </span>
+                    <span className="shrink-0 text-white/60">{it.qty * it.priceCzk} Kč</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
           <div className="flex items-start justify-between gap-3">
@@ -436,7 +422,7 @@ export default function CartPage() {
                   <div className="text-sm font-semibold text-white">
                     {paymentSelectionActive ? (isCz ? "Výběr k platbě" : "Payment selection") : isCz ? "Aktuální objednávka" : "Current order"}
                   </div>
-                  <div className="mt-1 text-[11px] text-white/45">
+                  <div className="mt-1 text-[11px] text-white/60">
                     {new Date(openTab.firstCreatedAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
                   </div>
                 </div>
@@ -460,7 +446,7 @@ export default function CartPage() {
                     <div className={`h-1.5 rounded-full ${effectivePendingPayment ? "animate-pulse bg-sky-300 shadow-[0_0_14px_rgba(56,189,248,0.45)]" : "bg-white/10"}`} />
                   </div>
 
-                  <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/38">
+                  <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/60">
                     <span className="text-sky-200">{isCz ? "Vybráno" : "Selected"}</span>
                     <span className="animate-pulse text-sky-200">{effectivePendingPayment ? (isCz ? "Zpracování" : "Processing") : isCz ? "Čeká na způsob" : "Awaiting method"}</span>
                     <span className={effectivePendingPayment ? "animate-pulse text-sky-200" : undefined}>{isCz ? "Potvrzení" : "Confirmation"}</span>
@@ -482,11 +468,11 @@ export default function CartPage() {
                         >
                           <div className="min-w-0">
                             {item.name} × {isSelected ? selected : item.availableQty}
-                            {item.comment ? <div className="mt-0.5 text-[11px] text-white/42">{item.comment}</div> : null}
+                            {item.comment ? <div className="mt-0.5 text-[11px] text-white/60">{item.comment}</div> : null}
                             <div
                               className={[
                                 "mt-1 text-[10px] uppercase tracking-[0.16em]",
-                                isSelected ? "text-sky-200/90" : "text-white/35",
+                                isSelected ? "text-sky-200/90" : "text-white/60",
                               ].join(" ")}
                             >
                               {isSelected ? (isCz ? "Vybráno k platbě" : "Selected for payment") : isCz ? "Nevybráno" : "Not selected"}
@@ -551,7 +537,7 @@ export default function CartPage() {
                     />
                   </div>
 
-                  <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/38">
+                  <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/60">
                     <span
                       className={
                         openTab.stage.phase === "accepted" ||
@@ -590,7 +576,7 @@ export default function CartPage() {
                       >
                         <div className="min-w-0">
                           {item.name} × {item.qty}
-                          {item.comment ? <div className="mt-0.5 text-[11px] text-white/42">{item.comment}</div> : null}
+                          {item.comment ? <div className="mt-0.5 text-[11px] text-white/60">{item.comment}</div> : null}
                           <div
                             className={[
                               "mt-1 text-[10px] uppercase tracking-[0.16em]",
@@ -613,16 +599,8 @@ export default function CartPage() {
                 </>
               )}
 
-              {openTab.cancelledCount > 0 ? (
-                <div className="mt-3 rounded-xl border border-red-400/15 bg-red-500/6 px-3 py-2 text-[11px] text-red-200/85">
-                  {isCz
-                    ? `${openTab.cancelledCount} ${openTab.cancelledCount === 1 ? "zrušená skupina není" : openTab.cancelledCount >= 2 && openTab.cancelledCount <= 4 ? "zrušené skupiny nejsou" : "zrušených skupin není"} zahrnuta`
-                    : `${openTab.cancelledCount} cancelled ${openTab.cancelledCount === 1 ? "group" : "groups"} not included`}
-                </div>
-              ) : null}
-
               <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3">
-                <div className="text-[11px] uppercase tracking-[0.14em] text-white/38">{isCz ? "K úhradě nyní" : "Due now"}</div>
+                <div className="text-[11px] uppercase tracking-[0.14em] text-white/60">{isCz ? "K úhradě nyní" : "Due now"}</div>
                 <div className="text-sm font-semibold text-white">{feed?.totals.dueCzk ?? openTab.totalCzk} Kč</div>
               </div>
 
@@ -646,15 +624,39 @@ export default function CartPage() {
                   <div className="font-semibold">
                     {activeOrderRequest.status === "ACKED"
                       ? isCz
-                        ? "Váš požadavek byl přijat"
-                        : "Your request has been accepted"
+                        ? "Číšník je na cestě"
+                        : "Waiter is on the way"
                       : isCz
-                      ? "Váš požadavek byl přijat"
-                      : "Your request has been accepted"}
+                      ? "Požadavek odeslán"
+                      : "Request sent"}
                   </div>
                   <div className="mt-1 text-xs text-emerald-100/75">
-                    {isCz ? "Váš požadavek byl přijat. Číšník je na cestě." : "Your request has been accepted. The waiter is on the way."}
+                    {activeOrderRequest.status === "ACKED"
+                      ? isCz
+                        ? "Obsluha vidí váš výběr a je na cestě domluvit detaily."
+                        : "The waiter sees your selection and is on the way to discuss the details."
+                      : isCz
+                      ? "Obsluha vidí váš výběr a brzy přijde domluvit detaily objednávky."
+                      : "The waiter sees your selection and will come shortly to discuss the order."}
                   </div>
+
+                  {activeOrderRequest.items.length > 0 ? (
+                    <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3">
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-white/60">
+                        {isCz ? "Vaše volba · obsluha potvrdí" : "Your selection · waiter will confirm"}
+                      </div>
+                      <div className="mt-2 space-y-1">
+                        {activeOrderRequest.items.map((it) => (
+                          <div key={it.menuItemId} className="flex items-center justify-between text-sm text-white/85">
+                            <span className="min-w-0 truncate">
+                              {isCz ? it.nameCs || it.name : it.name} × {it.qty}
+                            </span>
+                            <span className="shrink-0 text-white/60">{it.qty * it.priceCzk} Kč</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <div className="flex flex-col items-center gap-4 py-2 text-center">

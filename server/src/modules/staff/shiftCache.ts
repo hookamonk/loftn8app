@@ -68,3 +68,44 @@ export async function getOpenShiftOrThrow(venueId: number, opts?: { fresh?: bool
 
   return shift;
 }
+
+type AttachedSession = {
+  id: string;
+  shiftId: string | null;
+  table: { venueId: number };
+};
+
+/**
+ * Attach a guest session to the venue's currently open shift if it isn't
+ * already. Uses a fresh shift lookup (skipping the cache) so a guest action
+ * never binds to a just-closed shift — otherwise the resulting call/order would
+ * be invisible on the staff dashboard, which filters by the open shift.
+ *
+ * Shared by the guest-facing calls / orders / payments routes.
+ */
+export async function attachSessionToActiveShiftIfNeeded(
+  sessionId: string
+): Promise<AttachedSession> {
+  const session = await prisma.guestSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      id: true,
+      shiftId: true,
+      table: { select: { venueId: true } },
+    },
+  });
+
+  if (!session) throw new HttpError(401, "SESSION_INVALID", "Session invalid");
+
+  const activeShift = await getOpenShift(session.table.venueId, { fresh: true });
+
+  if (!activeShift) return session;
+  if (session.shiftId === activeShift.id) return session;
+
+  await prisma.guestSession.update({
+    where: { id: session.id },
+    data: { shiftId: activeShift.id },
+  });
+
+  return { ...session, shiftId: activeShift.id };
+}

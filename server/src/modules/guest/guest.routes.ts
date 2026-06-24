@@ -23,8 +23,36 @@ import {
   venueShortNameBySlug,
 } from "../../config/venues";
 import { branchTables, normalizeTableSlugInput } from "../../config/tables";
+import { addGuestClient } from "./guestEvents";
 
 export const guestRouter = Router();
+
+// Realtime channel (Server-Sent Events) for the guest. While the cart/call
+// screen is open it keeps this connection and gets "refresh now" pings the
+// instant staff change an order/payment/call — no polling delay, no reload.
+guestRouter.get(
+  "/events",
+  guestSessionAuth,
+  (req, res) => {
+    const tableId = req.guestSession!.tableId;
+
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    res.write("retry: 3000\n\n");
+    res.write(`event: ready\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
+
+    const remove = addGuestClient(tableId, res);
+    req.on("close", () => {
+      remove();
+      res.end();
+    });
+  }
+);
 
 guestRouter.get(
   "/branches",
@@ -694,7 +722,7 @@ guestRouter.get(
               comment: true,
               priceCzk: true,
               menuItem: {
-                select: { id: true, name: true },
+                select: { id: true, name: true, nameCs: true },
               },
             },
           },
@@ -765,6 +793,7 @@ guestRouter.get(
           id: true,
           status: true,
           message: true,
+          requestedItemsJson: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -951,6 +980,31 @@ guestRouter.get(
         ? orderRequestStatusView(orderRequest.status)
         : null;
 
+    // Resolve the guest's menu selection attached to the request into display
+    // items (name + price), so the cart can show what was "requested".
+    let requestedItemsView: Array<{ menuItemId: number; name: string; nameCs: string | null; qty: number; priceCzk: number }> = [];
+    const rawRequested = (orderRequest as any)?.requestedItemsJson;
+    if (orderRequestView && Array.isArray(rawRequested) && rawRequested.length > 0) {
+      const ids = rawRequested
+        .map((r: any) => Number(r?.menuItemId))
+        .filter((n: number) => Number.isFinite(n));
+      const menuItems = ids.length
+        ? await prisma.menuItem.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, name: true, nameCs: true, priceCzk: true },
+          })
+        : [];
+      const byId = new Map(menuItems.map((m) => [m.id, m]));
+      requestedItemsView = rawRequested
+        .map((r: any) => {
+          const mi = byId.get(Number(r?.menuItemId));
+          const qty = Number(r?.qty);
+          if (!mi || !Number.isFinite(qty) || qty <= 0) return null;
+          return { menuItemId: mi.id, name: mi.name, nameCs: mi.nameCs ?? null, qty, priceCzk: mi.priceCzk };
+        })
+        .filter(Boolean) as Array<{ menuItemId: number; name: string; nameCs: string | null; qty: number; priceCzk: number }>;
+    }
+
     res.json({
       ok: true,
       currentSessionId: session.id,
@@ -986,6 +1040,7 @@ guestRouter.get(
               statusTitle: orderRequestView.title,
               statusDescription: orderRequestView.description,
               statusTone: orderRequestView.tone,
+              items: requestedItemsView,
             }
           : null,
       orders: feedOrders,

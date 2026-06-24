@@ -69,22 +69,16 @@ export default function StaffLoginPage() {
     const staff = r.data.staff;
     setStaff(staff);
 
-    // Сразу просим push-разрешение после логина, пока есть пользовательский жест.
-    try {
-      await ensurePushSubscribed();
-    } catch {
-      // ignore
-    }
+    // Подписку на push запускаем в фоне (не блокируя переход) — иначе медленный
+    // запрос/диалог разрешения задерживал вход и приходилось жать дважды.
+    // Вызов стартует синхронно в рамках жеста клика, поэтому диалог разрешения
+    // браузер всё равно показывает.
+    void ensurePushSubscribed()
+      .then(() => rebindPushIfPossible())
+      .catch(() => {});
 
-    // Если подписка уже существует в браузере — заново привязываем к staff.
-    await rebindPushIfPossible();
-
-    if (staff.role === "ADMIN") {
-      router.replace("/staff/admin");
-      return;
-    }
-
-    router.replace("/staff/summary");
+    // Переходим в панель сразу.
+    router.replace(staff.role === "ADMIN" ? "/staff/admin" : "/staff/summary");
   };
 
   return (

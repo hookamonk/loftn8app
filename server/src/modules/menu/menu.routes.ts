@@ -14,12 +14,15 @@ type MenuPayload = {
   categories: Array<{
     id: number;
     name: string;
+    nameCs: string | null;
     sort: number;
     section: string;
     items: Array<{
       id: number;
       name: string;
+      nameCs: string | null;
       description: string | null;
+      descriptionCs: string | null;
       priceCzk: number;
       imageUrl: string | null;
     }>;
@@ -118,12 +121,15 @@ menuRouter.get(
       categories: categories.map((c) => ({
         id: c.id,
         name: c.name,
+        nameCs: (c as any).nameCs ?? null,
         sort: c.sort,
         section: c.section,
         items: c.items.map((i) => ({
           id: i.id,
           name: i.name,
+          nameCs: (i as any).nameCs ?? null,
           description: i.description,
+          descriptionCs: (i as any).descriptionCs ?? null,
           priceCzk: i.priceCzk,
           imageUrl: sanitizeImageUrl((i as any).imageUrl),
         })),

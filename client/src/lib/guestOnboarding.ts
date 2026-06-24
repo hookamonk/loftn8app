@@ -2,7 +2,7 @@
 
 import { storage } from "@/lib/storage";
 
-export type OnboardingStepId = "menu" | "cart" | "call";
+export type OnboardingStepId = "menu" | "cart" | "call" | "profile";
 
 export type OnboardingState = {
   activeStep: OnboardingStepId | null;

@@ -17,6 +17,7 @@ import { armAudio } from "@/lib/staffAlerts";
 import { useStaffSession } from "@/providers/staffSession";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { StaffTraining } from "@/components/staff/StaffTraining";
 
 function StatCard({
   title,
@@ -74,6 +75,7 @@ export default function StaffSummaryPage() {
   const [last, setLast] = useState<number | null>(null);
   const [pushStatus, setPushStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [trainingOpen, setTrainingOpen] = useState(false);
 
   const isAdmin = staff?.role === "ADMIN";
   const isManager = staff?.role === "MANAGER";
@@ -111,9 +113,9 @@ export default function StaffSummaryPage() {
     await Promise.all([loadShift(), loadSummary(opts)]);
   };
 
-  const { tick, isRunning } = usePolling(() => loadAll({ silent: true }), {
-    activeMs: 15000,
-    idleMs: 45000,
+  const { tick } = usePolling(() => loadAll({ silent: true }), {
+    activeMs: 10000,
+    idleMs: 30000,
     immediate: false,
     enabled: !isAdmin,
   });
@@ -214,38 +216,33 @@ export default function StaffSummaryPage() {
 
   if (isAdmin) {
     return (
-      <main className="min-h-screen bg-black text-white">
-        <div className="mx-auto max-w-md px-4 py-6">
-          <div className={card}>
-            <div className="text-lg font-semibold">Режим администратора</div>
-            <div className="mt-2 text-sm text-white/60">
-              Основная рабочая область для вас — админ-панель.
-            </div>
-
-            <div className="mt-4">
-              <Link
-                href="/staff/admin"
-                className="inline-flex rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black"
-              >
-                Открыть админ-панель
-              </Link>
-            </div>
-          </div>
+      <div className={card}>
+        <div className="text-lg font-semibold">Режим администратора</div>
+        <div className="mt-2 text-sm text-white/60">
+          Ваш раздел — «Гости»: список зарегистрированных гостей и их бонусы.
         </div>
-      </main>
+
+        <div className="mt-4">
+          <Link
+            href="/staff/admin"
+            className="inline-flex rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black"
+          >
+            Открыть
+          </Link>
+        </div>
+      </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-black text-white">
-      <div className="mx-auto max-w-md px-4 py-6">
-        <div className={card}>
+    <div>
+      <div className={card}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-xl font-semibold">Сводка смены</div>
               <div className="mt-1 text-xs text-white/50">
-                {roleLabel(staff?.role)} • автообновление: {isRunning ? "включено" : "выключено"}
-                {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
+                {roleLabel(staff?.role)}
+                {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
               </div>
               <div className="mt-2 text-sm text-white/65">
                 {shift
@@ -260,6 +257,16 @@ export default function StaffSummaryPage() {
           </div>
 
           <div className="mt-4 grid gap-2">
+            <button
+              className="flex items-center justify-center gap-2 rounded-2xl border border-sky-400/25 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-100 transition hover:bg-sky-500/15"
+              onClick={() => setTrainingOpen(true)}
+            >
+              <span className="grid h-5 w-5 place-items-center rounded-full border border-sky-300/40 bg-sky-400/10 text-[11px] font-bold">
+                ?
+              </span>
+              Обучение — как работать в панели
+            </button>
+
             <button className={btn} onClick={onEnableNotifications}>
               Включить уведомления
             </button>
@@ -317,7 +324,8 @@ export default function StaffSummaryPage() {
           <StatCard title="Вызовы" value={data?.newCalls ?? 0} hint="Подойти" />
           <StatCard title="Оплаты" value={data?.pendingPayments ?? 0} hint="Рассчитать" />
         </div>
-      </div>
-    </main>
+
+      <StaffTraining open={trainingOpen} onClose={() => setTrainingOpen(false)} />
+    </div>
   );
 }

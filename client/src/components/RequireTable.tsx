@@ -1,46 +1,31 @@
 "use client";
 
-import React, { useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import React from "react";
 import { useSession } from "@/providers/session";
 import { useI18n } from "@/providers/i18n";
 
 export function RequireTable({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
-  const pathname = usePathname();
   const { isCz } = useI18n();
 
   const { tableCode, sessionReady, sessionError } = useSession();
-
-  useEffect(() => {
-    if (sessionReady) return;
-
-    // не редиректим мгновенно, пока provider ещё восстанавливает session
-    if (!tableCode && sessionError) {
-      router.replace("/");
-    }
-  }, [sessionReady, tableCode, sessionError, router]);
 
   if (sessionReady) {
     return <>{children}</>;
   }
 
-  // если реально нет table/session — тогда уже ведём на /table
+  // Нет стола/сессии — показываем подсказку отсканировать QR (вход только по QR).
   if (!tableCode && sessionError) {
     return (
       <div className="mx-auto max-w-md p-4">
-        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
-          <div className="text-sm font-semibold text-white">{isCz ? "Je třeba vybrat stůl" : "Table required"}</div>
-          <div className="mt-2 text-xs text-white/70">
-            {isCz ? "Přesměrování na skenování QR…" : "Redirecting to QR scan…"}
+        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 text-center backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
+          <div className="text-sm font-semibold text-white">
+            {isCz ? "Naskenujte QR kód na stole" : "Scan the QR code on your table"}
           </div>
-
-          <button
-            className="mt-3 w-full rounded-3xl bg-white px-4 py-3 text-sm font-semibold text-black"
-            onClick={() => router.replace("/")}
-          >
-            {isCz ? "Naskenovat QR" : "Scan QR"}
-          </button>
+          <div className="mt-2 text-xs text-white/70">
+            {isCz
+              ? "Aplikace se otevře po naskenování QR kódu u vás na stole."
+              : "The app opens after you scan the QR code at your table."}
+          </div>
         </div>
       </div>
     );

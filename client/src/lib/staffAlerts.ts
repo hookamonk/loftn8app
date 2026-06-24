@@ -74,15 +74,9 @@ function cleanupRecentAlerts(now: number) {
 }
 
 function alertKey(payload?: StaffPushPayload) {
-  const tag = payload?.tag?.trim();
-  if (tag) return tag;
-
-  const parts = [
-    payload?.kind ?? "UNKNOWN",
-    payload?.tableCode ?? "",
-    payload?.message ?? payload?.body ?? "",
-  ];
-
+  // Dedupe by kind + table so the same event arriving via BOTH web-push and the
+  // SSE channel (which carries no tag) doesn't double-beep within the window.
+  const parts = [payload?.kind ?? "UNKNOWN", payload?.tableCode ?? ""];
   return parts.join("|");
 }
 

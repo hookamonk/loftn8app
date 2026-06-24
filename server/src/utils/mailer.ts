@@ -3,7 +3,7 @@ import { HttpError } from "./httpError";
 
 const nodemailer = require("nodemailer") as any;
 
-function smtpConfigured() {
+export function isEmailConfigured() {
   return Boolean(
     env.SMTP_HOST &&
       env.SMTP_PORT &&
@@ -11,6 +11,10 @@ function smtpConfigured() {
       env.SMTP_PASS &&
       env.SMTP_FROM_EMAIL
   );
+}
+
+function smtpConfigured() {
+  return isEmailConfigured();
 }
 
 function getTransport() {

@@ -16,7 +16,9 @@ declare global {
 
 export const STAFF_COOKIE_NAME = "sid";
 
-const JWT_STAFF_SECRET = process.env.JWT_STAFF_SECRET || "dev_staff_secret";
+// Always use the validated secret from env (config/env.ts requires min 20 chars).
+// No insecure fallback — a hardcoded default would let anyone forge ADMIN tokens.
+const JWT_STAFF_SECRET = env.JWT_STAFF_SECRET;
 
 export function setStaffCookie(res: any, token: string, maxAgeSeconds: number) {
   const isProd = env.NODE_ENV === "production";

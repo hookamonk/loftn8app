@@ -1,7 +1,9 @@
 export type MenuItem = {
   id: number;
   name: string;
+  nameCs?: string | null;
   description?: string | null;
+  descriptionCs?: string | null;
   priceCzk: number;
   imageUrl?: string | null;
 };
@@ -9,8 +11,9 @@ export type MenuItem = {
 export type MenuSection = "DISHES" | "DRINKS" | "HOOKAH";
 
 export type MenuCategory = {
-  id: number; 
+  id: number;
   name: string;
+  nameCs?: string | null;
   sort: number;
   section: MenuSection;
   items: MenuItem[];

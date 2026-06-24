@@ -42,10 +42,10 @@ type SessionState = {
 const Ctx = createContext<SessionState | null>(null);
 
 const TABLE_KEY = "tableCode";
-const SESSION_WATCHDOG_MS = 2500;
+const SESSION_WATCHDOG_MS = 10000;
 
 function isGuestProtectedPath(pathname: string) {
-  return pathname === "/menu" || pathname === "/cart" || pathname === "/call" || pathname === "/profile" || pathname === "/pay";
+  return pathname === "/menu" || pathname === "/cart" || pathname === "/call" || pathname === "/profile";
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
@@ -72,7 +72,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     storage.del(TABLE_KEY);
 
     if (opts?.redirect && isGuestProtectedPath(pathname)) {
-      router.replace("/table");
+      router.replace("/");
     }
   };
 
@@ -205,13 +205,22 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     };
 
     void checkSession();
+    // Only poll while the tab is actually visible — no point burning battery /
+    // data checking the session every few seconds in a backgrounded tab.
     const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       void checkSession();
     }, SESSION_WATCHDOG_MS);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void checkSession();
+    };
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [pathname, tableCode]);
 

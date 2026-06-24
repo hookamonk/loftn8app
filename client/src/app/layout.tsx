@@ -33,8 +33,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={manrope.variable}>
-      <body className="min-h-dvh bg-[var(--bg)] text-[var(--text)] antialiased">
+    <html lang="en" className={manrope.variable} suppressHydrationWarning>
+      <body className="min-h-dvh bg-[var(--bg)] text-[var(--text)] antialiased" suppressHydrationWarning>
         <AppProvider>{children}</AppProvider>
       </body>
     </html>

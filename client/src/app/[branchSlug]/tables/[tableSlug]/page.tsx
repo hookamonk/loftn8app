@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { consumeAnonBypassAuthOnce } from "@/lib/guestFlow";
 import { refreshVenueCatalog, resolveVenueSlug, setVenueSlug } from "@/lib/venue";
 import { useSession } from "@/providers/session";
+import { useI18n } from "@/providers/i18n";
 import type { AuthMeResponse } from "@/types";
 
 function normalizeSlug(raw: string) {
@@ -21,6 +22,7 @@ export default function BranchTableEntryPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { setTableCode, restoreSession } = useSession();
+  const { isCz } = useI18n();
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -69,7 +71,7 @@ export default function BranchTableEntryPage() {
 
         router.replace("/auth");
       } catch (e: any) {
-        setErr(e?.message ?? "Failed to create session");
+        setErr(e?.message ?? (isCz ? "Nepodařilo se otevřít stůl" : "Failed to create session"));
       }
     };
 
@@ -81,8 +83,10 @@ export default function BranchTableEntryPage() {
       <div className="flex min-h-[40vh] items-start justify-center pt-10">
         <div className="flex flex-col items-center">
           <img src="/logo.svg" alt="LOFT№8" className="h-12 w-12 animate-pulse opacity-90" />
-          <div className="mt-3 text-sm font-medium text-white/85">Loading</div>
-          <div className="mt-1 text-xs text-white/50">Starting your table session…</div>
+          <div className="mt-3 text-sm font-medium text-white/85">{isCz ? "Načítání" : "Loading"}</div>
+          <div className="mt-1 text-xs text-white/50">
+            {isCz ? "Připojujeme vás ke stolu…" : "Starting your table session…"}
+          </div>
           {err ? (
             <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">
               {err}

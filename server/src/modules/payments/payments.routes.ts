@@ -5,10 +5,11 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { validate } from "../../middleware/validate";
 import { guestSessionAuth } from "../../middleware/auth/guestSession";
 import { notifyPaymentRequested } from "../staff/push.service";
+import { emitGuestEvent } from "../guest/guestEvents";
 import { HttpError } from "../../utils/httpError";
 import { summarizeLoyalty } from "../../utils/loyalty";
 import { latestLegacyPaymentCutoff, paidQtyByOrderItemId } from "./paymentAllocation";
-import { getOpenShift } from "../staff/shiftCache";
+import { attachSessionToActiveShiftIfNeeded } from "../staff/shiftCache";
 
 export const paymentsRouter = Router();
 
@@ -24,34 +25,6 @@ const RequestPaymentSchema = z.object({
     )
     .optional(),
 });
-
-async function attachSessionToActiveShiftIfNeeded(sessionId: string) {
-  const session = await prisma.guestSession.findUnique({
-    where: { id: sessionId },
-    select: {
-      id: true,
-      shiftId: true,
-      table: { select: { venueId: true } },
-    },
-  });
-
-  if (!session) throw new HttpError(401, "SESSION_INVALID", "Session invalid");
-
-  const activeShift = await getOpenShift(session.table.venueId);
-
-  if (!activeShift) return session;
-  if (session.shiftId === activeShift.id) return session;
-
-  await prisma.guestSession.update({
-    where: { id: session.id },
-    data: { shiftId: activeShift.id },
-  });
-
-  return {
-    ...session,
-    shiftId: activeShift.id,
-  };
-}
 
 paymentsRouter.post(
   "/request",
@@ -239,6 +212,7 @@ paymentsRouter.post(
         },
       });
 
+      emitGuestEvent(session.tableId, "payment-requested");
       return res.json({ ok: true, payment: updatedExisting });
     }
 
@@ -256,6 +230,8 @@ paymentsRouter.post(
     void notifyPaymentRequested(payment.id).catch((e) => {
       console.warn("push notifyPaymentRequested failed", e);
     });
+
+    emitGuestEvent(session.tableId, "payment-requested");
 
     res.json({ ok: true, payment });
   })

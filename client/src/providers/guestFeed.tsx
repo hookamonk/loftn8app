@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { usePathname } from "next/navigation";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
+import { useGuestEvents } from "@/lib/useGuestEvents";
 import { useSession } from "@/providers/session";
 import type { ToastKind } from "@/providers/toast";
 
@@ -26,7 +27,7 @@ export type GuestFeedOrder = {
     comment: string | null;
     priceCzk: number;
     totalCzk: number;
-    menuItem: { id: number; name: string };
+    menuItem: { id: number; name: string; nameCs?: string | null };
   }>;
 };
 
@@ -78,6 +79,7 @@ export type GuestFeedOrderRequest = {
   statusTitle: string;
   statusDescription: string;
   statusTone: FeedTone;
+  items: Array<{ menuItemId: number; name: string; nameCs?: string | null; qty: number; priceCzk: number }>;
 };
 
 export type GuestFeedHistory = {
@@ -219,12 +221,22 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
     await run;
   };
 
+  // SSE drives instant refreshes; polling is just a fallback for dropped
+  // connections, so the intervals can be relaxed.
   const { tick } = usePolling(() => refresh({ silent: true }), {
     enabled,
-    activeMs: waitingForStaffOrder ? 800 : liveActivity ? 1500 : 10000,
-    idleMs: waitingForStaffOrder ? 2000 : liveActivity ? 3500 : 20000,
+    activeMs: liveActivity ? 5000 : 15000,
+    idleMs: liveActivity ? 12000 : 30000,
     immediate: false,
   });
+
+  // Instant updates: refresh the feed the moment the server pings this table.
+  useGuestEvents(
+    () => {
+      void refresh({ silent: true });
+    },
+    { enabled }
+  );
 
   useEffect(() => {
     if (!enabled) return;

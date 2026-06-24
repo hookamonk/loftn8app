@@ -16,23 +16,42 @@ import { staffRouter } from "./modules/staff/staff.router";
 
 const app = express();
 
+// Behind Caddy/Vercel — trust the first proxy so req.ip reflects the real client
+// (needed for rate limiting and logging).
+app.set("trust proxy", 1);
+
 const allowedOrigins = (env.FRONTEND_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
-const corsMiddleware = cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
+// Allow *.vercel.app previews ONLY when explicitly opted in via env.
+// A blanket wildcard with credentials:true lets any vercel.app site send
+// authenticated requests with the user's cookies (CSRF-like) — so it's off by default.
+const allowVercelPreviews =
+  String(process.env.ALLOW_VERCEL_PREVIEWS ?? "").toLowerCase() === "true";
 
-    const isAllowed =
-      allowedOrigins.includes(origin) || origin.endsWith(".vercel.app");
+function isOriginAllowed(origin: string | undefined, hostHeader: string | undefined): boolean {
+  if (!origin) return true; // non-browser / same-origin without Origin header
 
-    if (isAllowed) return cb(null, true);
+  // Same-origin: the request's Origin host matches the Host it was sent to
+  // (single-origin deploy behind Caddy — works for localhost and any prod domain/IP).
+  try {
+    if (hostHeader && new URL(origin).host === hostHeader) return true;
+  } catch {
+    // malformed origin → fall through to the explicit checks
+  }
 
-    return cb(new Error(`CORS blocked origin: ${origin}`));
-  },
-  credentials: true,
+  if (allowedOrigins.includes(origin)) return true;
+  if (allowVercelPreviews && /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) return true;
+  return false;
+}
+
+// Request-aware CORS so we can allow same-origin requests (Origin host === Host)
+// in addition to the explicit FRONTEND_ORIGIN whitelist.
+const corsMiddleware = cors((req, cb) => {
+  const allowed = isOriginAllowed(req.headers.origin, req.headers.host);
+  cb(null, { origin: allowed, credentials: true });
 });
 
 app.use(corsMiddleware);

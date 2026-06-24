@@ -3,6 +3,7 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireStaffAuth, requireAdminOrManager } from "./staff.middleware";
 import { HttpError } from "../../utils/httpError";
+import { summarizeLoyalty } from "../../utils/loyalty";
 
 export const staffAdminRouter = Router();
 
@@ -399,7 +400,39 @@ staffAdminRouter.get(
       take: 200,
     });
 
-    res.json({ ok: true, users });
+    // Available cashback ("бонусы") per user for this venue. One query for the
+    // whole page, then summarized in memory so the list stays a single round-trip.
+    const userIds = users.map((u) => u.id);
+    const loyaltyTxns = userIds.length
+      ? await prisma.loyaltyTransaction.findMany({
+          where: { venueId, userId: { in: userIds } },
+          select: {
+            userId: true,
+            cashbackCzk: true,
+            redeemedAmountCzk: true,
+            availableAt: true,
+            createdAt: true,
+          },
+        })
+      : [];
+
+    const txnsByUser = new Map<string, typeof loyaltyTxns>();
+    for (const txn of loyaltyTxns) {
+      const list = txnsByUser.get(txn.userId);
+      if (list) list.push(txn);
+      else txnsByUser.set(txn.userId, [txn]);
+    }
+
+    const usersWithBonuses = users.map((u) => {
+      const summary = summarizeLoyalty(txnsByUser.get(u.id) ?? []);
+      return {
+        ...u,
+        bonusCzk: summary.availableCzk,
+        pendingBonusCzk: summary.pendingCzk,
+      };
+    });
+
+    res.json({ ok: true, users: usersWithBonuses });
   })
 );
 

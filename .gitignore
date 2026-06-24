@@ -5,4 +5,7 @@ server/node_modules/
 client/.next/
 server/dist/
 server/.env
+server/backups/
+**/*.tsbuildinfo
+client/.vercel/
 *.log

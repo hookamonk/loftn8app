@@ -15,7 +15,10 @@ import {
 } from "../payments/paymentAllocation";
 import { publicTableCode } from "../../config/venues";
 import { getOpenShiftOrThrow } from "./shiftCache";
+import { addStaffClient, emitStaffEvent } from "./staffEvents";
+import { emitGuestEvent } from "../guest/guestEvents";
 import {
+  endTableSessionsIfFullyPaid,
   expireGuestSessionIfInactiveAfterPayment,
   getGuestSessionClosureState,
 } from "../guest/sessionExpiry";
@@ -34,6 +37,32 @@ staffDashboardRouter.use(requireStaffAuth);
 
 const IdParamSchema = z.object({
   id: z.string().min(1),
+});
+
+// Realtime channel (Server-Sent Events). The dashboard keeps this open and
+// receives "refresh now" events instantly; polling remains as a fallback.
+staffDashboardRouter.get("/events", (req, res) => {
+  const venueId = req.staff!.venueId;
+
+  res.status(200);
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  // Disable proxy buffering (nginx / some PaaS) so events are delivered live.
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  // Tell the browser to reconnect quickly and send an initial event so the
+  // client knows the channel is live.
+  res.write("retry: 3000\n\n");
+  res.write(`event: ready\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
+
+  const remove = addStaffClient(venueId, res);
+
+  req.on("close", () => {
+    remove();
+    res.end();
+  });
 });
 
 function callTypesForRole(role: StaffRole): CallType[] {
@@ -468,6 +497,9 @@ staffDashboardRouter.patch(
       data: { status },
     });
 
+    emitGuestEvent(order.tableId, "order-status");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
     res.json({ ok: true });
   })
 );
@@ -554,6 +586,8 @@ staffDashboardRouter.post(
     void notifyOrderCreated(order.id).catch((e) => {
       console.warn("push notifyOrderCreated failed", e);
     });
+
+    emitGuestEvent(body.tableId, "order-created");
 
     res.json({ ok: true, order });
   })
@@ -759,6 +793,9 @@ staffDashboardRouter.post(
       },
       data: { endedAt },
     });
+
+    emitGuestEvent(tableId, "session-ended");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
     res.json({ ok: true, sessionId: session.id, closedSessionIds: closableSessionIds, endedAt: endedAt.toISOString() });
   })
@@ -1073,6 +1110,8 @@ staffDashboardRouter.post(
       console.warn("push notifyPaymentRequested failed", e);
     });
 
+    emitGuestEvent(tableId, "payment-requested");
+
     res.json({ ok: true, payment });
   })
 );
@@ -1139,6 +1178,35 @@ staffDashboardRouter.get(
       },
     });
 
+    // Resolve the dishes guests picked (requestedItemsJson) into names/prices,
+    // so staff see the selection and can place the actual order.
+    const allIds = new Set<number>();
+    for (const r of requests) {
+      const raw = (r as any).requestedItemsJson;
+      if (Array.isArray(raw)) for (const it of raw) {
+        const n = Number(it?.menuItemId);
+        if (Number.isFinite(n)) allIds.add(n);
+      }
+    }
+    const menuItems = allIds.size
+      ? await prisma.menuItem.findMany({
+          where: { id: { in: Array.from(allIds) } },
+          select: { id: true, name: true, priceCzk: true },
+        })
+      : [];
+    const itemById = new Map(menuItems.map((m) => [m.id, m]));
+    const resolveItems = (raw: unknown) =>
+      Array.isArray(raw)
+        ? raw
+            .map((it: any) => {
+              const mi = itemById.get(Number(it?.menuItemId));
+              const qty = Number(it?.qty);
+              if (!mi || !Number.isFinite(qty) || qty <= 0) return null;
+              return { menuItemId: mi.id, name: mi.name, qty, priceCzk: mi.priceCzk };
+            })
+            .filter(Boolean)
+        : [];
+
     res.json({
       ok: true,
       requests: requests.map((request) => ({
@@ -1147,6 +1215,7 @@ staffDashboardRouter.get(
         createdAt: request.createdAt,
         table: toPublicTable(request.table),
         session: request.session,
+        items: resolveItems((request as any).requestedItemsJson),
       })),
     });
   })
@@ -1186,6 +1255,9 @@ staffDashboardRouter.post(
       },
     });
 
+    emitGuestEvent(request.tableId, "order-request-acked");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
     res.json({
       ok: true,
       request: {
@@ -1221,6 +1293,7 @@ staffDashboardRouter.patch(
       select: {
         id: true,
         type: true,
+        tableId: true,
         session: { select: { shiftId: true } },
         table: { select: { venueId: true } },
       },
@@ -1235,6 +1308,9 @@ staffDashboardRouter.patch(
       where: { id: call.id },
       data: { status },
     });
+
+    emitGuestEvent(call.tableId, "call-status");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
     res.json({ ok: true });
   })
@@ -1475,8 +1551,11 @@ staffDashboardRouter.post(
         throw new HttpError(409, "PAYMENT_ALREADY_SETTLED", "Payment is already settled");
       }
 
-      const updated = await (tx as any).paymentRequest.update({
-        where: { id: pr.id },
+      // Atomic guard against a double-confirm race (двойной клик / две вкладки):
+      // only the transaction that actually flips PENDING→CONFIRMED proceeds to
+      // redeem loyalty / grant cashback. A concurrent one matches 0 rows and aborts.
+      const guard = await (tx as any).paymentRequest.updateMany({
+        where: { id: pr.id, status: "PENDING" },
         data: {
           status: "CONFIRMED",
           confirmedAt: new Date(),
@@ -1484,6 +1563,12 @@ staffDashboardRouter.post(
           loyaltyAppliedCzk,
         },
       });
+
+      if (guard.count !== 1) {
+        throw new HttpError(409, "PAYMENT_NOT_PENDING", "Payment request is not pending");
+      }
+
+      const updated = await (tx as any).paymentRequest.findUnique({ where: { id: pr.id } });
 
       const confirmation = await (tx as any).paymentConfirmation.upsert({
         where: { paymentRequestId: pr.id },
@@ -1559,6 +1644,21 @@ staffDashboardRouter.post(
       return { updated, confirmation, loyalty: loyaltyTxn, loyaltyAppliedCzk };
     });
 
+    emitGuestEvent(result.updated?.tableId, "payment-confirmed");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    // If this payment fully settled the table's bill, free the table: end all
+    // its active sessions so no one stays "connected" in the staff app and the
+    // table is ready for the next guests.
+    const paidTableId = result.updated?.tableId;
+    if (typeof paidTableId === "number") {
+      const ended = await endTableSessionsIfFullyPaid(paidTableId, shift.id).catch(() => 0);
+      if (ended > 0) {
+        emitGuestEvent(paidTableId, "table-closed");
+        emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+      }
+    }
+
     res.json({ ok: true, ...result });
   })
 );
@@ -1609,6 +1709,9 @@ staffDashboardRouter.post(
         loyaltyAppliedCzk: 0,
       },
     });
+
+    emitGuestEvent(updated?.tableId, "payment-cancelled");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
     res.json({ ok: true, paymentRequest: updated });
   })

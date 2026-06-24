@@ -8,7 +8,8 @@ import { requireUser } from "../../middleware/auth/requireUser";
 import { HttpError } from "../../utils/httpError";
 import { notifyCallCreated } from "../staff/push.service";
 import { ORDER_REQUEST_MARKER } from "./orderRequest";
-import { getOpenShift } from "../staff/shiftCache";
+import { attachSessionToActiveShiftIfNeeded } from "../staff/shiftCache";
+import { emitGuestEvent } from "../guest/guestEvents";
 
 export const ordersRouter = Router();
 
@@ -25,36 +26,20 @@ const CreateOrderSchema = z.object({
     .min(1),
 });
 
-const RequestStaffOrderSchema = z.object({});
+const RequestStaffOrderSchema = z.object({
+  // Optional menu selection the guest picked — shown to staff so they can place
+  // the actual order. The order itself is created by staff, not here.
+  items: z
+    .array(
+      z.object({
+        menuItemId: z.number().int().positive(),
+        qty: z.number().int().min(1).max(50),
+      })
+    )
+    .max(100)
+    .optional(),
+});
 
-
-async function attachSessionToActiveShiftIfNeeded(sessionId: string) {
-  const session = await prisma.guestSession.findUnique({
-    where: { id: sessionId },
-    select: {
-      id: true,
-      shiftId: true,
-      table: { select: { venueId: true } },
-    },
-  });
-
-  if (!session) throw new HttpError(401, "SESSION_INVALID", "Session invalid");
-
-  const activeShift = await getOpenShift(session.table.venueId);
-
-  if (!activeShift) return session;
-  if (session.shiftId === activeShift.id) return session;
-
-  await prisma.guestSession.update({
-    where: { id: session.id },
-    data: { shiftId: activeShift.id },
-  });
-
-  return {
-    ...session,
-    shiftId: activeShift.id,
-  };
-}
 ordersRouter.post(
   "/",
   guestSessionAuth,
@@ -80,6 +65,10 @@ ordersRouter.post(
     const session = req.guestSession!;
     const attachedSession = await attachSessionToActiveShiftIfNeeded(session.id);
 
+    const body = req.body as z.infer<typeof RequestStaffOrderSchema>;
+    const requestedItems =
+      body.items && body.items.length > 0 ? body.items.map((i) => ({ menuItemId: i.menuItemId, qty: i.qty })) : null;
+
     const existing = await prisma.staffCall.findFirst({
       where: {
         tableId: session.tableId,
@@ -97,7 +86,15 @@ ordersRouter.post(
     });
 
     if (existing) {
-      return res.json({ ok: true, request: existing, reused: true });
+      // Refresh the selection on the open request if the guest picked items.
+      const updatedExisting = requestedItems
+        ? await prisma.staffCall.update({
+            where: { id: existing.id },
+            data: { requestedItemsJson: requestedItems },
+          })
+        : existing;
+      emitGuestEvent(session.tableId, "order-request-updated");
+      return res.json({ ok: true, request: updatedExisting, reused: true });
     }
 
     const requestCall = await prisma.staffCall.create({
@@ -106,12 +103,15 @@ ordersRouter.post(
         tableId: session.tableId,
         type: "HELP",
         message: ORDER_REQUEST_MARKER,
+        requestedItemsJson: requestedItems ?? undefined,
       },
     });
 
     void notifyCallCreated(requestCall.id).catch((e) => {
       console.warn("push notifyCallCreated failed", e);
     });
+
+    emitGuestEvent(session.tableId, "order-request-created");
 
     res.json({ ok: true, request: requestCall, reused: false });
   })

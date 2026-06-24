@@ -4,6 +4,7 @@ import type { StaffRole, MenuSection } from "@prisma/client";
 import { env } from "../../config/env";
 import { isOrderRequestMessage } from "../orders/orderRequest";
 import { publicTableCode, publicVenueSlug } from "../../config/venues";
+import { emitStaffEvent } from "./staffEvents";
 
 type PushPayload = {
   title: string;
@@ -69,6 +70,34 @@ function normalizeCallMessage(type: "WAITER" | "HOOKAH" | "BILL" | "HELP", messa
   return trimmed;
 }
 
+const SEND_TIMEOUT_MS = 10_000;
+// Push providers occasionally return transient errors; one quick retry covers
+// the common case without blocking the request.
+const RETRYABLE_PUSH_STATUS = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendOnce(
+  s: { endpoint: string; p256dh: string; auth: string },
+  json: string
+) {
+  await Promise.race([
+    webpush.sendNotification(
+      { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+      json,
+      {
+        TTL: 60 * 60 * 4,
+        urgency: "high" as any,
+      }
+    ),
+    sleep(SEND_TIMEOUT_MS).then(() => {
+      throw new Error("PUSH_TIMEOUT");
+    }),
+  ]);
+}
+
 async function sendToSubscriptions(
   subs: Array<{ id: string; endpoint: string; p256dh: string; auth: string }>,
   payload: PushPayload
@@ -93,27 +122,45 @@ async function sendToSubscriptions(
   await Promise.all(
     subs.map(async (s) => {
       try {
-        await webpush.sendNotification(
-          { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-          json,
-          {
-            TTL: 60 * 60 * 4,
-            urgency: "high" as any,
-          }
-        );
+        await sendOnce(s, json);
         ok += 1;
       } catch (e: any) {
-        failed += 1;
-
         const status = e?.statusCode;
+
+        // Endpoint gone — drop it and don't retry.
         if (status === 404 || status === 410) {
+          failed += 1;
           removed += 1;
           await prisma.staffPushSubscription.delete({ where: { id: s.id } }).catch(() => {});
+          console.warn("webpush dropped expired subscription", {
+            status,
+            endpoint: `${s.endpoint?.slice(0, 60)}...`,
+          });
+          return;
         }
 
+        // Transient error or timeout — retry once after a short delay.
+        if (status === undefined || RETRYABLE_PUSH_STATUS.has(status)) {
+          try {
+            await sleep(800);
+            await sendOnce(s, json);
+            ok += 1;
+            return;
+          } catch (e2: any) {
+            failed += 1;
+            console.warn("webpush failed after retry", {
+              status: e2?.statusCode,
+              endpoint: `${s.endpoint?.slice(0, 60)}...`,
+              msg: e2?.message,
+            });
+            return;
+          }
+        }
+
+        failed += 1;
         console.warn("webpush failed", {
           status,
-          endpoint: s.endpoint?.slice(0, 60) + "...",
+          endpoint: `${s.endpoint?.slice(0, 60)}...`,
           msg: e?.message,
         });
       }
@@ -172,11 +219,16 @@ export async function notifyOrderCreated(orderId: string) {
       },
     },
   });
-  if (!order) return;
+  if (!order) {
+    console.warn("notifyOrderCreated: order not found", { orderId });
+    return;
+  }
 
   const venueId = order.table.venueId;
   const tableCode = publicTableCode(order.table.code);
   const venueSlug = publicVenueSlug(order.table.venue.slug);
+
+  emitStaffEvent(venueId, { kind: "ORDER_CREATED", tableCode });
 
   const sections = order.items.map((it) => it.menuItem.category.section as MenuSection);
   const hasHookah = sections.includes("HOOKAH");
@@ -210,12 +262,17 @@ export async function notifyCallCreated(callId: string) {
       table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
     },
   });
-  if (!call) return;
+  if (!call) {
+    console.warn("notifyCallCreated: call not found", { callId });
+    return;
+  }
 
   const venueId = call.table.venueId;
   const tableCode = publicTableCode(call.table.code);
   const venueSlug = publicVenueSlug(call.table.venue.slug);
   const isOrderRequest = call.type === "HELP" && isOrderRequestMessage(call.message);
+
+  emitStaffEvent(venueId, { kind: "CALL_CREATED", tableCode });
 
   const roles: StaffRole[] = ["MANAGER"];
   if (call.type === "HOOKAH") roles.push("HOOKAH");
@@ -268,9 +325,17 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
       table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
     },
   });
-  if (!pr) return;
+  if (!pr) {
+    console.warn("notifyPaymentRequested: payment request not found", { paymentRequestId });
+    return;
+  }
   if (pr.status !== "PENDING") return;
   const venueSlug = publicVenueSlug(pr.table.venue.slug);
+
+  emitStaffEvent(pr.table.venueId, {
+    kind: "PAYMENT_REQUESTED",
+    tableCode: publicTableCode(pr.table.code),
+  });
 
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
     title: "Запрос оплаты",

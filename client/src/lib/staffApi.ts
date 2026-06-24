@@ -323,6 +323,7 @@ export type StaffOrderRequest = {
   createdAt: string;
   table: { id: number; code: string; label: string | null };
   session: { id: string; user: { id: string; name: string; phone: string } | null };
+  items?: Array<{ menuItemId: number; name: string; qty: number; priceCzk: number }>;
 };
 
 export async function listOrders(status: OrderStatus): Promise<ApiResult<{ orders: StaffOrder[] }>> {
@@ -675,6 +676,8 @@ export type AdminUserItem = {
   role: string;
   privacyAcceptedAt: string | null;
   createdAt: string;
+  bonusCzk: number;
+  pendingBonusCzk: number;
 };
 
 export type AdminStaffPerformanceItem = {

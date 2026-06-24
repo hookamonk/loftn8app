@@ -5,6 +5,7 @@ import { listCalls, updateCallStatus, type StaffCall, type CallStatus } from "@/
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 
 const STATUSES: CallStatus[] = ["NEW", "ACKED", "DONE"];
@@ -64,9 +65,9 @@ export default function StaffCallsPage() {
     setLast(Date.now());
   };
 
-  const { tick, isRunning } = usePolling(() => load({ silent: true }), {
-    activeMs: 15000,
-    idleMs: 45000,
+  const { tick } = usePolling(() => load({ silent: true }), {
+    activeMs: 8000,
+    idleMs: 20000,
     immediate: false,
     enabled: true,
   });
@@ -78,6 +79,12 @@ export default function StaffCallsPage() {
 
   useStaffPushEvents((payload) => {
     if (payload.kind === "CALL_CREATED" || payload.kind === "GUEST_MESSAGE") {
+      void tick();
+    }
+  });
+
+  useStaffEvents((e) => {
+    if (e.kind === "CALL_CREATED" || e.kind === "DATA_CHANGED") {
       void tick();
     }
   });
@@ -103,11 +110,10 @@ export default function StaffCallsPage() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xl font-semibold text-white">Вызовы</div>
-            <div className="mt-1 text-xs text-white/50">
-              Автообновление: {isRunning ? "включено" : "выключено"}
-              {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
+            <div className="mt-1.5 text-xs text-white/55">
+              Вызовов: {calls.length}
+              {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
             </div>
-            <div className="mt-2 text-xs text-white/60">Вызовов: {calls.length}</div>
           </div>
 
           <button className={btnGhost} onClick={() => void tick()}>
