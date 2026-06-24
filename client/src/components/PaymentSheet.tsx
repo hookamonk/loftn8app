@@ -224,7 +224,7 @@ export function PaymentSheet({
                 <span className="font-semibold text-white">{selectedTotalCzk} Kč</span>
               </div>
               {useLoyalty && cashbackAppliedCzk > 0 ? (
-                <div className="mt-2 flex items-center justify-between gap-3 text-sm text-emerald-300/90">
+                <div className="mt-2 flex items-center justify-between gap-3 text-sm text-gold/90">
                   <span>{isCz ? "Použitý cashback" : "Cashback used"}</span>
                   <span className="font-semibold">{cashbackAppliedCzk} Kč</span>
                 </div>
@@ -240,7 +240,7 @@ export function PaymentSheet({
                 className={[
                   "mt-3 w-full rounded-3xl border px-4 py-3 text-left text-sm transition",
                   useLoyalty
-                    ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"
+                    ? "border-gold/20 bg-gold/10 text-amber-50"
                     : "border-white/10 bg-white/5 text-white",
                 ].join(" ")}
                 onClick={() => onToggleLoyalty(!useLoyalty)}

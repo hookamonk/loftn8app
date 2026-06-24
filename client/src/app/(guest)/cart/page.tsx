@@ -30,7 +30,7 @@ type PayableItem = {
 };
 
 function stageClass(tone: "success" | "info" | "error") {
-  if (tone === "success") return "border-emerald-400/20 bg-emerald-500/10 text-emerald-200";
+  if (tone === "success") return "border-gold/20 bg-gold/10 text-gold";
   if (tone === "error") return "border-red-400/20 bg-red-500/10 text-red-200";
   return "border-white/10 bg-white/8 text-white/80";
 }
@@ -40,11 +40,11 @@ function progressStepClass(
   variant: "accepted" | "preparing" | "ready"
 ) {
   if (state === "error") return "bg-red-400/85";
-  if (state === "done") return "bg-emerald-400";
+  if (state === "done") return "bg-gold";
   if (state === "active") {
     return variant === "preparing"
-      ? "animate-pulse bg-emerald-300 shadow-[0_0_16px_rgba(74,222,128,0.45)]"
-      : "bg-emerald-300";
+      ? "animate-pulse bg-gold shadow-[0_0_16px_rgba(74,222,128,0.45)]"
+      : "bg-gold";
   }
   return "bg-white/10";
 }
@@ -376,11 +376,11 @@ export default function CartPage() {
 
         {/* Дозаказ: запрос ещё не подтверждён, но заказ уже идёт — показываем обе вещи. */}
         {activeOrderRequest && showOpenTab ? (
-          <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
-            <div className="font-semibold text-emerald-100">
+          <div className="mt-4 rounded-2xl border border-gold/20 bg-gold/10 p-4">
+            <div className="font-semibold text-amber-50">
               {isCz ? "Nový výběr odeslán" : "New selection sent"}
             </div>
-            <div className="mt-1 text-xs text-emerald-100/80">
+            <div className="mt-1 text-xs text-amber-50/80">
               {isCz
                 ? "Obsluha vidí váš výběr a je na cestě domluvit detaily."
                 : "The waiter sees your selection and is on the way to discuss the details."}
@@ -543,7 +543,7 @@ export default function CartPage() {
                         openTab.stage.phase === "accepted" ||
                         openTab.stage.phase === "preparing" ||
                         openTab.stage.phase === "ready"
-                          ? "text-emerald-300"
+                          ? "text-gold"
                           : undefined
                       }
                     >
@@ -552,15 +552,15 @@ export default function CartPage() {
                     <span
                       className={
                         openTab.stage.phase === "preparing"
-                          ? "animate-pulse text-emerald-300"
+                          ? "animate-pulse text-gold"
                           : openTab.stage.phase === "ready"
-                          ? "text-emerald-300"
+                          ? "text-gold"
                           : undefined
                       }
                     >
                       {isCz ? "Příprava" : "Preparing"}
                     </span>
-                    <span className={openTab.stage.phase === "ready" ? "text-emerald-300" : undefined}>{isCz ? "Hotovo" : "Ready"}</span>
+                    <span className={openTab.stage.phase === "ready" ? "text-gold" : undefined}>{isCz ? "Hotovo" : "Ready"}</span>
                   </div>
 
                   <div className="mt-3 space-y-1.5">
@@ -570,8 +570,8 @@ export default function CartPage() {
                         className={[
                           "flex items-start justify-between gap-3 rounded-xl px-2 py-1.5 text-sm transition",
                           item.state === "preparing"
-                            ? "animate-pulse bg-emerald-500/8 text-emerald-100"
-                            : "bg-emerald-500/5 text-emerald-100/85",
+                            ? "animate-pulse bg-gold/8 text-amber-50"
+                            : "bg-gold/5 text-amber-50/85",
                         ].join(" ")}
                       >
                         <div className="min-w-0">
@@ -580,7 +580,7 @@ export default function CartPage() {
                           <div
                             className={[
                               "mt-1 text-[10px] uppercase tracking-[0.16em]",
-                              item.state === "preparing" ? "text-emerald-200/85" : "text-emerald-200/65",
+                              item.state === "preparing" ? "text-gold/85" : "text-gold/65",
                             ].join(" ")}
                           >
                             {item.state === "preparing" ? (isCz ? "Příprava" : "Preparing") : isCz ? "Hotovo" : "Ready"}
@@ -592,7 +592,7 @@ export default function CartPage() {
                   </div>
 
                   {openTab.stage.phase === "ready" ? (
-                    <div className="mt-3 rounded-xl border border-emerald-400/15 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100/90">
+                    <div className="mt-3 rounded-xl border border-gold/15 bg-gold/10 px-3 py-2 text-[11px] text-amber-50/90">
                       {isCz ? "Vaše objednávka je hotová. Číšník ji nese ke stolu." : "Your order is ready. The waiter is bringing it to your table."}
                     </div>
                   ) : null}
@@ -615,7 +615,7 @@ export default function CartPage() {
               className={[
                 "mt-4 rounded-2xl border p-3 text-sm",
                 activeOrderRequest
-                  ? "border-emerald-400/15 bg-emerald-500/8 text-emerald-100/90"
+                  ? "border-gold/15 bg-gold/8 text-amber-50/90"
                   : "border-white/10 bg-black/20 text-white/60",
               ].join(" ")}
             >
@@ -630,7 +630,7 @@ export default function CartPage() {
                       ? "Požadavek odeslán"
                       : "Request sent"}
                   </div>
-                  <div className="mt-1 text-xs text-emerald-100/75">
+                  <div className="mt-1 text-xs text-amber-50/75">
                     {activeOrderRequest.status === "ACKED"
                       ? isCz
                         ? "Obsluha vidí váš výběr a je na cestě domluvit detaily."

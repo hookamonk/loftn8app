@@ -67,7 +67,7 @@ function ActionCard({
         <div>
           <div className="text-sm font-semibold text-white">{title}</div>
           <div className="mt-1 text-xs text-white/60">{subtitle}</div>
-          {statusText ? <div className="mt-2 text-xs font-medium text-emerald-300">{statusText}</div> : null}
+          {statusText ? <div className="mt-2 text-xs font-medium text-gold">{statusText}</div> : null}
         </div>
         <div className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 bg-black/30">
           {icon}

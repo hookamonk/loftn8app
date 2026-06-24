@@ -60,20 +60,20 @@ function SelectControl({
   }
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-1 rounded-2xl border border-emerald-400/25 bg-emerald-500/15 px-1.5">
+    <div className="flex h-10 shrink-0 items-center gap-1 rounded-2xl border border-gold/25 bg-gold/15 px-1.5">
       <button
         type="button"
         aria-label="−"
-        className="grid h-8 w-8 place-items-center rounded-xl text-lg font-semibold text-emerald-100 active:bg-white/10"
+        className="grid h-8 w-8 place-items-center rounded-xl text-lg font-semibold text-amber-50 active:bg-white/10"
         onClick={onRemove}
       >
         −
       </button>
-      <div className="min-w-6 text-center text-sm font-bold text-emerald-50">{qty}</div>
+      <div className="min-w-6 text-center text-sm font-bold text-amber-50">{qty}</div>
       <button
         type="button"
         aria-label="+"
-        className="grid h-8 w-8 place-items-center rounded-xl text-lg font-semibold text-emerald-100 active:bg-white/10"
+        className="grid h-8 w-8 place-items-center rounded-xl text-lg font-semibold text-amber-50 active:bg-white/10"
         onClick={onAdd}
       >
         +
@@ -382,17 +382,17 @@ function MenuPage() {
     <RequireTable>
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
         <div className="mb-4">
-          <div className="text-[11px] tracking-[0.28em] text-white/55">{venueName}</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Menu" : "Menu"}</h1>
+          <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">{venueName}</div>
+          <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
         </div>
 
-        <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3">
-          <div className="mt-0.5 text-base">★</div>
-          <div className="text-xs leading-5 text-amber-100/90">
+        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-3 py-2">
+          <span className="shrink-0 text-sm text-amber-200">★</span>
+          <span className="truncate text-xs text-amber-100/90">
             {isCz
-              ? "Vyberte si jídla a nápoje pro cashback. Objednávku u stolu přijme obsluha."
-              : "Pick your dishes and drinks to earn cashback. The waiter will take your order at the table."}
-          </div>
+              ? "Vyberte v menu — objednávku přijme obsluha."
+              : "Choose in the menu — staff takes your order."}
+          </span>
         </div>
 
         <div className="sticky top-2 z-30 rounded-3xl border border-white/10 bg-[#0c0c11]/90 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">

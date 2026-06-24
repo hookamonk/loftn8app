@@ -89,7 +89,7 @@ function Item({
       <div
         className={[
           "relative grid h-10 w-14 place-items-center rounded-2xl transition",
-          active ? "bg-white text-black shadow" : "bg-transparent",
+          active ? "bg-gold text-black shadow-[0_6px_20px_rgba(227,184,107,0.3)]" : "bg-transparent",
         ].join(" ")}
       >
         <Icon name={icon} active={active} />
@@ -100,7 +100,7 @@ function Item({
         ) : null}
       </div>
 
-      <div className={active ? "text-[11px] font-semibold text-white" : "text-[11px] text-white/65"}>
+      <div className={active ? "text-[11px] font-semibold text-gold" : "text-[11px] text-white/65"}>
         {label}
       </div>
     </Link>

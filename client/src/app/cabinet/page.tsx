@@ -70,7 +70,7 @@ function loyaltyStatusLabel(entry: AccountLoyaltyEntry, isCz: boolean) {
 
 function loyaltyStatusTone(entry: AccountLoyaltyEntry) {
 	if (entry.status === "available")
-		return "border-emerald-400/25 bg-emerald-500/10 text-emerald-200";
+		return "border-gold/25 bg-gold/10 text-gold";
 	if (entry.status === "redeemed")
 		return "border-white/10 bg-white/5 text-white/55";
 	if (entry.status === "partial")
@@ -304,12 +304,13 @@ export default function CabinetPage() {
 			</div>
 
 			{/* Loyalty / membership card */}
-			<div className="relative mt-4 overflow-hidden rounded-[32px] border border-white/10 bg-[#101015] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.45)]">
-				<div className="pointer-events-none absolute -left-10 -top-16 h-44 w-44 rounded-full bg-emerald-500/25 blur-3xl" />
-				<div className="pointer-events-none absolute -right-12 bottom-0 h-36 w-36 rounded-full bg-amber-400/10 blur-3xl" />
+			<div className="relative mt-4 overflow-hidden rounded-[32px] border border-white/10 bg-[#14110b] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.5)]">
+				<div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-gold/60 to-transparent" />
+				<div className="pointer-events-none absolute -left-10 -top-16 h-44 w-44 rounded-full bg-gold/20 blur-3xl" />
+				<div className="pointer-events-none absolute -right-12 bottom-0 h-36 w-36 rounded-full bg-gold-deep/10 blur-3xl" />
 
 				<div className="relative flex items-center gap-3.5">
-					<div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-white/12 bg-white/10 text-base font-semibold text-white">
+					<div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-gold/25 bg-gold/10 text-base font-semibold text-gold">
 						{userInitials(overview.user.name)}
 					</div>
 					<div className="min-w-0">
@@ -331,16 +332,16 @@ export default function CabinetPage() {
 							{isCz ? "Dostupný cashback" : "Available cashback"}
 						</div>
 						{cashbackPercent > 0 ? (
-							<div className="rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-200">
+							<div className="rounded-full border border-gold/25 bg-gold/10 px-2.5 py-0.5 text-[11px] font-semibold text-gold">
 								{cashbackPercent}%
 							</div>
 						) : null}
 					</div>
 					<div className="mt-1.5 flex items-end gap-2">
-						<div className="text-[34px] font-semibold leading-none text-emerald-300">
+						<div className="text-[34px] font-semibold leading-none text-gold">
 							{overview.loyalty.availableCzk}
 						</div>
-						<div className="pb-1 text-sm font-medium text-emerald-300/70">Kč</div>
+						<div className="pb-1 text-sm font-medium text-gold/70">Kč</div>
 					</div>
 					<div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-white/45">
 						{overview.loyalty.pendingCzk > 0 ? (
@@ -614,8 +615,8 @@ function BonusesTab({
 }) {
 	return (
 		<div className="space-y-3">
-			<div className="rounded-[24px] border border-emerald-400/15 bg-emerald-500/[0.06] p-4">
-				<div className="text-sm leading-6 text-emerald-100/85">
+			<div className="rounded-[24px] border border-gold/15 bg-gold/[0.06] p-4">
+				<div className="text-sm leading-6 text-amber-50/85">
 					{isCz
 						? `Z každé potvrzené útraty vám vrátíme ${overview.loyalty.cashbackPercent}% jako cashback. Použít ho můžete na příští účet u stolu.`
 						: `Every confirmed bill gives you ${overview.loyalty.cashbackPercent}% back as cashback. Use it on your next bill at the table.`}
@@ -657,7 +658,7 @@ function StatChip({
 	return (
 		<div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-center">
 			<div
-				className={`text-base font-semibold ${accent ? "text-emerald-300" : "text-white"}`}
+				className={`text-base font-semibold ${accent ? "text-gold" : "text-white"}`}
 			>
 				{value}
 			</div>
@@ -735,7 +736,7 @@ function LoyaltyRow({
 					</div>
 				</div>
 				<div className="shrink-0 text-right">
-					<div className="text-lg font-semibold text-emerald-300">
+					<div className="text-lg font-semibold text-gold">
 						+{entry.cashbackCzk} Kč
 					</div>
 					<div
@@ -834,7 +835,7 @@ function ReceiptCard({
 							<span>{isCz ? "Použitý cashback" : "Cashback used"}</span>
 							<span>−{receipt.loyaltyAppliedCzk} Kč</span>
 						</div>
-						<div className="flex justify-between text-emerald-300">
+						<div className="flex justify-between text-gold">
 							<span>{isCz ? "Získaný cashback" : "Cashback earned"}</span>
 							<span>+{receipt.cashbackEarnedCzk} Kč</span>
 						</div>

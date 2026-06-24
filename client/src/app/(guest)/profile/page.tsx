@@ -100,28 +100,28 @@ export default function ProfilePage() {
           </section>
 
           {/* Loyalty quick view */}
-          <section className="mt-3 rounded-[28px] border border-emerald-400/15 bg-emerald-500/[0.06] p-5">
+          <section className="mt-3 rounded-[28px] border border-gold/15 bg-gold/[0.06] p-5">
             <div className="flex items-center justify-between">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-emerald-200/70">
+              <div className="text-[11px] uppercase tracking-[0.2em] text-gold/70">
                 {isCz ? "Dostupný cashback" : "Available cashback"}
               </div>
-              <div className="rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-200">
+              <div className="rounded-full border border-gold/25 bg-gold/10 px-2.5 py-0.5 text-[11px] font-semibold text-gold">
                 {loyalty.cashbackPercent}%
               </div>
             </div>
             <div className="mt-1.5 flex items-end gap-2">
-              <div className="text-[34px] font-semibold leading-none text-emerald-300">
+              <div className="text-[34px] font-semibold leading-none text-gold">
                 {loyalty.availableCzk}
               </div>
-              <div className="pb-1 text-sm font-medium text-emerald-300/70">Kč</div>
+              <div className="pb-1 text-sm font-medium text-gold/70">Kč</div>
             </div>
             {loyalty.pendingCzk > 0 ? (
-              <div className="mt-2 text-[12px] text-emerald-100/60">
+              <div className="mt-2 text-[12px] text-amber-50/60">
                 {isCz ? "Čeká na odemčení" : "Waiting to unlock"}:{" "}
                 {loyalty.pendingCzk} Kč
               </div>
             ) : null}
-            <div className="mt-3 text-[12px] leading-5 text-emerald-100/70">
+            <div className="mt-3 text-[12px] leading-5 text-amber-50/70">
               {isCz
                 ? `Z každého potvrzeného účtu vám vrátíme ${loyalty.cashbackPercent}%. Použijte cashback na příští účet u stolu.`
                 : `Every confirmed bill returns ${loyalty.cashbackPercent}%. Spend it on your next bill at the table.`}

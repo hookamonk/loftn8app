@@ -1,15 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  /* Loft tokens (FORCE DARK) */
-  --bg: #070707;
-  --panel: rgba(255, 255, 255, 0.06);
-  --panel2: rgba(255, 255, 255, 0.10);
-  --border: rgba(255, 255, 255, 0.10);
+  /* Loft tokens — Midnight Ember (FORCE DARK, warm) */
+  --bg: #0a0907;              /* warm charcoal near-black */
+  --panel: rgba(255, 255, 255, 0.05);
+  --panel2: rgba(255, 255, 255, 0.09);
+  --border: rgba(255, 255, 255, 0.09);
   --text: #ffffff;
   --muted: rgba(255, 255, 255, 0.72);
   --muted2: rgba(255, 255, 255, 0.52);
   --radius: 18px;
+
+  /* Signature accent — warm gold / amber */
+  --gold: #e3b86b;
+  --gold-deep: #c79a45;
 
   --background: var(--bg);
   --foreground: var(--text);
@@ -22,6 +26,10 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
 
+  /* Exposes utilities: text-gold, bg-gold/10, border-gold/25, etc. */
+  --color-gold: var(--gold);
+  --color-gold-deep: var(--gold-deep);
+
   --font-sans: var(--font-manrope);
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
@@ -32,8 +40,9 @@ body {
 }
 
 body {
-  background: radial-gradient(1200px 700px at 50% -20%, rgba(255,255,255,0.08), transparent 60%),
-              radial-gradient(900px 500px at 20% 0%, rgba(255,255,255,0.05), transparent 55%),
+  background: radial-gradient(1200px 700px at 50% -20%, rgba(227,184,107,0.10), transparent 60%),
+              radial-gradient(900px 520px at 18% 2%, rgba(227,184,107,0.05), transparent 55%),
+              radial-gradient(800px 600px at 90% 8%, rgba(201,154,69,0.04), transparent 60%),
               var(--bg);
   color: var(--text);
   font-family: var(--font-manrope), ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial,
