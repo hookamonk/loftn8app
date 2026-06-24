@@ -34,6 +34,11 @@ function getTransport() {
       user: env.SMTP_USER,
       pass: env.SMTP_PASS,
     },
+    // Fail fast instead of hanging the registration request if SMTP is slow or
+    // unreachable — the client then gets a clear error, not a frozen form.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
   });
 }
 
