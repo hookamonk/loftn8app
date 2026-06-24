@@ -12,7 +12,7 @@ import {
   type ActiveShift,
 } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
-import { ensurePushSubscribed, rebindPushIfPossible, sendTestPush } from "@/lib/staffPush";
+import { ensurePushSubscribed, rebindPushIfPossible } from "@/lib/staffPush";
 import { armAudio } from "@/lib/staffAlerts";
 import { useStaffSession } from "@/providers/staffSession";
 import { useToast } from "@/providers/toast";
@@ -161,27 +161,6 @@ export default function StaffSummaryPage() {
     push({ kind: "success", title: "Готово", message: "Уведомления включены" });
   };
 
-  const onTestNotification = async () => {
-    const r = await sendTestPush();
-    if (!r.ok) {
-      push({ kind: "error", title: "Ошибка", message: r.error || "Не удалось отправить тест" });
-      return;
-    }
-    if (r.data.sent > 0) {
-      push({
-        kind: "success",
-        title: "Тест отправлен",
-        message: `Отправлено на ${r.data.sent} устр. Если не пришло — снимите ограничения батареи для браузера.`,
-      });
-    } else {
-      push({
-        kind: "info",
-        title: "Нет подписки",
-        message: "Это устройство ещё не подписано. Нажмите «Включить уведомления» и разрешите их.",
-      });
-    }
-  };
-
   const onOpenShift = async () => {
     setBusy(true);
     setErr(null);
@@ -290,10 +269,6 @@ export default function StaffSummaryPage() {
 
             <button className={btn} onClick={onEnableNotifications}>
               Включить уведомления
-            </button>
-
-            <button className={btnGhost} onClick={onTestNotification}>
-              Проверить уведомление
             </button>
 
             {!shift && isManager ? (

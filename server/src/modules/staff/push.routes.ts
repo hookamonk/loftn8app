@@ -92,8 +92,10 @@ const TestSendSchema = z.object({
 });
 
 const devSendHandler = asyncHandler(async (req, res) => {
-  // Self-test only — sends a push to the logged-in staff member's OWN devices,
-  // so it's safe to expose in production for troubleshooting delivery.
+  if (env.NODE_ENV === "production") {
+    throw new HttpError(404, "NOT_FOUND", "Not found");
+  }
+
   const staffId = req.staff!.staffId;
 
   const title = (req.body as any)?.title ?? "Test push";
