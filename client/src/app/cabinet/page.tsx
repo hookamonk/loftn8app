@@ -304,12 +304,8 @@ export default function CabinetPage() {
 			</div>
 
 			{/* Loyalty / membership card */}
-			<div className="relative mt-4 overflow-hidden rounded-[32px] border border-white/10 bg-[#14110b] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.5)]">
-				<div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-gold/60 to-transparent" />
-				<div className="pointer-events-none absolute -left-10 -top-16 h-44 w-44 rounded-full bg-gold/20 blur-3xl" />
-				<div className="pointer-events-none absolute -right-12 bottom-0 h-36 w-36 rounded-full bg-gold-deep/10 blur-3xl" />
-
-				<div className="relative flex items-center gap-3.5">
+			<div className="relative mt-4 overflow-hidden rounded-[32px] border border-gold/15 bg-[#14110b] p-5 shadow-[0_18px_50px_rgba(0,0,0,0.45)]">
+				<div className="flex items-center gap-3.5">
 					<div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-gold/25 bg-gold/10 text-base font-semibold text-gold">
 						{userInitials(overview.user.name)}
 					</div>

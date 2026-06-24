@@ -395,7 +395,7 @@ function MenuPage() {
           </span>
         </div>
 
-        <div className="sticky top-2 z-30 rounded-3xl border border-white/10 bg-[#0c0c11]/90 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+        <div className="sticky top-0 z-30 -mx-1 rounded-3xl border border-white/10 bg-[#0c0c11]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
           <div className="relative">
             <svg
               className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40"
