@@ -9,3 +9,4 @@ server/backups/
 **/*.tsbuildinfo
 client/.vercel/
 *.log
+server/.next/
