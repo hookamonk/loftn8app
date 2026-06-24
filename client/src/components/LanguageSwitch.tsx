@@ -6,6 +6,7 @@ import { useI18n } from "@/providers/i18n";
 export function LanguageSwitch() {
   const { lang, setLang, ready } = useI18n();
   const [open, setOpen] = useState(false);
+  const [hidden, setHidden] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -22,6 +23,20 @@ export function LanguageSwitch() {
     return () => window.removeEventListener("mousedown", onPointerDown);
   }, [open]);
 
+  // Stay pinned at the very top; hide while the page is scrolled so it never
+  // overlaps a sticky search/nav. Scroll back up to change the language.
+  useEffect(() => {
+    const onScroll = () => {
+      const y = typeof window !== "undefined" ? window.scrollY : 0;
+      const isScrolled = y > 12;
+      setHidden(isScrolled);
+      if (isScrolled) setOpen(false);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   if (!ready) return null;
 
   const current =
@@ -30,7 +45,15 @@ export function LanguageSwitch() {
       : { code: "EN", flag: "🇬🇧", label: "English" };
 
   return (
-    <div ref={rootRef} className="pointer-events-auto fixed right-4 top-4 z-[80]">
+    <div
+      ref={rootRef}
+      className={[
+        "fixed right-4 top-4 z-[80] transition-all duration-300",
+        hidden
+          ? "pointer-events-none -translate-y-3 opacity-0"
+          : "pointer-events-auto translate-y-0 opacity-100",
+      ].join(" ")}
+    >
       <div className="relative">
         <button
           type="button"
