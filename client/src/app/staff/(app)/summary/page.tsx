@@ -320,7 +320,7 @@ export default function StaffSummaryPage() {
         </div>
 
         <div className="mt-4 grid grid-cols-3 gap-3">
-          <StatCard title="Новые заказы" value={data?.newOrders ?? 0} hint="Принять" />
+          <StatCard title="Заказы" value={data?.newOrders ?? 0} hint="Принять" />
           <StatCard title="Вызовы" value={data?.newCalls ?? 0} hint="Подойти" />
           <StatCard title="Оплаты" value={data?.pendingPayments ?? 0} hint="Рассчитать" />
         </div>
