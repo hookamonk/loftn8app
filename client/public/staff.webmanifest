@@ -1,0 +1,17 @@
+{
+  "id": "/staff",
+  "name": "LOFT№8 Staff",
+  "short_name": "LOFT Staff",
+  "description": "LOFT№8 staff dashboard — orders, calls, payments and push notifications.",
+  "start_url": "/staff/login",
+  "scope": "/staff",
+  "display": "standalone",
+  "background_color": "#07070a",
+  "theme_color": "#07070a",
+  "orientation": "portrait",
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
