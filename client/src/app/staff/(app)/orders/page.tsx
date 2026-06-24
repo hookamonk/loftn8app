@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
   listOrders,
   listOrderRequests,
@@ -18,18 +18,19 @@ import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 
-const STATUSES: OrderStatus[] = ["IN_PROGRESS", "DELIVERED", "CANCELLED"];
+type OrdersTab = "accept" | "IN_PROGRESS" | "DELIVERED" | "CANCELLED";
+
+const TABS: Array<{ key: OrdersTab; label: string }> = [
+  { key: "accept", label: "Принять" },
+  { key: "IN_PROGRESS", label: "Готовятся" },
+  { key: "DELIVERED", label: "Готовые" },
+  { key: "CANCELLED", label: "Отменённые" },
+];
 
 function statusLabel(s: OrderStatus) {
-  if (s === "NEW") return "Готовится";
-  if (s === "IN_PROGRESS") return "Готовится";
   if (s === "DELIVERED") return "Готов";
-  return "Отменен";
-}
-
-function nextAction(s: OrderStatus) {
-  if (s === "IN_PROGRESS") return { status: "DELIVERED" as OrderStatus, label: "Отметить готовым" };
-  return null;
+  if (s === "CANCELLED") return "Отменён";
+  return "Готовится";
 }
 
 const card =
@@ -43,12 +44,7 @@ const btnGhost =
 
 export default function StaffOrdersPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const initialStatus = (() => {
-    const raw = searchParams.get("status");
-    return STATUSES.includes(raw as OrderStatus) ? (raw as OrderStatus) : "IN_PROGRESS";
-  })();
-  const [status, setStatus] = useState<OrderStatus>(initialStatus);
+  const [tab, setTab] = useState<OrdersTab>("accept");
   const [orders, setOrders] = useState<StaffOrder[]>([]);
   const [requests, setRequests] = useState<StaffOrderRequest[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -57,22 +53,29 @@ export default function StaffOrdersPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const { push } = useToast();
 
-  const load = async (opts?: { silent?: boolean }) => {
+  const load = async (opts?: { silent?: boolean; activeTab?: OrdersTab }) => {
     const silent = opts?.silent ?? false;
+    const current = opts?.activeTab ?? tab;
     if (!silent) setLoading(true);
     setErr(null);
 
-    const [ordersResult, requestsResult] = await Promise.all([listOrders(status), listOrderRequests()]);
+    // Requests power the "Принять" tab and its badge — always refresh them.
+    const requestsResult = await listOrderRequests();
+    setRequests(requestsResult.ok ? requestsResult.data.requests : []);
 
-    if (!silent) setLoading(false);
-
-    if (!ordersResult.ok) {
-      setErr(ordersResult.error);
-      return;
+    if (current !== "accept") {
+      const ordersResult = await listOrders(current);
+      if (!ordersResult.ok) {
+        if (!silent) setLoading(false);
+        setErr(ordersResult.error);
+        return;
+      }
+      setOrders(ordersResult.data.orders);
+    } else {
+      setOrders([]);
     }
 
-    setOrders(ordersResult.data.orders);
-    setRequests(requestsResult.ok ? requestsResult.data.requests : []);
+    if (!silent) setLoading(false);
     setLast(Date.now());
   };
 
@@ -86,12 +89,10 @@ export default function StaffOrdersPage() {
   useEffect(() => {
     void load({ silent: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [tab]);
 
   useStaffPushEvents((payload) => {
-    if (payload.kind === "ORDER_CREATED") {
-      void tick();
-    }
+    if (payload.kind === "ORDER_CREATED") void tick();
   });
 
   useStaffEvents((e) => {
@@ -99,21 +100,6 @@ export default function StaffOrdersPage() {
       void tick();
     }
   });
-
-  useEffect(() => {
-    const raw = searchParams.get("status");
-    if (raw && STATUSES.includes(raw as OrderStatus) && raw !== status) {
-      setStatus(raw as OrderStatus);
-    } else if (raw === "NEW" && status !== "IN_PROGRESS") {
-      setStatus("IN_PROGRESS");
-      router.replace("/staff/orders?status=IN_PROGRESS");
-    }
-  }, [searchParams, status, router]);
-
-  const totalItems = useMemo(
-    () => orders.reduce((acc, o) => acc + o.items.reduce((s, it) => s + it.qty, 0), 0),
-    [orders]
-  );
 
   const setTo = async (id: string, st: OrderStatus, okText: string) => {
     setBusyId(id);
@@ -130,7 +116,7 @@ export default function StaffOrdersPage() {
     await load({ silent: false });
   };
 
-  // "Принять" — создать заказ сразу из того, что гость выбрал, и закрыть запрос.
+  // "Принять" — создать заказ сразу из того, что выбрал гость, и закрыть запрос.
   const acceptRequest = async (request: StaffOrderRequest) => {
     if (!request.items || request.items.length === 0) return;
     setBusyId(request.id);
@@ -151,7 +137,7 @@ export default function StaffOrdersPage() {
       return;
     }
 
-    push({ kind: "success", title: "Заказ подтверждён", message: `Стол ${request.table.code} — готовится.` });
+    push({ kind: "success", title: "Заказ принят", message: `Стол ${request.table.code} — готовится.` });
     emitStaffLiveSync("order-accepted");
     await load({ silent: false });
   };
@@ -168,7 +154,6 @@ export default function StaffOrdersPage() {
     }
 
     const connected = result.data.request;
-    // Передаём выбор гостя в форму создания (предзаполнение).
     try {
       if (request.items && request.items.length > 0) {
         sessionStorage.setItem(`orderPrefill:${connected.id}`, JSON.stringify(request.items));
@@ -183,6 +168,11 @@ export default function StaffOrdersPage() {
     );
   };
 
+  const subtitle =
+    tab === "accept"
+      ? `К принятию: ${requests.length}`
+      : `Заказов: ${orders.length}`;
+
   return (
     <div>
       <div className={card}>
@@ -190,7 +180,7 @@ export default function StaffOrdersPage() {
           <div className="min-w-0">
             <div className="text-xl font-semibold text-white">Заказы</div>
             <div className="mt-1.5 text-xs text-white/55">
-              Заказов: {orders.length} • Позиций: {totalItems}
+              {subtitle}
               {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
             </div>
           </div>
@@ -201,26 +191,37 @@ export default function StaffOrdersPage() {
         </div>
 
         <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-          {STATUSES.map((s) => (
-            <button
-              key={s}
-              className={[
-                "whitespace-nowrap rounded-2xl border px-4 py-2 text-sm transition",
-                s === status
-                  ? "border-white/20 bg-white text-black"
-                  : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
-              ].join(" ")}
-              onClick={() => {
-                setStatus(s);
-                router.replace(`/staff/orders?status=${s}`);
-              }}
-            >
-              {statusLabel(s)}
-            </button>
-          ))}
+          {TABS.map((t) => {
+            const activeTab = t.key === tab;
+            const count = t.key === "accept" ? requests.length : 0;
+            return (
+              <button
+                key={t.key}
+                className={[
+                  "inline-flex items-center gap-2 whitespace-nowrap rounded-2xl border px-4 py-2 text-sm transition",
+                  activeTab
+                    ? "border-white/20 bg-white text-black"
+                    : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
+                ].join(" ")}
+                onClick={() => setTab(t.key)}
+              >
+                <span>{t.label}</span>
+                {count > 0 ? (
+                  <span
+                    className={[
+                      "inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none",
+                      activeTab ? "bg-black/15 text-black" : "bg-white text-black",
+                    ].join(" ")}
+                  >
+                    {count}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
 
-            {err ? (
+        {err ? (
           <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
             {err}
           </div>
@@ -229,33 +230,22 @@ export default function StaffOrdersPage() {
 
       {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
 
-      <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-white">Запросы на заказ</div>
-            <div className="mt-1 text-xs text-white/55">Столы, которые ждут официанта</div>
-          </div>
-          <div className="rounded-full border border-white/10 bg-white/8 px-3 py-1 text-[11px] font-semibold text-white/75">
-            {requests.length}
-          </div>
-        </div>
-
-        <div className="mt-3 space-y-2">
+      {/* ПРИНЯТЬ — запросы гостей на заказ */}
+      {tab === "accept" ? (
+        <div className="mt-4 space-y-3">
           {requests.map((request) => (
-            <div
-              key={request.id}
-              className="rounded-2xl border border-white/10 bg-black/20 p-3"
-            >
+            <div key={request.id} className={card}>
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-white">
+                <div className="min-w-0">
+                  <div className="text-lg font-semibold text-white">
                     Стол {request.table.code}
                     {request.table.label ? ` • ${request.table.label}` : ""}
                   </div>
                   <div className="mt-1 text-xs text-white/55">
-                    {new Date(request.createdAt).toLocaleTimeString()} • {request.status === "ACKED" ? "В пути" : "Запрошен"}
+                    {new Date(request.createdAt).toLocaleTimeString()} •{" "}
+                    {request.status === "ACKED" ? "В работе" : "Новый запрос"}
                   </div>
-                  <div className="mt-2 text-sm text-white/70">
+                  <div className="mt-1 text-sm text-white/70">
                     {request.session.user
                       ? `${request.session.user.name} • ${request.session.user.phone}`
                       : "Гость без аккаунта"}
@@ -269,7 +259,7 @@ export default function StaffOrdersPage() {
                       disabled={busyId === request.id}
                       onClick={() => void acceptRequest(request)}
                     >
-                      {busyId === request.id ? "…" : "Подтвердить"}
+                      {busyId === request.id ? "…" : "Принять"}
                     </button>
                     <button
                       className={btnGhost}
@@ -291,7 +281,7 @@ export default function StaffOrdersPage() {
               </div>
 
               {request.items && request.items.length > 0 ? (
-                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
+                <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3">
                   <div className="text-[10px] uppercase tracking-[0.16em] text-white/50">Гость выбрал</div>
                   <div className="mt-2 space-y-1">
                     {request.items.map((it) => (
@@ -309,107 +299,102 @@ export default function StaffOrdersPage() {
           ))}
 
           {!loading && requests.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
-              Активных запросов сейчас нет.
+            <div className={`${card} text-sm text-white/60`}>Сейчас нет заказов для принятия.</div>
+          ) : null}
+        </div>
+      ) : (
+        /* ГОТОВЯТСЯ / ГОТОВЫЕ / ОТМЕНЁННЫЕ — заказы по статусу */
+        <div className="mt-4 space-y-3">
+          {orders.map((o) => {
+            const sum = o.items.reduce((acc, it) => acc + it.priceCzk * it.qty, 0);
+
+            return (
+              <div key={o.id} className={card}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs text-white/45">
+                      {new Date(o.createdAt).toLocaleString()} • {statusLabel(o.status)}
+                    </div>
+
+                    <div className="mt-1 text-lg font-semibold text-white">
+                      Стол {o.table.code}
+                      {o.table.label ? ` • ${o.table.label}` : ""}
+                    </div>
+
+                    <div className="mt-1 text-sm text-white/70">
+                      {o.session?.user
+                        ? `${o.session.user.name} • ${o.session.user.phone}`
+                        : "Гость без аккаунта"}
+                    </div>
+                  </div>
+
+                  <div className="shrink-0 text-right">
+                    <div className="text-xs text-white/50">Сумма</div>
+                    <div className="mt-1 text-lg font-semibold text-white">{sum} Kč</div>
+                  </div>
+                </div>
+
+                {o.comment ? (
+                  <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/85">
+                    Комментарий: {o.comment}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 space-y-2 border-t border-white/10 pt-4">
+                  {o.items.map((it) => (
+                    <div
+                      key={it.id}
+                      className="flex items-start justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 p-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium text-white">
+                          {it.menuItem.name} × {it.qty}
+                        </div>
+                        {it.comment ? (
+                          <div className="mt-1 text-xs text-white/60">Комментарий: {it.comment}</div>
+                        ) : null}
+                      </div>
+
+                      <div className="shrink-0 text-sm font-semibold text-white">
+                        {it.priceCzk * it.qty} Kč
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {o.status === "IN_PROGRESS" ? (
+                  <div className="mt-4 grid grid-cols-1 gap-2">
+                    <button
+                      className={btnPrimary}
+                      disabled={busyId === o.id}
+                      onClick={() => void setTo(o.id, "DELIVERED", "Заказ отмечен как готовый.")}
+                    >
+                      {busyId === o.id ? "Сохраняем…" : "Отметить готовым"}
+                    </button>
+                    <button
+                      className={btnGhost}
+                      disabled={busyId === o.id}
+                      onClick={() => void setTo(o.id, "CANCELLED", "Заказ отменён.")}
+                    >
+                      Отменить заказ
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+
+          {!loading && orders.length === 0 ? (
+            <div className={`${card} text-sm text-white/60`}>
+              {tab === "IN_PROGRESS"
+                ? "Сейчас ничего не готовится."
+                : tab === "DELIVERED"
+                  ? "Готовых заказов пока нет."
+                  : "Отменённых заказов нет."}
             </div>
           ) : null}
         </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
-        {orders.map((o) => {
-          const action = nextAction(o.status);
-          const sum = o.items.reduce((acc, it) => acc + it.priceCzk * it.qty, 0);
-
-          return (
-            <div key={o.id} className={card}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs text-white/45">
-                    {new Date(o.createdAt).toLocaleString()} • {statusLabel(o.status)}
-                  </div>
-
-                  <div className="mt-1 text-lg font-semibold text-white">
-                    Стол {o.table.code}
-                    {o.table.label ? ` • ${o.table.label}` : ""}
-                  </div>
-
-                  <div className="mt-1 text-sm text-white/70">
-                    {o.session?.user
-                      ? `${o.session.user.name} • ${o.session.user.phone}`
-                      : "Гость без аккаунта"}
-                  </div>
-                </div>
-
-                <div className="shrink-0 text-right">
-                  <div className="text-xs text-white/50">Сумма</div>
-                  <div className="mt-1 text-lg font-semibold text-white">{sum} Kč</div>
-                </div>
-              </div>
-
-              {o.comment ? (
-                <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/85">
-                  Комментарий: {o.comment}
-                </div>
-              ) : null}
-
-              <div className="mt-4 space-y-2 border-t border-white/10 pt-4">
-                {o.items.map((it) => (
-                  <div
-                    key={it.id}
-                    className="flex items-start justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 p-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium text-white">
-                        {it.menuItem.name} × {it.qty}
-                      </div>
-                      {it.comment ? (
-                        <div className="mt-1 text-xs text-white/60">Комментарий: {it.comment}</div>
-                      ) : null}
-                    </div>
-
-                    <div className="shrink-0 text-sm font-semibold text-white">
-                      {it.priceCzk * it.qty} Kč
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 gap-2">
-                {action ? (
-                  <button
-                    className={action.status === "IN_PROGRESS" ? btnPrimary : btn}
-                    disabled={busyId === o.id}
-                    onClick={() =>
-                      void setTo(
-                        o.id,
-                        action.status,
-                        action.status === "IN_PROGRESS" ? "Заказ переведен в готовку." : "Заказ отмечен как готовый."
-                      )
-                    }
-                  >
-                    {busyId === o.id ? "Сохраняем…" : action.label}
-                  </button>
-                ) : null}
-
-                {o.status !== "CANCELLED" && o.status !== "DELIVERED" ? (
-                  <button
-                    className={btnGhost}
-                    disabled={busyId === o.id}
-                    onClick={() => void setTo(o.id, "CANCELLED", "Заказ отменен.")}
-                  >
-                    Отменить заказ
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          );
-        })}
-
-        {!loading && orders.length === 0 ? (
-          <div className={`${card} text-sm text-white/60`}>Заказов в этом разделе пока нет.</div>
-        ) : null}
-      </div>
+      )}
     </div>
   );
 }

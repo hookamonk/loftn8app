@@ -210,7 +210,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                 <>
                   <NavLink
                     href="/staff/summary"
-                    label="Сводка"
+                    label="Главная"
                     active={pathname.startsWith("/staff/summary")}
                   />
                   <NavLink
@@ -220,11 +220,6 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                     badge={summary?.newOrders ?? 0}
                   />
                   <NavLink
-                    href="/staff/tables"
-                    label="Столы"
-                    active={pathname.startsWith("/staff/tables")}
-                  />
-                  <NavLink
                     href="/staff/calls"
                     label="Вызовы"
                     active={pathname.startsWith("/staff/calls")}
@@ -232,9 +227,14 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                   />
                   <NavLink
                     href="/staff/payments"
-                    label="Оплаты"
+                    label="Оплата"
                     active={pathname.startsWith("/staff/payments")}
                     badge={summary?.pendingPayments ?? 0}
+                  />
+                  <NavLink
+                    href="/staff/tables"
+                    label="Столы"
+                    active={pathname.startsWith("/staff/tables")}
                   />
                 </>
               )}

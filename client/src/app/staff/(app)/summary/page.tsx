@@ -239,7 +239,7 @@ export default function StaffSummaryPage() {
       <div className={card}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-xl font-semibold">Сводка смены</div>
+              <div className="text-xl font-semibold">Главная</div>
               <div className="mt-1 text-xs text-white/50">
                 {roleLabel(staff?.role)}
                 {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}

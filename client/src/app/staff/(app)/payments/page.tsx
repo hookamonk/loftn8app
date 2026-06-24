@@ -130,7 +130,7 @@ export default function StaffPaymentsPage() {
       <div className={card}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-xl font-semibold text-white">Оплаты</div>
+            <div className="text-xl font-semibold text-white">Оплата</div>
             <div className="mt-1.5 text-xs text-white/55">
               Запросов: {payments.length}
               {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
