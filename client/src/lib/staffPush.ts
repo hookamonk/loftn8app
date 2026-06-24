@@ -113,6 +113,18 @@ export async function ensurePushSubscribed(): Promise<ApiResult<{ ok: true }>> {
   return { ok: true, data: { ok: true } };
 }
 
+export async function sendTestPush(): Promise<
+  ApiResult<{ ok: true; sent: number; failed: number; removed: number }>
+> {
+  return apiFetch<{ ok: true; sent: number; failed: number; removed: number }>(
+    "/staff/push/test-send",
+    {
+      method: "POST",
+      body: JSON.stringify({ title: "LOFT№8 — тест", body: "Уведомления работают ✅" }),
+    }
+  );
+}
+
 export async function rebindPushIfPossible(): Promise<void> {
   try {
     if (typeof window === "undefined") return;
