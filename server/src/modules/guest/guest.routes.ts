@@ -945,6 +945,30 @@ guestRouter.get(
       const view = paymentStatusView(payment.method, payment.status, amountCzk);
       const isMine = session.userId ? payment.session?.userId === session.userId : payment.session?.id === session.id;
 
+      // Shared-table privacy: everyone at the table can SEE that another guest
+      // has an in-flight payment (so they don't double-pay), but the bill
+      // contents and amounts of someone else's split stay private to them.
+      if (!isMine) {
+        return {
+          id: payment.id,
+          sessionId: payment.session?.id ?? null,
+          isMine,
+          method: payment.method,
+          methodLabel: paymentMethodLabel(payment.method),
+          useLoyalty: false,
+          status: payment.status,
+          createdAt: payment.createdAt,
+          confirmedAt: payment.confirmedAt,
+          billTotalCzk: null,
+          amountCzk: null,
+          loyaltyAppliedCzk: 0,
+          items: [],
+          statusTitle: view.title,
+          statusDescription: view.description,
+          statusTone: view.tone,
+        };
+      }
+
       return {
         id: payment.id,
         sessionId: payment.session?.id ?? null,
@@ -968,6 +992,22 @@ guestRouter.get(
     const orderedTotalCzk = feedOrders
       .filter((order) => order.status !== "CANCELLED")
       .reduce((sum, order) => sum + order.totalCzk, 0);
+
+    // Post-payment "stay or leave?" prompt state. The prompt is shown ONLY to
+    // the guest whose OWN payment was just confirmed — not to everyone at the
+    // table (a guest who never paid, incl. anonymous, must never see it). It
+    // requires: this guest has a confirmed payment, the whole table bill is
+    // settled (nothing pending, nothing left), and they haven't opted to stay.
+    const isMinePayment = (p: any) =>
+      session.userId ? p.session?.userId === session.userId : p.session?.id === session.id;
+    const anyConfirmedPayment = (payments as any[]).some((p) => p.status === "CONFIRMED");
+    const anyPendingPayment = (payments as any[]).some((p) => p.status === "PENDING");
+    const myConfirmedPayment = (payments as any[]).some(
+      (p) => p.status === "CONFIRMED" && isMinePayment(p)
+    );
+    const billFullyPaid = anyConfirmedPayment && !anyPendingPayment && orderedTotalCzk === 0;
+    const stayOptIn = Boolean((session as any).stayOptIn);
+    const promptStay = billFullyPaid && myConfirmedPayment && !stayOptIn;
 
     // `history` already contains settled bills, so the current open tab should only
     // reflect the active orders left after settlement.
@@ -1030,6 +1070,11 @@ guestRouter.get(
         nextAvailableAt: loyalty.nextAvailableAt,
         cashbackPercent: 10,
       },
+      closure: {
+        billFullyPaid,
+        stayOptIn,
+        promptStay,
+      },
       orderRequest:
         orderRequest && orderRequestView
           ? {
@@ -1048,6 +1093,21 @@ guestRouter.get(
       calls: feedCalls,
       payments: feedPayments,
     });
+  })
+);
+
+guestRouter.post(
+  "/session/stay",
+  guestSessionAuth,
+  asyncHandler(async (req, res) => {
+    const session = req.guestSession!;
+    // Guest chose to stay and order more after paying — suspend the
+    // post-payment auto-end until the next payment re-arms the prompt.
+    await prisma.guestSession.updateMany({
+      where: { id: session.id, endedAt: null },
+      data: { stayOptIn: true },
+    });
+    res.json({ ok: true });
   })
 );
 

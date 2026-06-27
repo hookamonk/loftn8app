@@ -92,6 +92,10 @@ model GuestSession {
   shiftId   String?
   startedAt DateTime         @default(now())
   endedAt   DateTime?
+  // After a bill is fully paid the guest is asked "stay & order more?". When
+  // they choose to stay this flips true and the post-payment auto-end timer is
+  // suspended until the next payment re-arms the prompt.
+  stayOptIn Boolean          @default(false)
   table     Table            @relation(fields: [tableId], references: [id])
   user      User?            @relation(fields: [userId], references: [id])
   shift     Shift?           @relation(fields: [shiftId], references: [id])

@@ -113,6 +113,31 @@ export async function ensurePushSubscribed(): Promise<ApiResult<{ ok: true }>> {
   return { ok: true, data: { ok: true } };
 }
 
+export async function unsubscribePushOnLogout(): Promise<void> {
+  try {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+
+    const reg =
+      (await navigator.serviceWorker.getRegistration("/sw.js")) ||
+      (await navigator.serviceWorker.getRegistration());
+    if (!reg) return;
+
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+
+    const endpoint = (sub.toJSON() as any).endpoint as string | undefined;
+    await sub.unsubscribe().catch(() => {});
+    if (endpoint) {
+      await apiFetch("/staff/push/unsubscribe", {
+        method: "POST",
+        body: JSON.stringify({ endpoint }),
+      }).catch(() => {});
+    }
+  } catch {
+    // ignore — logout proceeds regardless
+  }
+}
+
 export async function rebindPushIfPossible(): Promise<void> {
   try {
     if (typeof window === "undefined") return;

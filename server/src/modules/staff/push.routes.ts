@@ -69,7 +69,11 @@ staffPushRouter.post(
   validate(UnsubscribeSchema),
   asyncHandler(async (req, res) => {
     const { endpoint } = req.body as z.infer<typeof UnsubscribeSchema>;
-    await prisma.staffPushSubscription.delete({ where: { endpoint } }).catch(() => {});
+    // Only the owner may remove their own subscription — don't let one staff
+    // member delete another's by guessing/replaying an endpoint value.
+    await prisma.staffPushSubscription
+      .deleteMany({ where: { endpoint, staffId: req.staff!.staffId } })
+      .catch(() => {});
     res.json({ ok: true });
   })
 );

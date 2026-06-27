@@ -7,8 +7,16 @@ import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync } from "@/lib/staffLiveSync";
+import { WaitBadge, TONE_BORDER, waitInfo, queueCardBase } from "@/lib/staffQueue";
 
 const STATUSES: CallStatus[] = ["NEW", "ACKED", "DONE"];
+
+const TYPE_CHIP: Record<StaffCall["type"], string> = {
+  WAITER: "bg-sky-500/20 text-sky-200",
+  HOOKAH: "bg-fuchsia-500/20 text-fuchsia-200",
+  BILL: "bg-emerald-500/20 text-emerald-200",
+  HELP: "bg-amber-500/20 text-amber-200",
+};
 
 function statusLabel(s: CallStatus) {
   if (s === "NEW") return "Новые";
@@ -46,6 +54,17 @@ export default function StaffCallsPage() {
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const { push } = useToast();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Oldest-waiting first for active calls — most urgent on top.
+  const sortedCalls =
+    status === "DONE"
+      ? calls
+      : [...calls].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
@@ -148,25 +167,36 @@ export default function StaffCallsPage() {
       {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
 
       <div className="mt-4 space-y-3">
-        {calls.map((c) => {
+        {sortedCalls.map((c) => {
           const action = nextAction(c.status);
+          const active = c.status !== "DONE";
 
           return (
-            <div key={c.id} className={card}>
+            <div
+              key={c.id}
+              className={active ? `${queueCardBase} ${TONE_BORDER[waitInfo(c.createdAt, now).tone]}` : card}
+            >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-xs text-white/45">
                     {new Date(c.createdAt).toLocaleString()} • {statusLabel(c.status)}
                   </div>
 
-                  <div className="mt-1 text-lg font-semibold text-white">
-                    Стол {c.table.code}
-                    {c.table.label ? ` • ${c.table.label}` : ""}
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <div className="text-lg font-semibold text-white">
+                      Стол {c.table.code}
+                      {c.table.label ? ` • ${c.table.label}` : ""}
+                    </div>
+                    {active ? <WaitBadge createdAt={c.createdAt} now={now} /> : null}
                   </div>
 
-                  <div className="mt-1 text-sm text-white/70">{typeLabel(c.type)}</div>
+                  <div className="mt-2">
+                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${TYPE_CHIP[c.type]}`}>
+                      {typeLabel(c.type)}
+                    </span>
+                  </div>
 
-                  <div className="mt-1 text-sm text-white/60">
+                  <div className="mt-1.5 text-sm text-white/60">
                     {c.session?.user
                       ? `${c.session.user.name} • ${c.session.user.phone}`
                       : "Гость без аккаунта"}

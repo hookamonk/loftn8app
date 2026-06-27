@@ -7,12 +7,19 @@ import { guestSessionAuth } from "../../middleware/auth/guestSession";
 import { notifyCallCreated } from "../staff/push.service";
 import { attachSessionToActiveShiftIfNeeded } from "../staff/shiftCache";
 import { emitGuestEvent } from "../guest/guestEvents";
+import { ORDER_REQUEST_MARKER } from "../orders/orderRequest";
 
 export const callsRouter = Router();
 
 const CreateCallSchema = z.object({
   type: z.enum(["WAITER", "HOOKAH", "BILL", "HELP"]),
-  message: z.string().max(500).optional(),
+  message: z
+    .string()
+    .max(500)
+    // Don't let a guest spoof the internal order-request marker, which would
+    // hide their call from the normal calls feed and fake an order request.
+    .refine((m) => m.trim() !== ORDER_REQUEST_MARKER, "Invalid message")
+    .optional(),
 });
 
 callsRouter.post(

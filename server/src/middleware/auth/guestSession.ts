@@ -46,6 +46,7 @@ export async function guestSessionAuth(
 			shiftId: true,
 			startedAt: true,
 			endedAt: true,
+			stayOptIn: true,
 			table: {
 				select: {
 					id: true,
@@ -130,6 +131,7 @@ export async function guestSessionAuth(
 							shiftId: true,
 							startedAt: true,
 							endedAt: true,
+							stayOptIn: true,
 							table: {
 								select: {
 									id: true,

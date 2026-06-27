@@ -23,17 +23,35 @@ function StatCard({
   title,
   value,
   hint,
+  href,
+  tone,
 }: {
   title: string;
   value: number;
   hint: string;
+  href: string;
+  tone: "emerald" | "amber" | "sky";
 }) {
+  const active = value > 0;
+  const ring = active
+    ? {
+        emerald: "border-emerald-400/45 bg-emerald-500/12",
+        amber: "border-amber-400/45 bg-amber-400/12",
+        sky: "border-sky-400/45 bg-sky-500/12",
+      }[tone]
+    : "border-white/10 bg-white/6";
+  const num = active
+    ? { emerald: "text-emerald-200", amber: "text-amber-200", sky: "text-sky-200" }[tone]
+    : "text-white";
   return (
-    <div className="rounded-[24px] border border-white/10 bg-white/6 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur">
+    <Link
+      href={href}
+      className={`rounded-[24px] border p-4 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur transition active:scale-[0.98] hover:brightness-110 ${ring}`}
+    >
       <div className="text-xs text-white/55">{title}</div>
-      <div className="mt-2 text-3xl font-semibold text-white">{value}</div>
-      <div className="mt-2 text-xs text-white/40">{hint}</div>
-    </div>
+      <div className={`mt-2 text-3xl font-bold ${num}`}>{value}</div>
+      <div className="mt-2 text-xs text-white/40">{hint} ›</div>
+    </Link>
   );
 }
 
@@ -244,10 +262,18 @@ export default function StaffSummaryPage() {
                 {roleLabel(staff?.role)}
                 {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
               </div>
-              <div className="mt-2 text-sm text-white/65">
-                {shift
-                  ? `Смена открыта • ${new Date(shift.openedAt).toLocaleString()}`
-                  : "Смена сейчас не открыта"}
+              <div className="mt-2">
+                {shift ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-500/12 px-3 py-1 text-xs font-semibold text-emerald-200">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                    Смена открыта · {new Date(shift.openedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-200">
+                    <span className="h-2 w-2 rounded-full bg-amber-400" />
+                    Смена не открыта
+                  </span>
+                )}
               </div>
             </div>
 
@@ -320,9 +346,9 @@ export default function StaffSummaryPage() {
         </div>
 
         <div className="mt-4 grid grid-cols-3 gap-3">
-          <StatCard title="Заказы" value={data?.newOrders ?? 0} hint="Принять" />
-          <StatCard title="Вызовы" value={data?.newCalls ?? 0} hint="Подойти" />
-          <StatCard title="Оплаты" value={data?.pendingPayments ?? 0} hint="Рассчитать" />
+          <StatCard title="Заказы" value={data?.newOrders ?? 0} hint="Принять" href="/staff/orders" tone="emerald" />
+          <StatCard title="Вызовы" value={data?.newCalls ?? 0} hint="Подойти" href="/staff/calls" tone="amber" />
+          <StatCard title="Оплаты" value={data?.pendingPayments ?? 0} hint="Рассчитать" href="/staff/payments" tone="sky" />
         </div>
 
       <StaffTraining open={trainingOpen} onClose={() => setTrainingOpen(false)} />

@@ -8,7 +8,8 @@ import { useStaffSession } from "@/providers/staffSession";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useStaffEvents } from "@/lib/useStaffEvents";
-import { fireInAppAlert } from "@/lib/staffAlerts";
+import { fireInAppAlert, armAudio } from "@/lib/staffAlerts";
+import { unsubscribePushOnLogout } from "@/lib/staffPush";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 
 function Badge({ value }: { value?: number }) {
@@ -81,10 +82,22 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   const [noShift, setNoShift] = useState(false);
 
   const onLogout = async () => {
+    // Drop this device's push subscription so a shared phone doesn't keep
+    // receiving this venue's notifications after sign-out.
+    await unsubscribePushOnLogout();
     await staffLogout();
     clear();
     router.replace("/staff/login");
   };
+
+  // Prime the alert audio on the first interaction with the dashboard, so new
+  // orders/calls beep even for staff who didn't enable push notifications.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const prime = () => void armAudio();
+    window.addEventListener("pointerdown", prime, { once: true });
+    return () => window.removeEventListener("pointerdown", prime);
+  }, []);
 
   const isAdmin = staff?.role === "ADMIN";
   const isManager = staff?.role === "MANAGER";
@@ -148,7 +161,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
           e.kind === "ORDER_CREATED" ||
           e.kind === "PAYMENT_REQUESTED")
       ) {
-        fireInAppAlert({ kind: e.kind, tableCode: e.tableCode ?? null });
+        fireInAppAlert({ kind: e.kind, tableCode: e.tableCode ?? null, tag: e.tag ?? undefined });
       }
       void tick();
     },

@@ -9,6 +9,7 @@ import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
 import { PaymentSheet } from "@/components/PaymentSheet";
+import { useEscapeToClose } from "@/lib/useModalA11y";
 import { useI18n } from "@/providers/i18n";
 
 type OrderStatus = "NEW" | "ACCEPTED" | "IN_PROGRESS" | "DELIVERED" | "CANCELLED";
@@ -142,12 +143,51 @@ export default function CartPage() {
   const { push } = useToast();
 
   const [payOpen, setPayOpen] = useState(false);
+  // Shown when the guest tries to pay while the order is still being prepared.
+  const [showPreparingBlock, setShowPreparingBlock] = useState(false);
   const [useLoyalty, setUseLoyalty] = useState(false);
   const [selectedQtyByKey, setSelectedQtyByKey] = useState<Record<string, number>>({});
   const [localPendingMarker, setLocalPendingMarker] = useState<PendingPaymentMarker | null>(null);
   const latestPaymentSnapshotRef = useRef<{ id: string; status: "PENDING" | "CONFIRMED" | "CANCELLED" } | null>(null);
+  // The "order ready" note is a transient flash shown ONCE when an order truly
+  // becomes ready — never again on page refresh, and not while a follow-up
+  // order is still cooking. We key it on the set of delivered order ids and
+  // persist that we've shown it, so a reload with the same ready tab stays
+  // silent, while a freshly-delivered (dozakaz) order flashes once.
+  const [showReadyNote, setShowReadyNote] = useState(false);
 
   const openTab = useMemo(() => buildOpenTab(feed?.orders ?? [], isCz), [feed, isCz]);
+  const readyPhase = openTab?.stage.phase === "ready";
+  const readyNoteKey = feed?.currentSessionId ? `readyNoteShown:${feed.currentSessionId}` : null;
+  const deliveredSig = useMemo(
+    () =>
+      (feed?.orders ?? [])
+        .filter((o) => o.status === "DELIVERED")
+        .map((o) => o.id)
+        .sort()
+        .join(","),
+    [feed?.orders]
+  );
+
+  useEffect(() => {
+    if (!readyPhase || !readyNoteKey || !deliveredSig) {
+      setShowReadyNote(false);
+      return;
+    }
+    const storedSet = new Set((storage.get<string | null>(readyNoteKey, null) ?? "").split(",").filter(Boolean));
+    const currentIds = deliveredSig.split(",").filter(Boolean);
+    const hasNewlyReady = currentIds.some((id) => !storedSet.has(id));
+    // Only flash when a NEW order has just become ready — not on refresh, and
+    // not when the delivered set merely shrinks (e.g. a cancelled item).
+    storage.set(readyNoteKey, deliveredSig);
+    if (!hasNewlyReady) {
+      setShowReadyNote(false);
+      return;
+    }
+    setShowReadyNote(true);
+    const timer = window.setTimeout(() => setShowReadyNote(false), 5000);
+    return () => window.clearTimeout(timer);
+  }, [readyPhase, readyNoteKey, deliveredSig]);
   const pendingMarkerStorageKey = useMemo(
     () =>
       feed?.table && feed?.currentSessionId
@@ -356,11 +396,41 @@ export default function CartPage() {
     }
   };
 
+  const changeMyMethod = async (method: "CARD" | "CASH") => {
+    try {
+      // Reflect the new method immediately in the local fallback marker so the
+      // label doesn't lag while the feed catches up.
+      setLocalPendingMarker((m) => (m ? { ...m, method } : m));
+      await api("/payments/method", { method: "POST", body: JSON.stringify({ method }) });
+      await refresh();
+      push({
+        kind: "success",
+        title: isCz ? "Způsob platby změněn" : "Payment method changed",
+        message:
+          method === "CARD"
+            ? isCz
+              ? "Kartou (terminál)."
+              : "Card (terminal)."
+            : isCz
+            ? "Hotově."
+            : "Cash.",
+      });
+    } catch (e: any) {
+      push({ kind: "error", title: isCz ? "Chyba" : "Error", message: e?.message ?? "Failed" });
+    }
+  };
+
   const openPaymentSheet = () => {
     if (!openTab || latestPendingPayment) return;
+    // Can't pay while anything is still cooking — the bill isn't final yet.
+    if (openTab.stage.phase !== "ready") {
+      setShowPreparingBlock(true);
+      return;
+    }
     setSelectedQtyByKey({});
     setPayOpen(true);
   };
+  useEscapeToClose(showPreparingBlock, () => setShowPreparingBlock(false));
 
   return (
     <RequireTable>
@@ -485,11 +555,39 @@ export default function CartPage() {
                   </div>
 
                   {effectivePendingPayment ? (
-                    <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                      {isCz
-                        ? `Váš požadavek na platbu: ${effectivePendingPayment.methodLabel === "Card" ? "kartou" : "hotově"}, byl přijat. Číšník je na cestě.`
-                        : `Your payment request: ${effectivePendingPayment.methodLabel === "Card" ? "card" : "cash"}, has been accepted. The waiter is on the way.`}
-                    </div>
+                    <>
+                      <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
+                        {isCz
+                          ? `Váš požadavek na platbu: ${effectivePendingPayment.methodLabel === "Card" ? "kartou" : "hotově"}, byl přijat. Číšník je na cestě.`
+                          : `Your payment request: ${effectivePendingPayment.methodLabel === "Card" ? "card" : "cash"}, has been accepted. The waiter is on the way.`}
+                      </div>
+                      {myPendingPayment ? (
+                        <div className="mt-2">
+                          <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-white/45">
+                            {isCz ? "Změnit způsob platby" : "Change payment method"}
+                          </div>
+                          <div className="inline-flex rounded-2xl border border-white/10 bg-black/30 p-1">
+                            {(["CARD", "CASH"] as const).map((m) => {
+                              const active = (myPendingPayment.method as string) === m;
+                              return (
+                                <button
+                                  key={m}
+                                  type="button"
+                                  disabled={active}
+                                  onClick={() => void changeMyMethod(m)}
+                                  className={[
+                                    "rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-default",
+                                    active ? "bg-white text-black" : "text-white/60 hover:text-white",
+                                  ].join(" ")}
+                                >
+                                  {m === "CARD" ? (isCz ? "Kartou" : "Card") : isCz ? "Hotově" : "Cash"}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
                   ) : (
                     <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
                       {isCz ? "Vyberte položky, které chcete zaplatit, a zvolte způsob platby." : "Select the items you want to pay for and choose the payment method."}
@@ -591,17 +689,34 @@ export default function CartPage() {
                     ))}
                   </div>
 
-                  {openTab.stage.phase === "ready" ? (
-                    <div className="mt-3 rounded-xl border border-gold/15 bg-gold/10 px-3 py-2 text-[11px] text-amber-50/90">
+                  <div
+                    className={[
+                      "overflow-hidden transition-all duration-500 ease-out",
+                      showReadyNote ? "mt-3 max-h-24 opacity-100" : "max-h-0 opacity-0",
+                    ].join(" ")}
+                  >
+                    <div className="rounded-xl border border-gold/15 bg-gold/10 px-3 py-2 text-[11px] text-amber-50/90">
                       {isCz ? "Vaše objednávka je hotová. Číšník ji nese ke stolu." : "Your order is ready. The waiter is bringing it to your table."}
                     </div>
-                  ) : null}
+                  </div>
                 </>
               )}
 
-              <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-3">
-                <div className="text-[11px] uppercase tracking-[0.14em] text-white/60">{isCz ? "K úhradě nyní" : "Due now"}</div>
-                <div className="text-sm font-semibold text-white">{feed?.totals.dueCzk ?? openTab.totalCzk} Kč</div>
+              <div className="mt-3 flex items-end justify-between border-t border-white/8 pt-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-white/60">{isCz ? "K úhradě nyní" : "Due now"}</div>
+                  {(() => {
+                    const due = feed?.totals.dueCzk ?? openTab.totalCzk;
+                    const pct = feed?.loyalty?.cashbackPercent ?? 10;
+                    const cb = Math.floor((due * pct) / 100);
+                    return cb > 0 ? (
+                      <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-gold/12 px-2 py-0.5 text-[11px] font-medium text-amber-200">
+                        ✦ {isCz ? `Cashback +${cb} Kč` : `Cashback +${cb} Kč`}
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+                <div className="text-2xl font-bold text-white">{feed?.totals.dueCzk ?? openTab.totalCzk} Kč</div>
               </div>
 
               {!effectivePendingPayment && latestPendingPayment ? (
@@ -672,6 +787,37 @@ export default function CartPage() {
             </div>
           )}
         </div>
+
+        {showPreparingBlock ? (
+          <div
+            className="fixed inset-0 z-[96] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setShowPreparingBlock(false)}
+          >
+            <div
+              className="w-full max-w-sm rounded-[28px] border border-gold/25 bg-[#151515]/97 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-gold/15 text-xl text-amber-200">⏳</div>
+              <div className="mt-4 text-lg font-semibold text-white">
+                {isCz ? "Objednávka se připravuje" : "Your order is being prepared"}
+              </div>
+              <div className="mt-2 text-sm leading-6 text-white/70">
+                {isCz
+                  ? "Zaplatit půjde, jakmile bude celá objednávka hotová a obsluha ji přinese ke stolu."
+                  : "You can pay once the whole order is ready and the waiter brings it to your table."}
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPreparingBlock(false)}
+                className="mt-5 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.98]"
+              >
+                {isCz ? "Rozumím" : "Got it"}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <PaymentSheet
           open={payOpen}

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/providers/i18n";
+import { useEscapeToClose } from "@/lib/useModalA11y";
 
 function QtyInline({
   qty,
@@ -74,6 +75,7 @@ export function PaymentSheet({
   const { isCz } = useI18n();
   const [step, setStep] = useState<"select" | "method">("select");
   const [query, setQuery] = useState("");
+  useEscapeToClose(open, onClose);
 
   useEffect(() => {
     if (open) {
@@ -99,7 +101,12 @@ export function PaymentSheet({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/70 px-4 pb-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[95] flex items-end justify-center bg-black/70 px-4 pb-4 backdrop-blur-sm"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
       <div
         className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#0d0d0d] p-4 shadow-[0_30px_120px_rgba(0,0,0,0.7)]"
         onClick={(e) => e.stopPropagation()}

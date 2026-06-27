@@ -361,7 +361,7 @@ export default function StaffOrderCreatePage() {
   const showSubDropdown = (activeGroup?.cats?.length ?? 0) > 1;
 
   return (
-    <div>
+    <div className="pb-28">
       <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -546,6 +546,29 @@ export default function StaffOrderCreatePage() {
           </div>
         </div>
       </div>
+
+      {/* Always-visible save bar so staff never has to scroll past the menu. */}
+      {items.length > 0 ? (
+        <div className="fixed inset-x-0 bottom-4 z-40 px-4">
+          <div className="mx-auto flex max-w-md items-center gap-3 rounded-3xl border border-white/15 bg-[#101014]/96 p-2 pl-4 shadow-[0_20px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+            <div className="grid h-10 min-w-10 place-items-center rounded-2xl bg-white/10 px-2 text-sm font-bold text-white">
+              {selectedQty}
+            </div>
+            <div className="min-w-0 flex-1 leading-tight">
+              <div className="text-base font-bold text-white">{totalCzk} Kč</div>
+              <div className="truncate text-[11px] text-white/55">Стол {tableCode || "—"}</div>
+            </div>
+            <button
+              type="button"
+              disabled={submitting}
+              className="h-12 shrink-0 rounded-2xl bg-white px-5 text-sm font-semibold text-black transition active:scale-[0.97] hover:bg-white/90 disabled:opacity-50"
+              onClick={() => void submit()}
+            >
+              {submitting ? "Сохраняем…" : "Сохранить"}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

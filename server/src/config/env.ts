@@ -13,11 +13,21 @@ const EnvSchema = z.object({
 	JWT_GUEST_SESSION_SECRET: z.string().min(20),
 	JWT_USER_SECRET: z.string().min(20),
 	JWT_STAFF_SECRET: z.string().min(20),
+	// After the bill is fully paid the guest is prompted to stay or leave; if
+	// they make no choice the session auto-ends this many minutes later.
 	GUEST_SESSION_AUTO_END_AFTER_PAYMENT_MINUTES: z.coerce
 		.number()
 		.int()
 		.positive()
-		.default(30),
+		.default(5),
+	// If the guest chose "stay & order more" but then places no new order, the
+	// session still auto-ends this many minutes after the last activity, so a
+	// guest who stayed and quietly left doesn't keep the table occupied forever.
+	GUEST_SESSION_STAY_GRACE_MINUTES: z.coerce
+		.number()
+		.int()
+		.positive()
+		.default(20),
 
 	COOKIE_DOMAIN: z.string().optional().or(z.literal("")).optional(),
 

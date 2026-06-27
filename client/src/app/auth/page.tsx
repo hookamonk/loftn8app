@@ -11,6 +11,7 @@ import { useToast } from "@/providers/toast";
 import { useAuth } from "@/providers/auth";
 import { useSession } from "@/providers/session";
 import { useI18n } from "@/providers/i18n";
+import { useEscapeToClose } from "@/lib/useModalA11y";
 
 type Mode = "register" | "login" | "forgot";
 type Step = "form" | "code";
@@ -90,6 +91,7 @@ export default function AuthPage() {
   const [suggestedMode, setSuggestedMode] = useState<Mode | null>(null);
 
   const [showAnonWarn, setShowAnonWarn] = useState(false);
+  useEscapeToClose(showAnonWarn, () => setShowAnonWarn(false));
 
   const p = useMemo(() => normalizePhone(phone), [phone]);
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
@@ -399,29 +401,46 @@ export default function AuthPage() {
   return (
     <main className="min-h-dvh bg-[radial-gradient(80%_60%_at_50%_0%,rgba(255,255,255,0.08),transparent_60%)]">
       {showAnonWarn ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[rgba(20,20,20,0.92)] p-4 backdrop-blur">
-            <div className="text-sm font-semibold text-white">{isCz ? "Pozor" : "Attention"}</div>
-            <div className="mt-2 text-xs text-white/70">
-              {isCz ? "Pokud budete pokračovat bez registrace, bonusy a novinky nebudou dostupné." : "If you continue without registration, bonuses and news will not be available."}
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-3xl border border-gold/25 bg-[rgba(20,20,20,0.96)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur">
+            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-gold/15 text-xl text-amber-200">★</div>
+
+            <div className="mt-4 text-lg font-semibold text-white">
+              {isCz ? "Pokračovat bez registrace?" : "Continue without registration?"}
             </div>
 
-            <div className="mt-4 flex gap-2">
+            <div className="mt-3 rounded-2xl border border-gold/25 bg-gold/12 p-3.5 text-sm leading-6 text-amber-50">
+              {isCz
+                ? "Bez registrace si můžete jen prohlížet menu a přivolat obsluhu. Objednávky a cashback z útrat nebudou dostupné."
+                : "Without an account you can only browse the menu and call staff. Ordering and cashback on your spending won't be available."}
+            </div>
+
+            <div className="mt-3 text-xs leading-5 text-white/55">
+              {isCz
+                ? "Registrace zabere pár sekund a hned odemkne objednávky i cashback."
+                : "Registration takes a few seconds and unlocks ordering and cashback right away."}
+            </div>
+
+            <div className="mt-4 grid gap-2">
               <button
-                className="h-12 flex-1 rounded-2xl bg-white text-sm font-semibold text-black"
+                className="h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.98]"
                 onClick={() => {
                   setShowAnonWarn(false);
                   setMode("register");
                   setStep("form");
                 }}
               >
-                {isCz ? "Registrovat" : "Register"}
+                {isCz ? "Zaregistrovat se" : "Register"}
               </button>
               <button
-                className="h-12 flex-1 rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/85"
+                className="h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/85 transition hover:text-white"
                 onClick={doAnonContinue}
               >
-                {isCz ? "Pokračovat" : "Continue"}
+                {isCz ? "Pokračovat jen s menu" : "Continue with menu only"}
               </button>
             </div>
 

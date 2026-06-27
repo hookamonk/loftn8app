@@ -7,6 +7,8 @@ import {
   disconnectActiveTable,
   getActiveTableDetails,
   requestTablePayment,
+  cancelOrderItem,
+  changePaymentMethod,
   type StaffActiveTableDetails,
 } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
@@ -35,6 +37,12 @@ function paymentMethodLabel(method: "CARD" | "CASH") {
   return method === "CARD" ? "Карта" : "Наличные";
 }
 
+function orderStatusChip(status: string) {
+  if (status === "DELIVERED") return { label: "Готов", cls: "bg-emerald-500/20 text-emerald-200" };
+  if (status === "CANCELLED") return { label: "Отменён", cls: "bg-red-500/20 text-red-200" };
+  return { label: "Готовится", cls: "bg-amber-400/20 text-amber-200" };
+}
+
 export default function StaffTableDetailsPage() {
   const params = useParams<{ tableId: string }>();
   const router = useRouter();
@@ -48,6 +56,25 @@ export default function StaffTableDetailsPage() {
   const [last, setLast] = useState<number | null>(null);
   const [busyMethod, setBusyMethod] = useState<"CARD" | "CASH" | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [cancelingItemId, setCancelingItemId] = useState<string | null>(null);
+
+  const onCancelItem = async (orderId: string, itemId: string) => {
+    if (cancelingItemId) return;
+    setCancelingItemId(itemId);
+    const r = await cancelOrderItem(orderId, itemId);
+    setCancelingItemId(null);
+    if (!r.ok) {
+      push({ kind: "error", title: "Не удалось отменить", message: r.error });
+      return;
+    }
+    push({
+      kind: "success",
+      title: r.data.orderCancelled ? "Заказ отменён" : "Позиция отменена",
+      message: r.data.orderCancelled ? "В заказе не осталось позиций." : "Позиция убрана из заказа.",
+    });
+    emitStaffLiveSync("order-item-cancelled");
+    await load({ silent: false });
+  };
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
@@ -238,11 +265,41 @@ export default function StaffTableDetailsPage() {
       {data?.pendingPayment ? (
         <div className={`${card} mt-4`}>
           <div className="text-sm font-semibold text-white">Активный расчёт</div>
-          <div className="mt-2 text-sm text-white/70">
-            {paymentMethodLabel(data.pendingPayment.method)} • {data.pendingPayment.billTotalCzk} Kč
+          <div className="mt-1 text-lg font-bold text-white">{data.pendingPayment.billTotalCzk} Kč</div>
+          <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-white/45">Способ оплаты</div>
+          <div className="mt-1 inline-flex rounded-2xl border border-white/10 bg-black/30 p-1">
+            {(["CARD", "CASH"] as const).map((m) => {
+              const active = data.pendingPayment!.method === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  disabled={active || busyMethod !== null}
+                  onClick={async () => {
+                    setBusyMethod(m);
+                    const r = await changePaymentMethod(data.pendingPayment!.id, m);
+                    if (!r.ok) {
+                      setBusyMethod(null);
+                      push({ kind: "error", title: "Ошибка", message: r.error });
+                      return;
+                    }
+                    push({ kind: "success", title: "Способ изменён", message: m === "CARD" ? "Картой." : "Наличными." });
+                    emitStaffLiveSync("payment-method-changed");
+                    await load({ silent: false });
+                    setBusyMethod(null);
+                  }}
+                  className={[
+                    "rounded-xl px-3 py-1.5 text-sm font-semibold transition disabled:cursor-default",
+                    active ? "bg-white text-black" : "text-white/60 hover:text-white",
+                  ].join(" ")}
+                >
+                  {m === "CARD" ? "Карта" : "Наличные"}
+                </button>
+              );
+            })}
           </div>
-          <div className="mt-1 text-xs text-white/50">
-            Отправлен {new Date(data.pendingPayment.createdAt).toLocaleString()}
+          <div className="mt-2 text-xs text-white/50">
+            Отправлен {new Date(data.pendingPayment.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </div>
         </div>
       ) : null}
@@ -288,14 +345,19 @@ export default function StaffTableDetailsPage() {
         <div className="text-sm font-semibold text-white">История по текущей сессии</div>
         <div className="mt-3 space-y-3">
           {data && data.orders.length > 0 ? (
-            data.orders.map((order) => (
+            data.orders.map((order) => {
+              const chip = orderStatusChip(order.status);
+              const canCancel = order.status === "IN_PROGRESS";
+              return (
               <div key={order.id} className="rounded-2xl border border-white/10 bg-black/20 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-white">
-                      Заказ • {new Date(order.createdAt).toLocaleTimeString()}
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-white">
+                        Заказ • {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${chip.cls}`}>{chip.label}</span>
                     </div>
-                    <div className="mt-1 text-xs text-white/55">Статус: {order.status}</div>
                     {order.comment ? <div className="mt-2 text-xs text-white/50">{order.comment}</div> : null}
                   </div>
                   <div className="text-sm font-semibold text-white">{order.totalCzk} Kč</div>
@@ -304,15 +366,27 @@ export default function StaffTableDetailsPage() {
                 <div className="mt-3 space-y-2">
                   {order.items.map((item) => (
                     <div key={item.id} className="flex items-center justify-between gap-3 text-sm text-white/80">
-                      <div>
+                      <div className="min-w-0 truncate">
                         {item.menuItem.name} × {item.qty}
                       </div>
-                      <div>{item.qty * item.priceCzk} Kč</div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span>{item.qty * item.priceCzk} Kč</span>
+                        {canCancel ? (
+                          <button
+                            className="rounded-lg border border-red-400/25 bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-200 transition hover:bg-red-500/20 disabled:opacity-50"
+                            disabled={cancelingItemId === item.id}
+                            onClick={() => void onCancelItem(order.id, item.id)}
+                          >
+                            {cancelingItemId === item.id ? "…" : "Убрать"}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
-            ))
+              );
+            })
           ) : (
             <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
               По этой сессии еще нет сохраненных заказов.

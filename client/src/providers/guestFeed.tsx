@@ -113,6 +113,11 @@ export type GuestFeed = {
     nextAvailableAt: string | null;
     cashbackPercent: number;
   };
+  closure: {
+    billFullyPaid: boolean;
+    stayOptIn: boolean;
+    promptStay: boolean;
+  };
   orderRequest: GuestFeedOrderRequest | null;
   orders: GuestFeedOrder[];
   history: GuestFeedHistory[];
@@ -178,6 +183,7 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
           table: GuestFeed["table"];
           totals: GuestFeed["totals"];
           loyalty: GuestFeed["loyalty"];
+          closure?: GuestFeed["closure"];
           orderRequest: GuestFeed["orderRequest"];
           orders: GuestFeed["orders"];
           history: GuestFeed["history"];
@@ -190,6 +196,7 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
           table: next.table,
           totals: next.totals,
           loyalty: next.loyalty,
+          closure: next.closure ?? { billFullyPaid: false, stayOptIn: false, promptStay: false },
           orderRequest: next.orderRequest,
           orders: next.orders,
           history: next.history,

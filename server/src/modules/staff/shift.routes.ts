@@ -58,35 +58,47 @@ staffShiftRouter.post(
     const venueId = req.staff!.venueId;
     const managerId = req.staff!.staffId;
 
-    const existing = await getOpenShift(venueId);
+    // Guarantee EXACTLY ONE open shift per venue, even if two managers (or a
+    // double-tap) hit "open" at the same moment. A per-venue Postgres advisory
+    // lock serializes the check-then-create inside one transaction, so the
+    // second request sees the first's shift and is rejected. Venue scoping is
+    // already enforced upstream (req.staff.venueId), so Garden can only open a
+    // Garden shift, Žižkov a Žižkov shift, etc.
+    const shift = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${venueId})`;
 
-    if (existing) {
-      throw new HttpError(409, "SHIFT_ALREADY_OPEN", "Shift is already open");
-    }
+      const existing = await tx.shift.findFirst({
+        where: { venueId, status: "OPEN" },
+        select: { id: true },
+      });
+      if (existing) {
+        throw new HttpError(409, "SHIFT_ALREADY_OPEN", "Shift is already open");
+      }
 
-    const shift = await prisma.shift.create({
-      data: {
-        venueId,
-        openedByManagerId: managerId,
-        participants: {
-          create: {
-            staffId: managerId,
-            role: "MANAGER",
-            isActive: true,
+      return tx.shift.create({
+        data: {
+          venueId,
+          openedByManagerId: managerId,
+          participants: {
+            create: {
+              staffId: managerId,
+              role: "MANAGER",
+              isActive: true,
+            },
           },
         },
-      },
-      include: {
-        participants: {
-          where: { isActive: true },
-          select: {
-            id: true,
-            staffId: true,
-            role: true,
-            joinedAt: true,
+        include: {
+          participants: {
+            where: { isActive: true },
+            select: {
+              id: true,
+              staffId: true,
+              role: true,
+              joinedAt: true,
+            },
           },
         },
-      },
+      });
     });
 
     invalidateOpenShiftCache(venueId);

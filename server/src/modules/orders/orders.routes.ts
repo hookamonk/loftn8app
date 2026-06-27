@@ -60,6 +60,10 @@ ordersRouter.post(
 ordersRouter.post(
   "/request",
   guestSessionAuth,
+  // Only registered guests can place an order request. Anonymous guests may
+  // browse the menu and call staff, but ordering (and the cashback tied to it)
+  // requires an account.
+  requireUser,
   validate(RequestStaffOrderSchema),
   asyncHandler(async (req, res) => {
     const session = req.guestSession!;
@@ -94,6 +98,12 @@ ordersRouter.post(
           })
         : existing;
       emitGuestEvent(session.tableId, "order-request-updated");
+      // Notify staff about the (updated) order request too — a guest adding more
+      // must always reach the team. Client-side dedup (by request tag) prevents
+      // a double-alert if this fires right after the original.
+      void notifyCallCreated(updatedExisting.id).catch((e) => {
+        console.warn("push notifyCallCreated (update) failed", e);
+      });
       return res.json({ ok: true, request: updatedExisting, reused: true });
     }
 

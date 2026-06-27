@@ -18,7 +18,6 @@ import { getOpenShiftOrThrow } from "./shiftCache";
 import { addStaffClient, emitStaffEvent } from "./staffEvents";
 import { emitGuestEvent } from "../guest/guestEvents";
 import {
-  endTableSessionsIfFullyPaid,
   expireGuestSessionIfInactiveAfterPayment,
   getGuestSessionClosureState,
 } from "../guest/sessionExpiry";
@@ -503,6 +502,74 @@ staffDashboardRouter.patch(
   })
 );
 
+// Cancel a SINGLE item from an order (e.g. the guest changed their mind). If it
+// was the order's last item, the whole order is cancelled. Items already paid
+// for cannot be cancelled.
+staffDashboardRouter.post(
+  "/orders/:orderId/items/:itemId/cancel",
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const role = req.staff!.role;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const orderId = String(req.params.orderId);
+    const itemId = String(req.params.itemId);
+    const sections = orderSectionsForRole(role);
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        tableId: true,
+        status: true,
+        table: { select: { venueId: true } },
+        items: {
+          select: {
+            id: true,
+            menuItem: { select: { category: { select: { section: true } } } },
+          },
+        },
+      },
+    });
+
+    if (!order || order.table.venueId !== venueId) {
+      throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
+    }
+    if (order.status === "CANCELLED") {
+      throw new HttpError(409, "ORDER_CANCELLED", "Order already cancelled");
+    }
+
+    const item = order.items.find((it) => it.id === itemId);
+    if (!item) throw new HttpError(404, "ITEM_NOT_FOUND", "Order item not found");
+
+    if (sections && !sections.includes(item.menuItem.category.section)) {
+      throw new HttpError(403, "WRONG_SECTION", "This item belongs to another section");
+    }
+
+    // Don't allow cancelling something the guest already paid for.
+    const confirmedPayments = await (prisma as any).paymentRequest.findMany({
+      where: { tableId: order.tableId, status: "CONFIRMED", session: { shiftId: shift.id } },
+      select: { itemsJson: true, confirmation: { select: { itemsJson: true } } },
+    });
+    const paidQty = paidQtyByOrderItemId(confirmedPayments as any[]).get(itemId) ?? 0;
+    if (paidQty > 0) {
+      throw new HttpError(409, "ITEM_ALREADY_PAID", "This item is already paid");
+    }
+
+    const lastItem = order.items.length <= 1;
+    await prisma.$transaction(async (tx) => {
+      await tx.orderItem.delete({ where: { id: itemId } });
+      if (lastItem) {
+        await tx.order.update({ where: { id: order.id }, data: { status: "CANCELLED" } });
+      }
+    });
+
+    emitGuestEvent(order.tableId, "order-item-cancelled");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    res.json({ ok: true, orderCancelled: lastItem });
+  })
+);
+
 staffDashboardRouter.post(
   "/table-orders",
   validate(CreateTableOrderSchema),
@@ -575,19 +642,23 @@ staffDashboardRouter.post(
         })),
       });
 
-      if (body.requestId) {
-        await tx.staffCall.updateMany({
-          where: {
-            id: body.requestId,
-            type: "HELP",
-            message: ORDER_REQUEST_MARKER,
-            status: { in: ["NEW", "ACKED"] },
-          },
-          data: {
-            status: "DONE",
-          },
-        });
-      }
+      // Close EVERY open order-request for this table's session once the staff
+      // has placed the order — not just the one passed in. Otherwise a lingering
+      // request keeps the guest's "Order" button stuck on "Sent" and blocks any
+      // follow-up order (dozakaz). With them cleared, the guest can immediately
+      // request more, which fires a fresh staff notification.
+      await tx.staffCall.updateMany({
+        where: {
+          tableId: body.tableId,
+          type: "HELP",
+          message: ORDER_REQUEST_MARKER,
+          status: { in: ["NEW", "ACKED"] },
+          session: { shiftId: shift.id },
+        },
+        data: {
+          status: "DONE",
+        },
+      });
 
       return created;
     });
@@ -1015,8 +1086,13 @@ staffDashboardRouter.post(
       select: {
         venueId: true,
         orders: {
+          // Table-wide common bill within the current shift — must match the
+          // guest payment path (payments.routes.ts), which scopes by shift, not
+          // by a single session. Scoping by one sessionId here would show a
+          // partial bill when the table's open order is bound to another of the
+          // party's sessions.
           where: {
-            sessionId: session.id,
+            session: { shiftId: shift.id },
             status: { not: "CANCELLED" },
           },
           orderBy: { createdAt: "asc" },
@@ -1082,11 +1158,15 @@ staffDashboardRouter.post(
       comment: item.comment,
     }));
 
+    // One PENDING payment per table (matches the guest path): reuse any open
+    // request at the table instead of creating a second one — two coexisting
+    // PENDING requests both snapshot the full payable bill and could each be
+    // confirmed, double-charging and double-granting cashback.
     const existing = await (prisma as any).paymentRequest.findFirst({
       where: {
         tableId,
-        sessionId: session.id,
         status: "PENDING",
+        session: { shiftId: shift.id },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -1548,7 +1628,36 @@ staffDashboardRouter.post(
 
       const selectedItems = parsePaymentItemsJson(pr.itemsJson);
       const billTotalCzk = pr.billTotalCzk || selectedItems.reduce((sum, item) => sum + item.totalCzk, 0);
-      const loyaltySummary = summarizeLoyalty(pr.session.user?.loyaltyTransactions ?? []);
+      const userId = pr.session?.userId ?? null;
+
+      // CORRECTNESS: lock this user's loyalty rows for the rest of the
+      // transaction so two concurrent confirmations (e.g. the same guest
+      // settling at two tables at once) cannot both redeem the same cashback
+      // balance. The second confirm blocks on the row lock until the first
+      // commits, then reads the already-updated balances below.
+      let loyaltyTxns: Array<{
+        id: string;
+        createdAt: Date;
+        cashbackCzk: number;
+        redeemedAmountCzk: number;
+        availableAt: Date;
+      }> = [];
+      if (userId) {
+        await (tx as any)
+          .$queryRaw`SELECT id FROM "LoyaltyTransaction" WHERE "userId" = ${userId} AND "venueId" = ${venueId} FOR UPDATE`;
+        loyaltyTxns = await (tx as any).loyaltyTransaction.findMany({
+          where: { userId, venueId },
+          select: {
+            id: true,
+            createdAt: true,
+            cashbackCzk: true,
+            redeemedAmountCzk: true,
+            availableAt: true,
+          },
+        });
+      }
+
+      const loyaltySummary = summarizeLoyalty(loyaltyTxns as any[]);
       const loyaltyAppliedCzk = pr.useLoyalty
         ? Math.min(loyaltySummary.availableCzk, Math.max(billTotalCzk, 0))
         : 0;
@@ -1595,7 +1704,7 @@ staffDashboardRouter.post(
 
       if (loyaltyAppliedCzk > 0) {
         let remainingToRedeem = loyaltyAppliedCzk;
-        const availableTxns = [...(pr.session.user?.loyaltyTransactions ?? [])]
+        const availableTxns = [...loyaltyTxns]
           .filter((txn: any) => effectiveAvailableAt(txn).getTime() <= Date.now())
           .map((txn: any) => ({
             ...txn,
@@ -1622,7 +1731,6 @@ staffDashboardRouter.post(
       }
 
       let loyaltyTxn = null;
-      const userId = pr.session?.userId ?? null;
 
       if (userId && amountCzk > 0) {
         const cashbackCzk = Math.floor((amountCzk * CASHBACK_PERCENT) / 100);
@@ -1654,16 +1762,26 @@ staffDashboardRouter.post(
     emitGuestEvent(result.updated?.tableId, "payment-confirmed");
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
-    // If this payment fully settled the table's bill, free the table: end all
-    // its active sessions so no one stays "connected" in the staff app and the
-    // table is ready for the next guests.
+    // Re-arm the post-payment "stay or leave?" prompt for everyone at the table
+    // (clear any previous "stay" choice). The table is NOT force-freed here:
+    // once the bill is fully paid the guest is asked whether to stay and order
+    // more; if they decline or do nothing, the session auto-ends after the
+    // grace period (GUEST_SESSION_AUTO_END_AFTER_PAYMENT_MINUTES) — surfaced to
+    // staff via the /tables expiry sweep.
     const paidTableId = result.updated?.tableId;
+    const paidSessionId = result.updated?.sessionId;
     if (typeof paidTableId === "number") {
-      const ended = await endTableSessionsIfFullyPaid(paidTableId, shift.id).catch(() => 0);
-      if (ended > 0) {
-        emitGuestEvent(paidTableId, "table-closed");
-        emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+      // Re-arm the "stay or leave?" prompt only for the session that just paid —
+      // don't clobber another guest's earlier "stay" choice.
+      if (paidSessionId) {
+        await prisma.guestSession
+          .updateMany({
+            where: { id: paidSessionId, endedAt: null, stayOptIn: true },
+            data: { stayOptIn: false },
+          })
+          .catch(() => {});
       }
+      emitGuestEvent(paidTableId, "payment-confirmed");
     }
 
     res.json({ ok: true, ...result });
@@ -1718,6 +1836,49 @@ staffDashboardRouter.post(
     });
 
     emitGuestEvent(updated?.tableId, "payment-cancelled");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    res.json({ ok: true, paymentRequest: updated });
+  })
+);
+
+// Change the method (card ↔ cash) of a PENDING payment — e.g. the guest asked
+// for the terminal but then wants to pay cash.
+const ChangePaymentMethodSchema = z.object({ method: z.enum(["CARD", "CASH"]) });
+
+staffDashboardRouter.post(
+  "/payments/:id/method",
+  validate(ChangePaymentMethodSchema),
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const role = req.staff!.role;
+    await getActiveShiftOrThrow(venueId);
+
+    if (role === "HOOKAH") {
+      throw new HttpError(403, "FORBIDDEN", "Hookah role cannot change payments");
+    }
+
+    const { id } = IdParamSchema.parse(req.params);
+    const { method } = req.body as { method: "CARD" | "CASH" };
+
+    const pr = await (prisma as any).paymentRequest.findUnique({
+      where: { id },
+      select: { id: true, status: true, tableId: true, table: { select: { venueId: true } } },
+    });
+
+    if (!pr || pr.table.venueId !== venueId) {
+      throw new HttpError(404, "PAYMENT_NOT_FOUND", "Payment request not found");
+    }
+    if (pr.status !== "PENDING") {
+      throw new HttpError(409, "PAYMENT_NOT_PENDING", "Payment request is not pending");
+    }
+
+    const updated = await (prisma as any).paymentRequest.update({
+      where: { id: pr.id },
+      data: { method },
+    });
+
+    emitGuestEvent(pr.tableId, "payment-method-changed");
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
     res.json({ ok: true, paymentRequest: updated });

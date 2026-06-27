@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useI18n } from "@/providers/i18n";
+import { useEscapeToClose } from "@/lib/useModalA11y";
 
 function Stars({
   value,
@@ -46,11 +47,17 @@ export function RatingSheet({
   const [drinks, setDrinks] = useState(5);
   const [hookah, setHookah] = useState(5);
   const [comment, setComment] = useState("");
+  useEscapeToClose(open, onClose);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[96] flex items-end justify-center bg-black/70 px-4 pb-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[96] flex items-end justify-center bg-black/70 px-4 pb-4 backdrop-blur-sm"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
       <div
         className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#0d0d0d] p-4 shadow-[0_30px_120px_rgba(0,0,0,0.7)]"
         onClick={(e) => e.stopPropagation()}

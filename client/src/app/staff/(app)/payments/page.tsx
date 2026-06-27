@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listPayments, confirmPayment, cancelPayment, type StaffPayment, type PaymentStatus } from "@/lib/staffApi";
+import {
+  listPayments,
+  confirmPayment,
+  cancelPayment,
+  changePaymentMethod,
+  type StaffPayment,
+  type PaymentStatus,
+} from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
@@ -103,6 +110,19 @@ export default function StaffPaymentsPage() {
     await load({ silent: false });
   };
 
+  const onChangeMethod = async (id: string, method: "CARD" | "CASH") => {
+    setBusyId(id);
+    const r = await changePaymentMethod(id, method);
+    setBusyId(null);
+    if (!r.ok) {
+      push({ kind: "error", title: "Ошибка", message: r.error });
+      return;
+    }
+    push({ kind: "success", title: "Способ изменён", message: method === "CARD" ? "Картой (терминал)." : "Наличными." });
+    emitStaffLiveSync("payment-method-changed");
+    await load({ silent: false });
+  };
+
   const onCancel = async (id: string) => {
     setBusyId(id);
     setBusyAction("cancel");
@@ -182,9 +202,27 @@ export default function StaffPaymentsPage() {
                   {p.table.label ? ` • ${p.table.label}` : ""}
                 </div>
 
-                <div className="mt-2 inline-flex rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-sm font-bold text-white">
-                  {methodLabel(p.method)}
-                </div>
+                {p.status === "PENDING" ? (
+                  <div className="mt-2 inline-flex rounded-2xl border border-white/10 bg-black/30 p-1">
+                    {(["CARD", "CASH"] as const).map((m) => (
+                      <button
+                        key={m}
+                        disabled={busyId === p.id || p.method === m}
+                        onClick={() => void onChangeMethod(p.id, m)}
+                        className={[
+                          "rounded-xl px-3 py-1.5 text-sm font-semibold transition disabled:cursor-default",
+                          p.method === m ? "bg-white text-black" : "text-white/60 hover:text-white",
+                        ].join(" ")}
+                      >
+                        {m === "CARD" ? "Карта" : "Наличные"}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 inline-flex rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-sm font-bold text-white">
+                    {methodLabel(p.method)}
+                  </div>
+                )}
 
                 <div className="mt-2 text-sm text-white/60">
                   {p.session?.user

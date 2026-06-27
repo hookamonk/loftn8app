@@ -8,6 +8,7 @@ import {
   connectOrderRequest,
   createTableOrder,
   updateOrderStatus,
+  cancelOrderItem,
   type StaffOrder,
   type StaffOrderRequest,
   type OrderStatus,
@@ -17,6 +18,7 @@ import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync } from "@/lib/staffLiveSync";
+import { WaitBadge, TONE_BORDER, waitInfo, queueCardBase } from "@/lib/staffQueue";
 
 type OrdersTab = "accept" | "IN_PROGRESS" | "DELIVERED" | "CANCELLED";
 
@@ -35,8 +37,7 @@ function statusLabel(s: OrderStatus) {
 
 const card =
   "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
-const btn =
-  "rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-50";
+const cardBase = queueCardBase;
 const btnPrimary =
   "rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-white/90 disabled:opacity-50";
 const btnGhost =
@@ -52,6 +53,24 @@ export default function StaffOrdersPage() {
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const { push } = useToast();
+  // Live "now" so the wait timers tick even between polls.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Oldest-waiting first — that's the most urgent to handle.
+  const sortedRequests = [...requests].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+  // For "Готовятся" the timer measures time IN THIS STAGE — count from the last
+  // status/append change (updatedAt), so accepting an order (or adding to it)
+  // restarts the clock instead of one timer running since the table opened.
+  const sortedOrders =
+    tab === "IN_PROGRESS"
+      ? [...orders].sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
+      : orders;
 
   const load = async (opts?: { silent?: boolean; activeTab?: OrdersTab }) => {
     const silent = opts?.silent ?? false;
@@ -113,6 +132,27 @@ export default function StaffOrdersPage() {
 
     push({ kind: "success", title: "Готово", message: okText });
     emitStaffLiveSync("order-status-updated");
+    await load({ silent: false });
+  };
+
+  // Отменить отдельную позицию из заказа (гость передумал). Если это была
+  // последняя позиция — заказ отменяется целиком.
+  const cancelItem = async (orderId: string, itemId: string) => {
+    setBusyId(itemId);
+    const r = await cancelOrderItem(orderId, itemId);
+    setBusyId(null);
+
+    if (!r.ok) {
+      push({ kind: "error", title: "Не удалось отменить", message: r.error });
+      return;
+    }
+
+    push({
+      kind: "success",
+      title: r.data.orderCancelled ? "Заказ отменён" : "Позиция отменена",
+      message: r.data.orderCancelled ? "В заказе не осталось позиций." : "Позиция убрана из заказа.",
+    });
+    emitStaffLiveSync("order-item-cancelled");
     await load({ silent: false });
   };
 
@@ -233,13 +273,16 @@ export default function StaffOrdersPage() {
       {/* ПРИНЯТЬ — запросы гостей на заказ */}
       {tab === "accept" ? (
         <div className="mt-4 space-y-3">
-          {requests.map((request) => (
-            <div key={request.id} className={card}>
+          {sortedRequests.map((request) => (
+            <div key={request.id} className={`${cardBase} ${TONE_BORDER[waitInfo(request.createdAt, now).tone]}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-lg font-semibold text-white">
-                    Стол {request.table.code}
-                    {request.table.label ? ` • ${request.table.label}` : ""}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-lg font-semibold text-white">
+                      Стол {request.table.code}
+                      {request.table.label ? ` • ${request.table.label}` : ""}
+                    </div>
+                    <WaitBadge createdAt={request.createdAt} now={now} />
                   </div>
                   <div className="mt-1 text-xs text-white/55">
                     {new Date(request.createdAt).toLocaleTimeString()} •{" "}
@@ -305,20 +348,27 @@ export default function StaffOrdersPage() {
       ) : (
         /* ГОТОВЯТСЯ / ГОТОВЫЕ / ОТМЕНЁННЫЕ — заказы по статусу */
         <div className="mt-4 space-y-3">
-          {orders.map((o) => {
+          {sortedOrders.map((o) => {
             const sum = o.items.reduce((acc, it) => acc + it.priceCzk * it.qty, 0);
+            const urgent = o.status === "IN_PROGRESS";
 
             return (
-              <div key={o.id} className={card}>
+              <div
+                key={o.id}
+                className={urgent ? `${cardBase} ${TONE_BORDER[waitInfo(o.updatedAt, now).tone]}` : card}
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-xs text-white/45">
                       {new Date(o.createdAt).toLocaleString()} • {statusLabel(o.status)}
                     </div>
 
-                    <div className="mt-1 text-lg font-semibold text-white">
-                      Стол {o.table.code}
-                      {o.table.label ? ` • ${o.table.label}` : ""}
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <div className="text-lg font-semibold text-white">
+                        Стол {o.table.code}
+                        {o.table.label ? ` • ${o.table.label}` : ""}
+                      </div>
+                      {urgent ? <WaitBadge createdAt={o.updatedAt} now={now} /> : null}
                     </div>
 
                     <div className="mt-1 text-sm text-white/70">
@@ -355,8 +405,17 @@ export default function StaffOrdersPage() {
                         ) : null}
                       </div>
 
-                      <div className="shrink-0 text-sm font-semibold text-white">
-                        {it.priceCzk * it.qty} Kč
+                      <div className="flex shrink-0 flex-col items-end gap-2">
+                        <div className="text-sm font-semibold text-white">{it.priceCzk * it.qty} Kč</div>
+                        {o.status === "IN_PROGRESS" ? (
+                          <button
+                            className="rounded-xl border border-red-400/25 bg-red-500/10 px-2.5 py-1 text-[11px] font-semibold text-red-200 transition hover:bg-red-500/20 disabled:opacity-50"
+                            disabled={busyId !== null}
+                            onClick={() => void cancelItem(o.id, it.id)}
+                          >
+                            {busyId === it.id ? "…" : "Убрать"}
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   ))}
@@ -366,14 +425,14 @@ export default function StaffOrdersPage() {
                   <div className="mt-4 grid grid-cols-1 gap-2">
                     <button
                       className={btnPrimary}
-                      disabled={busyId === o.id}
+                      disabled={busyId !== null}
                       onClick={() => void setTo(o.id, "DELIVERED", "Заказ отмечен как готовый.")}
                     >
                       {busyId === o.id ? "Сохраняем…" : "Отметить готовым"}
                     </button>
                     <button
                       className={btnGhost}
-                      disabled={busyId === o.id}
+                      disabled={busyId !== null}
                       onClick={() => void setTo(o.id, "CANCELLED", "Заказ отменён.")}
                     >
                       Отменить заказ

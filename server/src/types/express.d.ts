@@ -2,7 +2,7 @@ import type { GuestSession, User } from "@prisma/client";
 
 type RequestGuestSession = Pick<
   GuestSession,
-  "id" | "tableId" | "userId" | "shiftId" | "startedAt" | "endedAt"
+  "id" | "tableId" | "userId" | "shiftId" | "startedAt" | "endedAt" | "stayOptIn"
 > & {
   table: {
     id: number;

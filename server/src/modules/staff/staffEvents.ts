@@ -20,6 +20,10 @@ export type StaffEvent = {
   venueId: number;
   at: number;
   tableCode?: string | null;
+  // Stable per-entity tag (e.g. `call_new:<id>`), shared with the web-push
+  // payload tag. The client dedupes alerts on this, so the SAME event arriving
+  // via both SSE and push beeps once, while DISTINCT events always beep.
+  tag?: string | null;
 };
 
 type Client = {
@@ -86,6 +90,7 @@ export function emitStaffEvent(
     venueId,
     at: event.at ?? Date.now(),
     tableCode: event.tableCode ?? null,
+    tag: event.tag ?? null,
   };
 
   const frame = `event: staff\ndata: ${JSON.stringify(payload)}\n\n`;

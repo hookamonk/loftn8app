@@ -74,8 +74,11 @@ function cleanupRecentAlerts(now: number) {
 }
 
 function alertKey(payload?: StaffPushPayload) {
-  // Dedupe by kind + table so the same event arriving via BOTH web-push and the
-  // SSE channel (which carries no tag) doesn't double-beep within the window.
+  // Prefer the stable per-entity tag (e.g. `call_new:<id>`): the SAME event
+  // arriving via BOTH web-push and SSE shares one tag → one beep, while two
+  // DISTINCT calls/orders (different ids → different tags) always beep
+  // separately. Only fall back to kind+table when no tag is present.
+  if (payload?.tag) return `tag:${payload.tag}`;
   const parts = [payload?.kind ?? "UNKNOWN", payload?.tableCode ?? ""];
   return parts.join("|");
 }

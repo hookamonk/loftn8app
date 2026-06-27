@@ -4,7 +4,7 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { validate } from "../../middleware/validate";
 import { guestSessionAuth } from "../../middleware/auth/guestSession";
-import { notifyPaymentRequested } from "../staff/push.service";
+import { notifyPaymentRequested, notifyPaymentMethodChanged } from "../staff/push.service";
 import { emitGuestEvent } from "../guest/guestEvents";
 import { HttpError } from "../../utils/httpError";
 import { summarizeLoyalty } from "../../utils/loyalty";
@@ -114,6 +114,16 @@ paymentsRouter.post(
       },
     });
 
+    // The bill can only be settled once everything is ready — block payment
+    // while any active order is still being prepared (NEW/ACCEPTED/IN_PROGRESS).
+    const tableOrders = (sessionWithUser?.table?.orders as any[]) ?? [];
+    const hasUnreadyOrder = tableOrders.some(
+      (o: any) => o.status !== "CANCELLED" && o.status !== "DELIVERED"
+    );
+    if (hasUnreadyOrder) {
+      throw new HttpError(409, "ORDER_NOT_READY", "Order is still being prepared");
+    }
+
     const loyalty = summarizeLoyalty(sessionWithUser?.user?.loyaltyTransactions ?? []);
     const canUseLoyalty = Boolean(body.useLoyalty) && loyalty.availableCzk > 0;
     const legacyCutoff = latestLegacyPaymentCutoff(sessionWithUser?.table?.payments ?? []);
@@ -213,6 +223,11 @@ paymentsRouter.post(
       });
 
       emitGuestEvent(session.tableId, "payment-requested");
+      // Always notify staff — even when we reused an existing PENDING row — so a
+      // (re)submitted payment never goes unannounced.
+      void notifyPaymentRequested(updatedExisting.id).catch((e) => {
+        console.warn("push notifyPaymentRequested (update) failed", e);
+      });
       return res.json({ ok: true, payment: updatedExisting });
     }
 
@@ -235,4 +250,46 @@ paymentsRouter.post(
 
     res.json({ ok: true, payment });
   })
-); 
+);
+
+// Guest changes the method of their own PENDING payment (card ↔ cash) without
+// re-selecting items — keeps the existing bill/selection.
+const ChangeMethodSchema = z.object({ method: z.enum(["CARD", "CASH"]) });
+
+paymentsRouter.post(
+  "/method",
+  guestSessionAuth,
+  validate(ChangeMethodSchema),
+  asyncHandler(async (req, res) => {
+    const session = req.guestSession!;
+    const { method } = req.body as z.infer<typeof ChangeMethodSchema>;
+    const attachedSession = await attachSessionToActiveShiftIfNeeded(session.id);
+
+    const existing = await prisma.paymentRequest.findFirst({
+      where: {
+        sessionId: session.id,
+        tableId: session.tableId,
+        table: { venueId: session.table.venueId },
+        status: "PENDING",
+        ...(attachedSession.shiftId ? { session: { shiftId: attachedSession.shiftId } } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!existing) {
+      throw new HttpError(404, "NO_PENDING_PAYMENT", "No pending payment to update");
+    }
+
+    const updated = await (prisma as any).paymentRequest.update({
+      where: { id: existing.id },
+      data: { method },
+    });
+
+    emitGuestEvent(session.tableId, "payment-method-changed");
+    void notifyPaymentMethodChanged(updated.id).catch((e) => {
+      console.warn("push notifyPaymentMethodChanged failed", e);
+    });
+
+    res.json({ ok: true, payment: updated });
+  })
+);

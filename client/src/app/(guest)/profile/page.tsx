@@ -18,11 +18,11 @@ function userInitials(name: string) {
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { isCz, ready } = useI18n();
+  const { isCz, ready, locale } = useI18n();
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const { push } = useToast();
   const { me, loading, refresh } = useAuth();
-  const { feed } = useGuestFeed();
+  const { feed, loading: feedLoading } = useGuestFeed();
   const { clearSession } = useSession();
   const [busy, setBusy] = useState(false);
 
@@ -34,8 +34,28 @@ export default function ProfilePage() {
     cashbackPercent: 10,
   };
 
+  // The guest must finish what's in flight before signing out — otherwise they'd
+  // detach their account mid-order/payment. Block logout while there's an
+  // active order request, an active call, a pending payment, or an unpaid order.
+  const hasActiveCommitment = Boolean(
+    (feed?.orderRequest && (feed.orderRequest.status === "NEW" || feed.orderRequest.status === "ACKED")) ||
+      (feed?.calls ?? []).some((c) => c.status === "NEW" || c.status === "ACKED") ||
+      (feed?.payments ?? []).some((p) => p.status === "PENDING") ||
+      (feed?.orders ?? []).some((o) => o.status !== "CANCELLED" && (o.items?.length ?? 0) > 0)
+  );
+
   const logout = async () => {
-    if (busy) return;
+    if (busy || feedLoading) return;
+    if (hasActiveCommitment) {
+      push({
+        kind: "error",
+        title: isCz ? "Zatím se nelze odhlásit" : "Can't sign out yet",
+        message: isCz
+          ? "Nejprve dokončete objednávku, výzvu a platbu u stolu."
+          : "Please finish your order, call and payment at the table first.",
+      });
+      return;
+    }
     setBusy(true);
     try {
       await api("/auth/guest/logout", { method: "POST" });
@@ -100,9 +120,11 @@ export default function ProfilePage() {
           </section>
 
           {/* Loyalty quick view */}
-          <section className="mt-3 rounded-[28px] border border-gold/15 bg-gold/[0.06] p-5">
+          <section className="relative mt-3 overflow-hidden rounded-[28px] border border-gold/20 bg-[linear-gradient(135deg,rgba(212,175,110,0.14),rgba(212,175,110,0.04))] p-5">
+            <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-gold/10 blur-2xl" />
             <div className="flex items-center justify-between">
-              <div className="text-[11px] uppercase tracking-[0.2em] text-gold/70">
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-gold/70">
+                <span className="text-gold">✦</span>
                 {isCz ? "Dostupný cashback" : "Available cashback"}
               </div>
               <div className="rounded-full border border-gold/25 bg-gold/10 px-2.5 py-0.5 text-[11px] font-semibold text-gold">
@@ -110,22 +132,35 @@ export default function ProfilePage() {
               </div>
             </div>
             <div className="mt-1.5 flex items-end gap-2">
-              <div className="text-[34px] font-semibold leading-none text-gold">
+              <div className="text-[38px] font-bold leading-none text-gold">
                 {loyalty.availableCzk}
               </div>
               <div className="pb-1 text-sm font-medium text-gold/70">Kč</div>
             </div>
+
             {loyalty.pendingCzk > 0 ? (
-              <div className="mt-2 text-[12px] text-amber-50/60">
-                {isCz ? "Čeká na odemčení" : "Waiting to unlock"}:{" "}
-                {loyalty.pendingCzk} Kč
-              </div>
+              <>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/8">
+                  <div
+                    className="h-full rounded-full bg-gold/80"
+                    style={{
+                      width: `${Math.round(
+                        (loyalty.availableCzk / Math.max(loyalty.availableCzk + loyalty.pendingCzk, 1)) * 100
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <div className="mt-2 text-[12px] text-amber-50/65">
+                  {isCz ? "Odemkne se" : "Unlocks"} {loyalty.pendingCzk} Kč
+                  {loyalty.nextAvailableAt
+                    ? ` · ${new Date(loyalty.nextAvailableAt).toLocaleDateString(locale, {
+                        day: "2-digit",
+                        month: "short",
+                      })}`
+                    : ""}
+                </div>
+              </>
             ) : null}
-            <div className="mt-3 text-[12px] leading-5 text-amber-50/70">
-              {isCz
-                ? `Z každého potvrzeného účtu vám vrátíme ${loyalty.cashbackPercent}%. Použijte cashback na příští účet u stolu.`
-                : `Every confirmed bill returns ${loyalty.cashbackPercent}%. Spend it on your next bill at the table.`}
-            </div>
           </section>
 
           {/* Actions */}
@@ -137,9 +172,9 @@ export default function ProfilePage() {
               {isCz ? "Zobrazit průvodce znovu" : "Show the guide again"}
             </button>
             <button
-              disabled={busy || loading}
+              disabled={busy || loading || feedLoading || hasActiveCommitment}
               onClick={logout}
-              className="h-12 w-full rounded-2xl border border-white/10 bg-white/[0.03] text-sm font-semibold text-white/65 transition hover:bg-white/[0.06] disabled:opacity-50"
+              className="h-12 w-full rounded-2xl border border-white/10 bg-white/[0.03] text-sm font-semibold text-white/65 transition hover:bg-white/[0.06] disabled:opacity-40"
             >
               {busy
                 ? isCz
@@ -149,6 +184,13 @@ export default function ProfilePage() {
                   ? "Odhlásit se"
                   : "Sign out"}
             </button>
+            {hasActiveCommitment ? (
+              <div className="px-1 text-center text-[11px] leading-5 text-white/45">
+                {isCz
+                  ? "Odhlášení bude možné po dokončení objednávky a platby."
+                  : "Sign-out unlocks after your order and payment are finished."}
+              </div>
+            ) : null}
           </div>
         </>
       ) : (

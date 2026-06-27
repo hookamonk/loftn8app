@@ -81,4 +81,18 @@ app.use(errorHandler);
 
 app.listen(env.PORT, () => {
   console.log(`✅ API running on http://localhost:${env.PORT}`);
+
+  // Make a misconfigured push setup visible at boot: without VAPID keys,
+  // web-push silently no-ops (SSE + polling still work) and staff get no
+  // lock-screen notifications. Better to flag it loudly than debug "no pushes".
+  if (!env.VAPID_SUBJECT || !env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
+    console.warn(
+      "⚠️  Web push DISABLED: set VAPID_SUBJECT, VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY to enable staff push notifications."
+    );
+  }
+  if (env.NODE_ENV === "production" && !(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS)) {
+    console.warn(
+      "⚠️  SMTP not fully configured in production: OTP/password-reset e-mails cannot be delivered (codes are NOT exposed in the API)."
+    );
+  }
 });

@@ -7,9 +7,16 @@ import type { MenuResponse, MenuCategory, MenuItem, MenuSection } from "@/types"
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
+import { useAuth } from "@/providers/auth";
 import { getVenueName } from "@/lib/venue";
 import { storage } from "@/lib/storage";
+import { GUEST_ONBOARDING_SYNC_EVENT, readGuestOnboardingState } from "@/lib/guestOnboarding";
+import { useEscapeToClose } from "@/lib/useModalA11y";
 import { useI18n } from "@/providers/i18n";
+
+// One-time notice shown on the menu (after onboarding) re-explaining that the
+// guest builds the order here and the waiter confirms it at the table.
+const MENU_ORDER_NOTICE_KEY = "guest_menu_order_notice_v1";
 
 function Pill({
   active,
@@ -172,6 +179,28 @@ function MenuPage() {
 
   const { push } = useToast();
   const { feed, refresh } = useGuestFeed();
+  const { me } = useAuth();
+  const isRegistered = Boolean(me?.authenticated);
+
+  // After onboarding completes (or once for already-onboarded guests), reaffirm
+  // how ordering works at the table via a one-time modal.
+  const [showOrderNotice, setShowOrderNotice] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const check = () => {
+      const onboarding = readGuestOnboardingState();
+      const seen = storage.get<boolean>(MENU_ORDER_NOTICE_KEY, false);
+      if (onboarding.completed && !seen) setShowOrderNotice(true);
+    };
+    check();
+    window.addEventListener(GUEST_ONBOARDING_SYNC_EVENT, check as EventListener);
+    return () => window.removeEventListener(GUEST_ONBOARDING_SYNC_EVENT, check as EventListener);
+  }, []);
+  const dismissOrderNotice = () => {
+    storage.set(MENU_ORDER_NOTICE_KEY, true);
+    setShowOrderNotice(false);
+  };
+  useEscapeToClose(showOrderNotice, dismissOrderNotice);
 
   const selectionKey = feed?.currentSessionId ? `menuSelection:${feed.currentSessionId}` : null;
 
@@ -342,6 +371,21 @@ function MenuPage() {
 
   const requestOrder = async () => {
     if (orderRequestActive || requesting) return;
+
+    // Unregistered guests can browse and call staff, but ordering requires an
+    // account — send them to registration instead of hitting a 403.
+    if (!isRegistered) {
+      push({
+        kind: "info",
+        title: isCz ? "Vyžaduje registraci" : "Registration required",
+        message: isCz
+          ? "Pro objednávku se prosím zaregistrujte. Obsluhu můžete přivolat i bez registrace."
+          : "Please register to place an order. You can call staff without an account.",
+      });
+      router.push("/auth?next=/menu");
+      return;
+    }
+
     setRequesting(true);
 
     const items = Object.entries(selection)
@@ -378,6 +422,16 @@ function MenuPage() {
     (s) => (groupsBySection.get(s)?.length ?? 0) > 0
   );
 
+  // Running total of the current selection, shown in the floating order bar.
+  const selectionTotalCzk = useMemo(() => {
+    const priceById = new Map<number, number>();
+    for (const c of cats) for (const it of c.items ?? []) priceById.set(it.id, it.priceCzk);
+    return Object.entries(selection).reduce(
+      (sum, [id, qty]) => sum + (qty > 0 ? qty * (priceById.get(Number(id)) ?? 0) : 0),
+      0
+    );
+  }, [selection, cats]);
+
   return (
     <RequireTable>
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
@@ -386,13 +440,35 @@ function MenuPage() {
           <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
         </div>
 
-        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-3 py-2">
-          <span className="shrink-0 text-sm text-amber-200">★</span>
-          <span className="truncate text-xs text-amber-100/90">
-            {isCz
-              ? "Vyberte v menu — objednávku přijme obsluha."
-              : "Choose in the menu — staff takes your order."}
-          </span>
+        <div className="mb-4 rounded-2xl border border-gold/30 bg-gold/12 px-4 py-3 shadow-[0_8px_30px_rgba(0,0,0,0.25)]">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gold/20 text-sm text-amber-200">★</span>
+            <div className="min-w-0">
+              {isRegistered ? (
+                <>
+                  <div className="text-sm font-semibold text-amber-50">
+                    {isCz ? "Objednávejte přímo z menu" : "Order right from the menu"}
+                  </div>
+                  <div className="mt-0.5 text-xs leading-5 text-amber-100/85">
+                    {isCz
+                      ? "Výběr odešleme obsluze — číšník přijde upřesnit a potvrdit."
+                      : "Your selection goes to the staff — a waiter comes to confirm it."}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-sm font-semibold text-amber-50">
+                    {isCz ? "Prohlížíte si menu" : "You're browsing the menu"}
+                  </div>
+                  <div className="mt-0.5 text-xs leading-5 text-amber-100/85">
+                    {isCz
+                      ? "Pro objednávku a cashback se zaregistrujte. Obsluhu můžete přivolat kdykoli."
+                      : "Register to place an order and earn cashback. You can call staff anytime."}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="sticky top-0 z-30 -mx-1 rounded-3xl border border-white/10 bg-[#0c0c11]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
@@ -500,16 +576,19 @@ function MenuPage() {
             return (
               <div
                 key={i.id}
-                className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]"
+                className={[
+                  "rounded-[28px] border bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)] transition-colors",
+                  (selection[i.id] ?? 0) > 0 ? "border-gold/35 bg-gold/[0.07]" : "border-white/10",
+                ].join(" ")}
               >
-                <div className="flex gap-3">
-                  <div className="relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+                <div className="flex gap-4">
+                  <div className="relative h-[104px] w-[104px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
                     {i.imageUrl ? (
                       <img
                         src={i.imageUrl}
                         alt={i.name}
                         loading="lazy"
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-cover transition-transform duration-300 hover:scale-105"
                         onError={(e) => {
                           e.currentTarget.style.display = "none";
                         }}
@@ -521,23 +600,29 @@ function MenuPage() {
                         LOFT№8
                       </div>
                     ) : null}
+
+                    {(selection[i.id] ?? 0) > 0 ? (
+                      <div className="absolute right-1.5 top-1.5 grid h-6 min-w-6 place-items-center rounded-full bg-gold px-1.5 text-[11px] font-bold text-black shadow-[0_2px_8px_rgba(0,0,0,0.4)]">
+                        {selection[i.id]}
+                      </div>
+                    ) : null}
                   </div>
 
-                  <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-1 flex-col">
                     {meta ? <div className="text-[11px] text-white/55">{meta}</div> : null}
 
-                    <div className="line-clamp-2 text-[15px] font-semibold leading-5 text-white">
+                    <div className="line-clamp-2 text-[16px] font-semibold leading-5 text-white">
                       {tName(i)}
                     </div>
 
                     {tDesc(i) ? (
-                      <div className="mt-1 line-clamp-3 text-xs leading-5 text-white/65">
+                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-white/60">
                         {tDesc(i)}
                       </div>
                     ) : null}
 
-                    <div className="mt-3 flex items-center justify-between gap-3">
-                      <div className="text-base font-semibold text-white">{i.priceCzk} Kč</div>
+                    <div className="mt-auto flex items-center justify-between gap-3 pt-3">
+                      <div className="text-lg font-bold text-white">{i.priceCzk} Kč</div>
                       <SelectControl
                         qty={selection[i.id] ?? 0}
                         onAdd={() => addToSelection(i.id)}
@@ -561,22 +646,33 @@ function MenuPage() {
 
       {selectionCount > 0 ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-24 z-40 px-4">
-          <div className="pointer-events-auto mx-auto flex max-w-md items-center gap-3 rounded-3xl border border-white/10 bg-[#101014]/95 p-2 pl-4 shadow-[0_20px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl">
-            <div className="min-w-0 flex-1 text-sm text-white">
-              <span className="font-semibold">
-                {isCz ? `Vybráno: ${selectionCount}` : `Selected: ${selectionCount}`}
-              </span>
-              <span className="ml-1 text-white/55">
-                {isCz ? "· obsluha přijme objednávku" : "· waiter will take the order"}
-              </span>
+          <div className="pointer-events-auto mx-auto flex max-w-md items-center gap-3 rounded-3xl border border-gold/25 bg-[#101014]/96 p-2 pl-4 shadow-[0_20px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+            <div className="grid h-10 min-w-10 place-items-center rounded-2xl bg-gold/15 px-2 text-sm font-bold text-amber-200">
+              {selectionCount}
+            </div>
+            <div className="min-w-0 flex-1 leading-tight">
+              <div className="text-base font-bold text-white">{selectionTotalCzk} Kč</div>
+              <div className="truncate text-[11px] text-white/55">
+                {isRegistered
+                  ? isCz
+                    ? "obsluha objednávku potvrdí"
+                    : "staff will confirm the order"
+                  : isCz
+                  ? "zaregistrujte se k objednání"
+                  : "register to order"}
+              </div>
             </div>
             <button
               type="button"
               disabled={requesting || orderRequestActive}
-              className="h-11 shrink-0 rounded-2xl bg-white px-5 text-sm font-semibold text-black transition active:scale-[0.97] hover:bg-white/90 disabled:opacity-50"
+              className="h-12 shrink-0 rounded-2xl bg-white px-5 text-sm font-semibold text-black transition active:scale-[0.97] hover:bg-white/90 disabled:opacity-50"
               onClick={() => void requestOrder()}
             >
-              {orderRequestActive
+              {!isRegistered
+                ? isCz
+                  ? "Registrovat"
+                  : "Register"
+                : orderRequestActive
                 ? isCz
                   ? "Odesláno"
                   : "Sent"
@@ -587,6 +683,37 @@ function MenuPage() {
                 : isCz
                 ? "Objednat"
                 : "Order"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {showOrderNotice ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          onClick={dismissOrderNotice}
+        >
+          <div
+            className="w-full max-w-sm rounded-[28px] border border-gold/25 bg-[#151515]/97 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.5)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-gold/15 text-xl text-amber-200">★</div>
+            <div className="mt-4 text-lg font-semibold text-white">
+              {isCz ? "Jak funguje objednávka" : "How ordering works"}
+            </div>
+            <div className="mt-2 text-sm leading-6 text-white/70">
+              {isCz
+                ? "Vyberete si v menu, výběr se odešle obsluze a číšník přijde upřesnit a potvrdit objednávku. Platba a stav jsou v sekci Účet."
+                : "You pick in the menu, your selection is sent to the staff, and a waiter comes to confirm it. Payment and status live in the Cart."}
+            </div>
+            <button
+              type="button"
+              onClick={dismissOrderNotice}
+              className="mt-5 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.98]"
+            >
+              {isCz ? "Rozumím" : "Got it"}
             </button>
           </div>
         </div>

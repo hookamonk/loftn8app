@@ -18,6 +18,12 @@ const otpRequestLimiter = rateLimit({ windowMs: 15 * 60_000, max: 5, keyPrefix: 
 const otpVerifyLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "otp-verify" });
 const passwordLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "auth-pw" });
 
+// SECURITY: the raw OTP/reset code may only ever be returned to the caller in
+// non-production environments (local/dev/demo without SMTP). In production a
+// missing SMTP config must NEVER leak codes in the API response — otherwise any
+// caller could request a code for any e-mail and take the account over.
+const exposeDevCode = env.NODE_ENV !== "production";
+
 type Intent = "login" | "register";
 
 const RequestOtpSchema = z.object({
@@ -190,7 +196,7 @@ authRouter.post(
       // No SMTP configured (demo/dev) — surface the code so registration works
       // without email. In production with SMTP set, this never runs.
       console.log(`[DEV OTP] register phone=${phone} email=${email} code=${code}`);
-      return res.json({ ok: true, expiresInSec, delivery: "none", devCode: code });
+      return res.json({ ok: true, expiresInSec, delivery: "none", ...(exposeDevCode ? { devCode: code } : {}) });
     }
 
     await sendGuestOtpEmail({
@@ -354,7 +360,7 @@ authRouter.post(
 
     if (!isEmailConfigured()) {
       console.log(`[DEV OTP] reset email=${email} code=${code}`);
-      return res.json({ ok: true, expiresInSec, delivery: "none", devCode: code });
+      return res.json({ ok: true, expiresInSec, delivery: "none", ...(exposeDevCode ? { devCode: code } : {}) });
     }
 
     await sendGuestOtpEmail({

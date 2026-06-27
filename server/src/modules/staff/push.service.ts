@@ -228,7 +228,7 @@ export async function notifyOrderCreated(orderId: string) {
   const tableCode = publicTableCode(order.table.code);
   const venueSlug = publicVenueSlug(order.table.venue.slug);
 
-  emitStaffEvent(venueId, { kind: "ORDER_CREATED", tableCode });
+  emitStaffEvent(venueId, { kind: "ORDER_CREATED", tableCode, tag: `order_new:${order.id}` });
 
   const sections = order.items.map((it) => it.menuItem.category.section as MenuSection);
   const hasHookah = sections.includes("HOOKAH");
@@ -272,12 +272,14 @@ export async function notifyCallCreated(callId: string) {
   const venueSlug = publicVenueSlug(call.table.venue.slug);
   const isOrderRequest = call.type === "HELP" && isOrderRequestMessage(call.message);
 
-  emitStaffEvent(venueId, { kind: "CALL_CREATED", tableCode });
+  emitStaffEvent(venueId, { kind: "CALL_CREATED", tableCode, tag: `call_new:${call.id}` });
 
   const roles: StaffRole[] = ["MANAGER"];
   if (call.type === "HOOKAH") roles.push("HOOKAH");
   if (call.type === "WAITER") roles.push("WAITER");
-  if (call.type === "HELP") roles.push(isOrderRequest ? "WAITER" : "WAITER", isOrderRequest ? "MANAGER" : "HOOKAH");
+  // Order request → waiter + manager take it; a plain guest message/help →
+  // waiter + hookah (manager is always notified via the base role above).
+  if (call.type === "HELP") roles.push("WAITER", isOrderRequest ? "MANAGER" : "HOOKAH");
   if (call.type === "BILL") roles.push("WAITER");
 
   const kind =
@@ -335,6 +337,7 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
   emitStaffEvent(pr.table.venueId, {
     kind: "PAYMENT_REQUESTED",
     tableCode: publicTableCode(pr.table.code),
+    tag: `payment_pending:${pr.id}`,
   });
 
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
@@ -348,5 +351,42 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
     venueId: pr.table.venueId,
     venueSlug,
     vibrate: [280, 120, 280, 120, 460],
+  });
+}
+
+// The guest switched card ↔ cash on an in-flight payment — let the team know so
+// whoever's heading over brings the right thing (terminal vs. cash).
+export async function notifyPaymentMethodChanged(paymentRequestId: string) {
+  const pr = await prisma.paymentRequest.findUnique({
+    where: { id: paymentRequestId },
+    select: {
+      id: true,
+      status: true,
+      method: true,
+      table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
+    },
+  });
+  if (!pr || pr.status !== "PENDING") return;
+
+  const tableCode = publicTableCode(pr.table.code);
+  const venueSlug = publicVenueSlug(pr.table.venue.slug);
+
+  emitStaffEvent(pr.table.venueId, {
+    kind: "PAYMENT_REQUESTED",
+    tableCode,
+    tag: `payment_method:${pr.id}`,
+  });
+
+  await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
+    title: "Способ оплаты изменён",
+    body: `Стол ${tableCode} • теперь ${pr.method === "CARD" ? "Карта" : "Наличные"}`,
+    url: "/staff/payments",
+    tag: `payment_method:${pr.id}`,
+    ts: Date.now(),
+    kind: "PAYMENT_REQUESTED",
+    tableCode,
+    venueId: pr.table.venueId,
+    venueSlug,
+    vibrate: [200, 100, 200],
   });
 }

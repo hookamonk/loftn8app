@@ -306,6 +306,7 @@ export type StaffOrder = {
   status: OrderStatus;
   comment: string | null;
   createdAt: string;
+  updatedAt: string;
   table: { code: string; label: string | null };
   session: { id: string; user: { id: string; name: string; phone: string } | null };
   items: Array<{
@@ -337,6 +338,19 @@ export async function updateOrderStatus(id: string, status: OrderStatus): Promis
   return tryPaths<{ ok: true }>(
     [`/staff/dashboard/orders/${id}/status`, `/staff/orders/${id}/status`],
     { method: "PATCH", body: JSON.stringify({ status }) }
+  );
+}
+
+export async function cancelOrderItem(
+  orderId: string,
+  itemId: string
+): Promise<ApiResult<{ ok: true; orderCancelled: boolean }>> {
+  return tryPaths<{ ok: true; orderCancelled: boolean }>(
+    [
+      `/staff/dashboard/orders/${orderId}/items/${itemId}/cancel`,
+      `/staff/orders/${orderId}/items/${itemId}/cancel`,
+    ],
+    { method: "POST" }
   );
 }
 
@@ -566,6 +580,13 @@ export async function confirmPayment(id: string): Promise<ApiResult<any>> {
   return tryPaths<any>(
     [`/staff/dashboard/payments/${id}/confirm`, `/staff/payments/${id}/confirm`],
     { method: "POST", body: JSON.stringify({}) }
+  );
+}
+
+export async function changePaymentMethod(id: string, method: PaymentMethod): Promise<ApiResult<any>> {
+  return tryPaths<any>(
+    [`/staff/dashboard/payments/${id}/method`, `/staff/payments/${id}/method`],
+    { method: "POST", body: JSON.stringify({ method }) }
   );
 }
 

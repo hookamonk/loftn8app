@@ -6,6 +6,11 @@ import { ORDER_REQUEST_MARKER } from "../orders/orderRequest";
 const SESSION_AUTO_END_AFTER_INACTIVITY_MS =
   env.GUEST_SESSION_AUTO_END_AFTER_PAYMENT_MINUTES * 60 * 1000;
 
+// Longer grace once the guest explicitly chose to stay after paying: they get
+// this long to place a new order before the table is freed anyway.
+const SESSION_AUTO_END_AFTER_STAY_MS =
+  env.GUEST_SESSION_STAY_GRACE_MINUTES * 60 * 1000;
+
 type SessionSnapshot = {
   id: string;
   endedAt: Date | null;
@@ -122,39 +127,57 @@ export async function getGuestSessionClosureState(
 
   const baseStartedAt = session.startedAt ?? new Date(0);
 
+  // The bill is SHARED across the table within a shift, so closure must be
+  // evaluated TABLE-WIDE, not per single session. Otherwise a guest whose
+  // session doesn't own the table's single open order would see "nothing to
+  // pay" and get auto-ended while the shared bill is still unpaid (and vice
+  // versa, a session could be force-closed while another still owes).
+  const sessionRow = await prisma.guestSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      stayOptIn: true,
+      tableId: true,
+      shiftId: true,
+      table: { select: { venueId: true } },
+    },
+  });
+
+  const scope: any =
+    sessionRow?.tableId != null
+      ? {
+          tableId: sessionRow.tableId,
+          ...(sessionRow.table?.venueId != null ? { table: { venueId: sessionRow.table.venueId } } : {}),
+          ...(sessionRow.shiftId ? { session: { shiftId: sessionRow.shiftId } } : {}),
+        }
+      : { sessionId };
+
   const [latestOrder, latestCall, latestPayment, latestRating, pendingPaymentsCount, confirmedPayments, orders] =
     await Promise.all([
       prisma.order.findFirst({
-        where: { sessionId },
+        where: scope,
         orderBy: { createdAt: "desc" },
         select: { id: true, createdAt: true },
       }),
       prisma.staffCall.findFirst({
-        where: { sessionId },
+        where: scope,
         orderBy: { createdAt: "desc" },
         select: { id: true, createdAt: true },
       }),
       prisma.paymentRequest.findFirst({
-        where: { sessionId },
+        where: scope,
         orderBy: { createdAt: "desc" },
         select: { id: true, createdAt: true },
       }),
       prisma.rating.findFirst({
-        where: { sessionId },
+        where: scope,
         orderBy: { createdAt: "desc" },
         select: { id: true, createdAt: true },
       }),
       prisma.paymentRequest.count({
-        where: {
-          sessionId,
-          status: "PENDING",
-        },
+        where: { ...scope, status: "PENDING" },
       }),
       prisma.paymentRequest.findMany({
-        where: {
-          sessionId,
-          status: "CONFIRMED",
-        },
+        where: { ...scope, status: "CONFIRMED" },
         select: {
           status: true,
           createdAt: true,
@@ -169,10 +192,7 @@ export async function getGuestSessionClosureState(
         },
       }),
       prisma.order.findMany({
-        where: {
-          sessionId,
-          status: { not: "CANCELLED" },
-        },
+        where: { ...scope, status: { not: "CANCELLED" } },
         select: {
           createdAt: true,
           status: true,
@@ -204,16 +224,25 @@ export async function getGuestSessionClosureState(
     orders,
     payments: confirmedPayments,
   });
-  const eligible = pendingPaymentsCount === 0 && unpaidQty === 0;
+  const stayOptIn = Boolean(sessionRow?.stayOptIn);
+  const billFullyPaid = pendingPaymentsCount === 0 && unpaidQty === 0;
+  // Once the bill is settled the session is eligible for auto-end. Choosing
+  // "stay" does NOT keep it open forever — it just grants a longer grace to
+  // place a new order. If they order, new unpaid items make billFullyPaid false
+  // (active tab again); if they don't, the table is freed after the grace.
+  const eligible = billFullyPaid;
+  const graceMs = stayOptIn ? SESSION_AUTO_END_AFTER_STAY_MS : SESSION_AUTO_END_AFTER_INACTIVITY_MS;
 
   return {
     eligible,
     hasConfirmedPayment,
     pendingPaymentsCount,
     unpaidQty,
+    stayOptIn,
+    billFullyPaid,
     lastActivityAt,
     autoEndsAt: eligible
-      ? new Date(lastActivityAt.getTime() + SESSION_AUTO_END_AFTER_INACTIVITY_MS)
+      ? new Date(lastActivityAt.getTime() + graceMs)
       : null,
   };
 }
