@@ -381,7 +381,7 @@ export type StaffCall = {
   type: CallType;
   message: string | null;
   createdAt: string;
-  table: { code: string; label: string | null };
+  table: { id: number; code: string; label: string | null };
   session: { id: string; user: { id: string; name: string; phone: string } | null };
 };
 

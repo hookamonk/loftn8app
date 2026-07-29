@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { listCalls, updateCallStatus, type StaffCall, type CallStatus } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
@@ -47,6 +48,7 @@ const btnGhost =
   "rounded-2xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white";
 
 export default function StaffCallsPage() {
+  const router = useRouter();
   const [status, setStatus] = useState<CallStatus>("NEW");
   const [calls, setCalls] = useState<StaffCall[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -121,6 +123,25 @@ export default function StaffCallsPage() {
     push({ kind: "success", title: "Готово", message: okText });
     emitStaffLiveSync("call-status-updated");
     await load({ silent: false });
+  };
+
+  // «Подключиться к столу» — берёт вызов в работу (если ещё новый) и открывает
+  // стол, чтобы сразу пробить на него заказ.
+  const connectToTable = async (c: StaffCall) => {
+    setBusyId(c.id);
+
+    if (c.status === "NEW") {
+      const r = await updateCallStatus(c.id, "ACKED");
+      if (!r.ok) {
+        setBusyId(null);
+        push({ kind: "error", title: "Ошибка", message: r.error });
+        return;
+      }
+      emitStaffLiveSync("call-status-updated");
+    }
+
+    setBusyId(null);
+    router.push(`/staff/tables/${c.table.id}`);
   };
 
   return (
@@ -210,10 +231,20 @@ export default function StaffCallsPage() {
                 </div>
               ) : null}
 
-              <div className="mt-4">
+              <div className="mt-4 flex flex-wrap gap-2">
+                {active ? (
+                  <button
+                    className={btnPrimary}
+                    disabled={busyId === c.id}
+                    onClick={() => void connectToTable(c)}
+                  >
+                    {busyId === c.id ? "…" : "Подключиться к столу"}
+                  </button>
+                ) : null}
+
                 {action ? (
                   <button
-                    className={action.status === "ACKED" ? btnPrimary : btn}
+                    className={btn}
                     disabled={busyId === c.id}
                     onClick={() =>
                       void setTo(

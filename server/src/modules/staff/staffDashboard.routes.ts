@@ -1237,7 +1237,7 @@ staffDashboardRouter.get(
       },
       orderBy: { createdAt: "desc" },
       include: {
-        table: { select: { code: true, label: true } },
+        table: { select: { id: true, code: true, label: true } },
         session: { select: { id: true, user: { select: { id: true, name: true, phone: true } } } },
       },
     });

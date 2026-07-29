@@ -486,9 +486,8 @@ function MenuPage() {
           type="button"
           disabled={calling || justCalled}
           onClick={() => void callWaiter()}
-          className="pointer-events-auto mx-auto flex h-14 w-full max-w-md items-center justify-center gap-2 rounded-2xl bg-white text-base font-semibold text-black shadow-[0_20px_60px_rgba(0,0,0,0.5)] transition active:scale-[0.98] hover:bg-white/90 disabled:opacity-60"
+          className="pointer-events-auto mx-auto flex h-14 w-full max-w-md items-center justify-center rounded-2xl border border-white/15 bg-[#16161a] text-base font-semibold text-white shadow-[0_20px_60px_rgba(0,0,0,0.5)] transition active:scale-[0.98] hover:bg-[#1f1f26] disabled:opacity-60"
         >
-          <span aria-hidden>{isRegistered ? "🔔" : "★"}</span>
           {!isRegistered
             ? isCz
               ? "Zaregistrovat se pro objednávku"
