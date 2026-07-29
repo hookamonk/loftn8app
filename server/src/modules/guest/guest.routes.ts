@@ -8,6 +8,7 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
 import { guestSessionAuth } from "../../middleware/auth/guestSession";
+import { requireUser } from "../../middleware/auth/requireUser";
 import { summarizeLoyalty } from "../../utils/loyalty";
 import { isOrderRequestMessage, ORDER_REQUEST_MARKER } from "../orders/orderRequest";
 import { latestLegacyPaymentCutoff, paidQtyByOrderItemId, parsePaymentItemsJson } from "../payments/paymentAllocation";
@@ -1140,6 +1141,7 @@ guestRouter.post(
 guestRouter.post(
   "/rating",
   guestSessionAuth,
+  requireUser,
   validate(CreateRatingSchema),
   asyncHandler(async (req, res) => {
     const s = req.guestSession!;

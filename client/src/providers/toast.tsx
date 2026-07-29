@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 export type ToastKind = "success" | "error" | "info";
 
@@ -26,16 +26,21 @@ const Ctx = createContext<ToastCtx | null>(null);
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
+  const timersRef = useRef<number[]>([]);
 
   const push: ToastCtx["push"] = (t, ttlMs = 2400) => {
     const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const toast: ToastItem = { id, ...t };
     setItems((prev) => [...prev, toast]);
 
-    window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       setItems((prev) => prev.filter((x) => x.id !== id));
     }, ttlMs);
+    timersRef.current.push(timer);
   };
+
+  // Clear any pending auto-dismiss timers if the provider ever unmounts.
+  useEffect(() => () => timersRef.current.forEach((t) => window.clearTimeout(t)), []);
 
   const value = useMemo(() => ({ push }), []);
 

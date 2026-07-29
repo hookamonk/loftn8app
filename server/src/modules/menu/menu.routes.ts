@@ -44,6 +44,15 @@ const menuCache = new Map<
   }
 >();
 
+/**
+ * Drop the cached guest menu for a venue so the next `GET /menu` rebuilds it.
+ * Called by the admin menu editor after every write, so edits show up in the
+ * guest app immediately instead of after the 30s TTL.
+ */
+export function invalidateMenuCache(venueId: number) {
+  menuCache.delete(venueId);
+}
+
 async function resolveVenue(rawVenueSlug?: string | null) {
   const requestedVenue = resolveVenueSlug(rawVenueSlug);
   if (!requestedVenue) {

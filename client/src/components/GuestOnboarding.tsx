@@ -35,10 +35,10 @@ export function GuestOnboarding() {
       {
         id: "menu",
         path: "/menu",
-        title: isCz ? "Objednávejte z menu" : "Order from the menu",
+        title: isCz ? "Prohlédněte si menu" : "Browse the menu",
         body: isCz
-          ? "Vyberte si položky — výběr dostane obsluha a číšník přijde objednávku upřesnit a potvrdit."
-          : "Pick your items — the staff gets your selection and a waiter comes to confirm it.",
+          ? "Projděte si nabídku a tlačítkem „Zavolat obsluhu“ přivolejte číšníka — objednávku přijme přímo u stolu."
+          : "Look through the menu and tap “Call the waiter” — they'll take your order right at the table.",
       },
       {
         id: "cart",

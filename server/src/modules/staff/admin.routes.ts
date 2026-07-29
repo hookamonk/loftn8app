@@ -1,27 +1,27 @@
 import { Router } from "express";
 import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
-import { requireStaffAuth, requireAdminOrManager } from "./staff.middleware";
+import { requireStaffAuth, requireAdminOnly } from "./staff.middleware";
 import { HttpError } from "../../utils/httpError";
 import { summarizeLoyalty } from "../../utils/loyalty";
+import {
+  resolveVenueSlug,
+  venueCandidateSlugs,
+  venueNameBySlug,
+  venueShortNameBySlug,
+} from "../../config/venues";
 
 export const staffAdminRouter = Router();
 
 staffAdminRouter.use(requireStaffAuth);
-staffAdminRouter.use(requireAdminOrManager);
+// Admin dashboard is ADMIN-only. Managers run shifts, not the business console.
+staffAdminRouter.use(requireAdminOnly);
 
 type RangeKey = "all" | "today" | "week" | "month";
-type GuestFilter = "all" | "registered" | "anonymous";
 
 function getRangeKey(raw: unknown): RangeKey {
   const v = String(raw ?? "all");
   if (v === "today" || v === "week" || v === "month") return v;
-  return "all";
-}
-
-function getGuestFilter(raw: unknown): GuestFilter {
-  const v = String(raw ?? "all");
-  if (v === "registered" || v === "anonymous") return v;
   return "all";
 }
 
@@ -48,13 +48,52 @@ function dateWhere(field: string, from?: Date) {
   return { [field]: { gte: from } };
 }
 
-// ОБЩАЯ СВОДКА
+type VenueScope = {
+  scope: string; // "all" | internal slug
+  venueIds: number[];
+  venues: Array<{ id: number; slug: string }>;
+};
+
+/**
+ * Resolve the `?venue=` query into a set of venue ids. Admins are cross-venue:
+ * "all" (or missing) spans every active venue, otherwise it narrows to one.
+ * Unlike the role dashboards, admin reads are NOT locked to the staff member's
+ * own venue — the picker drives the scope.
+ */
+async function resolveVenueScope(raw: unknown): Promise<VenueScope> {
+  const value = String(raw ?? "all").trim().toLowerCase();
+
+  if (!value || value === "all") {
+    const venues = await prisma.venue.findMany({
+      where: { isActive: true },
+      orderBy: { id: "asc" },
+      select: { id: true, slug: true },
+    });
+    return { scope: "all", venueIds: venues.map((v) => v.id), venues };
+  }
+
+  const slug = resolveVenueSlug(value);
+  if (!slug) throw new HttpError(400, "INVALID_VENUE", "Invalid venue");
+
+  const venue = await prisma.venue.findFirst({
+    where: { slug: { in: venueCandidateSlugs(slug) }, isActive: true },
+    orderBy: { id: "asc" },
+    select: { id: true, slug: true },
+  });
+  if (!venue) throw new HttpError(404, "VENUE_NOT_FOUND", "Venue not found");
+
+  return { scope: slug, venueIds: [venue.id], venues: [venue] };
+}
+
+// ОБЩАЯ СВОДКА — регистрации, выручка, оценки. Кросс-точечная, с разбивкой по
+// точкам (чтобы при выборе «все» было видно каждую из 3 точек отдельно).
 staffAdminRouter.get(
   "/summary",
   asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
+    const scope = await resolveVenueScope(req.query.venue);
     const range = getRangeKey(req.query.range);
     const from = getDateFromRange(range);
+    const venueIds = scope.venueIds;
 
     const [
       usersCount,
@@ -67,103 +106,91 @@ staffAdminRouter.get(
       paymentsCount,
       revenueAgg,
       avgRatings,
-      shiftsTotal,
-      openShift,
     ] = await Promise.all([
       prisma.user.count({
         where: {
           ...dateWhere("createdAt", from),
-          sessions: {
-            some: {
-              table: { venueId },
-            },
-          },
+          sessions: { some: { table: { venueId: { in: venueIds } } } },
         },
+      }),
+      prisma.guestSession.count({
+        where: { ...dateWhere("startedAt", from), table: { venueId: { in: venueIds } } },
       }),
       prisma.guestSession.count({
         where: {
           ...dateWhere("startedAt", from),
-          table: { venueId },
-        },
-      }),
-      prisma.guestSession.count({
-        where: {
-          ...dateWhere("startedAt", from),
-          table: { venueId },
+          table: { venueId: { in: venueIds } },
           userId: { not: null },
         },
       }),
       prisma.guestSession.count({
         where: {
           ...dateWhere("startedAt", from),
-          table: { venueId },
+          table: { venueId: { in: venueIds } },
           userId: null,
         },
       }),
       prisma.order.count({
-        where: {
-          ...dateWhere("createdAt", from),
-          table: { venueId },
-        },
+        where: { ...dateWhere("createdAt", from), table: { venueId: { in: venueIds } } },
       }),
       prisma.staffCall.count({
-        where: {
-          ...dateWhere("createdAt", from),
-          table: { venueId },
-        },
+        where: { ...dateWhere("createdAt", from), table: { venueId: { in: venueIds } } },
       }),
       prisma.rating.count({
-        where: {
-          ...dateWhere("createdAt", from),
-          table: { venueId },
-        },
+        where: { ...dateWhere("createdAt", from), table: { venueId: { in: venueIds } } },
       }),
       prisma.paymentConfirmation.count({
-        where: {
-          ...dateWhere("createdAt", from),
-          venueId,
-        },
+        where: { ...dateWhere("createdAt", from), venueId: { in: venueIds } },
       }),
       prisma.paymentConfirmation.aggregate({
-        where: {
-          ...dateWhere("createdAt", from),
-          venueId,
-        },
+        where: { ...dateWhere("createdAt", from), venueId: { in: venueIds } },
         _sum: { amountCzk: true },
       }),
       prisma.rating.aggregate({
-        where: {
-          ...dateWhere("createdAt", from),
-          table: { venueId },
-        },
-        _avg: {
-          overall: true,
-          food: true,
-          drinks: true,
-          hookah: true,
-        },
-      }),
-      prisma.shift.count({
-        where: {
-          venueId,
-          ...dateWhere("openedAt", from),
-        },
-      }),
-      prisma.shift.findFirst({
-        where: { venueId, status: "OPEN" },
-        orderBy: { openedAt: "desc" },
-        select: {
-          id: true,
-          openedAt: true,
-          openedByManagerId: true,
-        },
+        where: { ...dateWhere("createdAt", from), table: { venueId: { in: venueIds } } },
+        _avg: { overall: true, food: true, drinks: true, hookah: true },
       }),
     ]);
+
+    // Per-venue breakdown so the "all venues" view shows each point separately.
+    const byVenue = await Promise.all(
+      scope.venues.map(async (venue) => {
+        const [regCount, venueRevenue, venueRatings] = await Promise.all([
+          prisma.user.count({
+            where: {
+              ...dateWhere("createdAt", from),
+              sessions: { some: { table: { venueId: venue.id } } },
+            },
+          }),
+          prisma.paymentConfirmation.aggregate({
+            where: { ...dateWhere("createdAt", from), venueId: venue.id },
+            _sum: { amountCzk: true },
+          }),
+          prisma.rating.aggregate({
+            where: { ...dateWhere("createdAt", from), table: { venueId: venue.id } },
+            _avg: { overall: true },
+            _count: { _all: true },
+          }),
+        ]);
+
+        return {
+          venueId: venue.id,
+          slug: venue.slug,
+          name: venueNameBySlug(venue.slug),
+          shortName: venueShortNameBySlug(venue.slug),
+          usersCount: regCount,
+          revenueCzk: venueRevenue._sum.amountCzk ?? 0,
+          ratingsCount: venueRatings._count._all,
+          avgOverall: venueRatings._avg.overall ?? null,
+        };
+      })
+    );
 
     res.json({
       ok: true,
       summary: {
         range,
+        scope: scope.scope,
         usersCount,
         guestSessionsCount,
         registeredGuestSessionsCount,
@@ -177,215 +204,25 @@ staffAdminRouter.get(
         avgFood: avgRatings._avg.food ?? null,
         avgDrinks: avgRatings._avg.drinks ?? null,
         avgHookah: avgRatings._avg.hookah ?? null,
-        shiftsTotal,
-        openShift,
+        byVenue,
       },
     });
   })
 );
 
-staffAdminRouter.get(
-  "/shifts",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const range = getRangeKey(req.query.range);
-    const from = getDateFromRange(range);
-
-    const shifts = await prisma.shift.findMany({
-      where: {
-        venueId,
-        ...dateWhere("openedAt", from),
-      },
-      orderBy: { openedAt: "desc" },
-      include: {
-        openedByManager: {
-          select: { id: true, username: true, role: true },
-        },
-        closedByManager: {
-          select: { id: true, username: true, role: true },
-        },
-        participants: {
-          orderBy: { joinedAt: "asc" },
-          select: {
-            id: true,
-            staffId: true,
-            role: true,
-            joinedAt: true,
-            leftAt: true,
-            isActive: true,
-            staff: {
-              select: { id: true, username: true, role: true },
-            },
-          },
-        },
-        guestSessions: {
-          select: { id: true },
-        },
-      },
-    });
-
-    res.json({ ok: true, shifts });
-  })
-);
-
-staffAdminRouter.get(
-  "/shifts/:id",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const shiftId = String(req.params.id);
-
-    const shift = await prisma.shift.findFirst({
-      where: { id: shiftId, venueId },
-      include: {
-        openedByManager: {
-          select: { id: true, username: true, role: true },
-        },
-        closedByManager: {
-          select: { id: true, username: true, role: true },
-        },
-        participants: {
-          orderBy: { joinedAt: "asc" },
-          include: {
-            staff: {
-              select: { id: true, username: true, role: true },
-            },
-          },
-        },
-      },
-    });
-
-    if (!shift) {
-      throw new HttpError(404, "SHIFT_NOT_FOUND", "Shift not found");
-    }
-
-    const [
-      sessionsCount,
-      ordersCount,
-      callsCount,
-      ratingsCount,
-      paymentsCount,
-      revenueAgg,
-      avgRatings,
-      registrationsCount,
-    ] = await Promise.all([
-      prisma.guestSession.count({
-        where: { shiftId: shift.id },
-      }),
-      prisma.order.count({
-        where: { session: { shiftId: shift.id } },
-      }),
-      prisma.staffCall.count({
-        where: { session: { shiftId: shift.id } },
-      }),
-      prisma.rating.count({
-        where: { session: { shiftId: shift.id } },
-      }),
-      prisma.paymentConfirmation.count({
-        where: {
-          venueId,
-          paymentRequest: {
-            session: { shiftId: shift.id },
-          },
-        },
-      }),
-      prisma.paymentConfirmation.aggregate({
-        where: {
-          venueId,
-          paymentRequest: {
-            session: { shiftId: shift.id },
-          },
-        },
-        _sum: { amountCzk: true },
-      }),
-      prisma.rating.aggregate({
-        where: { session: { shiftId: shift.id } },
-        _avg: {
-          overall: true,
-          food: true,
-          drinks: true,
-          hookah: true,
-        },
-      }),
-      prisma.user.count({
-        where: {
-          sessions: {
-            some: { shiftId: shift.id },
-          },
-        },
-      }),
-    ]);
-
-    res.json({
-      ok: true,
-      shift,
-      stats: {
-        sessionsCount,
-        ordersCount,
-        callsCount,
-        ratingsCount,
-        paymentsCount,
-        revenueCzk: revenueAgg._sum.amountCzk ?? 0,
-        avgOverall: avgRatings._avg.overall ?? null,
-        avgFood: avgRatings._avg.food ?? null,
-        avgDrinks: avgRatings._avg.drinks ?? null,
-        avgHookah: avgRatings._avg.hookah ?? null,
-        registrationsCount,
-      },
-    });
-  })
-);
-
-
-staffAdminRouter.get(
-  "/ratings",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const range = getRangeKey(req.query.range);
-    const from = getDateFromRange(range);
-
-    const ratings = await prisma.rating.findMany({
-      where: {
-        ...dateWhere("createdAt", from),
-        table: { venueId },
-      },
-      orderBy: { createdAt: "desc" },
-      include: {
-        table: {
-          select: { id: true, code: true, label: true },
-        },
-        session: {
-          select: {
-            id: true,
-            user: {
-              select: { id: true, name: true, phone: true },
-            },
-            shiftId: true,
-          },
-        },
-      },
-      take: 200,
-    });
-
-    res.json({ ok: true, ratings });
-  })
-);
-
-
+// ЗАРЕГИСТРИРОВАННЫЕ ГОСТИ + их доступный кэшбэк по выбранной точке (или всем).
 staffAdminRouter.get(
   "/users",
   asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
+    const scope = await resolveVenueScope(req.query.venue);
     const range = getRangeKey(req.query.range);
     const from = getDateFromRange(range);
+    const venueIds = scope.venueIds;
 
     const users = await prisma.user.findMany({
       where: {
         ...dateWhere("createdAt", from),
-        sessions: {
-          some: {
-            table: { venueId },
-          },
-        },
+        sessions: { some: { table: { venueId: { in: venueIds } } } },
       },
       orderBy: { createdAt: "desc" },
       select: {
@@ -397,15 +234,15 @@ staffAdminRouter.get(
         privacyAcceptedAt: true,
         createdAt: true,
       },
-      take: 200,
+      take: 500,
     });
 
-    // Available cashback ("бонусы") per user for this venue. One query for the
-    // whole page, then summarized in memory so the list stays a single round-trip.
+    // Available cashback ("бонусы") per user across the selected venue(s). One
+    // query for the whole page, summarized in memory to stay a single round-trip.
     const userIds = users.map((u) => u.id);
     const loyaltyTxns = userIds.length
       ? await prisma.loyaltyTransaction.findMany({
-          where: { venueId, userId: { in: userIds } },
+          where: { venueId: { in: venueIds }, userId: { in: userIds } },
           select: {
             userId: true,
             cashbackCzk: true,
@@ -433,241 +270,5 @@ staffAdminRouter.get(
     });
 
     res.json({ ok: true, users: usersWithBonuses });
-  })
-);
-
-
-staffAdminRouter.get(
-  "/guest-sessions",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const range = getRangeKey(req.query.range);
-    const filter = getGuestFilter(req.query.filter);
-    const from = getDateFromRange(range);
-
-    const sessions = await prisma.guestSession.findMany({
-      where: {
-        ...dateWhere("startedAt", from),
-        table: { venueId },
-        ...(filter === "registered"
-          ? { userId: { not: null } }
-          : filter === "anonymous"
-          ? { userId: null }
-          : {}),
-      },
-      orderBy: { startedAt: "desc" },
-      include: {
-        table: {
-          select: { id: true, code: true, label: true },
-        },
-        shift: {
-          select: { id: true, status: true, openedAt: true },
-        },
-        user: {
-          select: { id: true, name: true, phone: true, email: true },
-        },
-        _count: {
-          select: {
-            orders: true,
-            calls: true,
-            payments: true,
-            ratings: true,
-          },
-        },
-      },
-      take: 200,
-    });
-
-    res.json({
-      ok: true,
-      sessions: sessions.map((s) => ({
-        id: s.id,
-        startedAt: s.startedAt,
-        endedAt: s.endedAt,
-        table: s.table,
-        shift: s.shift,
-        user: s.user,
-        ordersCount: s._count.orders,
-        callsCount: s._count.calls,
-        paymentsCount: s._count.payments,
-        ratingsCount: s._count.ratings,
-      })),
-    });
-  })
-);
-
-
-staffAdminRouter.get(
-  "/orders",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const range = getRangeKey(req.query.range);
-    const from = getDateFromRange(range);
-
-    const orders = await prisma.order.findMany({
-      where: {
-        ...dateWhere("createdAt", from),
-        table: { venueId },
-      },
-      orderBy: { createdAt: "desc" },
-      include: {
-        table: {
-          select: { id: true, code: true, label: true },
-        },
-        user: {
-          select: { id: true, name: true, phone: true },
-        },
-        session: {
-          select: {
-            id: true,
-            user: {
-              select: { id: true, name: true, phone: true },
-            },
-          },
-        },
-        items: {
-          select: {
-            qty: true,
-            priceCzk: true,
-          },
-        },
-      },
-      take: 200,
-    });
-
-    res.json({
-      ok: true,
-      orders: orders.map((o) => ({
-        id: o.id,
-        status: o.status,
-        comment: o.comment,
-        createdAt: o.createdAt,
-        table: o.table,
-        user: o.user,
-        session: o.session,
-        itemsCount: o.items.reduce((sum, x) => sum + x.qty, 0),
-        totalCzk: o.items.reduce((sum, x) => sum + x.qty * x.priceCzk, 0),
-      })),
-    });
-  })
-);
-
-
-staffAdminRouter.get(
-  "/calls",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const range = getRangeKey(req.query.range);
-    const from = getDateFromRange(range);
-
-    const calls = await prisma.staffCall.findMany({
-      where: {
-        ...dateWhere("createdAt", from),
-        table: { venueId },
-      },
-      orderBy: { createdAt: "desc" },
-      include: {
-        table: {
-          select: { id: true, code: true, label: true },
-        },
-        session: {
-          select: {
-            id: true,
-            user: {
-              select: { id: true, name: true, phone: true },
-            },
-          },
-        },
-      },
-      take: 200,
-    });
-
-    res.json({ ok: true, calls });
-  })
-);
-
-
-staffAdminRouter.get(
-  "/payments",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const range = getRangeKey(req.query.range);
-    const from = getDateFromRange(range);
-
-    const payments = await prisma.paymentRequest.findMany({
-      where: {
-        ...dateWhere("createdAt", from),
-        table: { venueId },
-      },
-      orderBy: { createdAt: "desc" },
-      include: {
-        table: {
-          select: { id: true, code: true, label: true },
-        },
-        session: {
-          select: {
-            id: true,
-            user: {
-              select: { id: true, name: true, phone: true },
-            },
-          },
-        },
-        confirmation: {
-          select: {
-            id: true,
-            amountCzk: true,
-            createdAt: true,
-            staff: {
-              select: { id: true, username: true, role: true },
-            },
-          },
-        },
-      },
-      take: 200,
-    });
-
-    res.json({ ok: true, payments });
-  })
-);
-
-
-staffAdminRouter.get(
-  "/staff-performance",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const range = getRangeKey(req.query.range);
-    const from = getDateFromRange(range);
-
-    const staff = await prisma.staffUser.findMany({
-      where: { venueId, isActive: true },
-      select: {
-        id: true,
-        username: true,
-        role: true,
-        createdAt: true,
-      },
-      orderBy: [{ role: "asc" }, { username: "asc" }],
-    });
-
-    const result = await Promise.all(
-      staff.map(async (s) => {
-        const shiftsJoined = await prisma.shiftParticipant.count({
-          where: {
-            staffId: s.id,
-            shift: {
-              venueId,
-              ...dateWhere("openedAt", from),
-            },
-          },
-        });
-
-        return {
-          ...s,
-          shiftsJoined,
-        };
-      })
-    );
-
-    res.json({ ok: true, staff: result });
   })
 );

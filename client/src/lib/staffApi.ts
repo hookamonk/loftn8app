@@ -38,7 +38,7 @@ type ApiErr = { ok: false; error: string; status: number };
 export type ApiResult<T> = ApiOk<T> | ApiErr;
 
 export type AdminRange = "all" | "today" | "week" | "month";
-export type AdminGuestFilter = "all" | "registered" | "anonymous";
+export type AdminVenueScope = "all" | "zizkov" | "garden" | "nekazanka";
 
 function withQuery(path: string, params?: Record<string, string | undefined>) {
   const sp = new URLSearchParams();
@@ -244,12 +244,6 @@ export async function joinShift(): Promise<ApiResult<{ shiftId: string }>> {
   return tryPaths<{ ok: true; shiftId: string }>(["/staff/shift/join"], {
     method: "POST",
   }).then((r) => (r.ok ? { ok: true, data: { shiftId: r.data.shiftId } } : r));
-}
-
-export async function leaveShift(): Promise<ApiResult<{ ok: true }>> {
-  return tryPaths<{ ok: true }>(["/staff/shift/leave"], {
-    method: "POST",
-  });
 }
 
 export async function closeShift(): Promise<ApiResult<{ shiftId: string; closedAt: string }>> {
@@ -598,8 +592,20 @@ export async function cancelPayment(id: string): Promise<ApiResult<any>> {
 }
 
 // ADMIN
+export type AdminVenueStat = {
+  venueId: number;
+  slug: string;
+  name: string;
+  shortName: string;
+  usersCount: number;
+  revenueCzk: number;
+  ratingsCount: number;
+  avgOverall: number | null;
+};
+
 export type AdminSummary = {
   range: AdminRange;
+  scope: string;
   usersCount: number;
   guestSessionsCount: number;
   registeredGuestSessionsCount: number;
@@ -613,80 +619,7 @@ export type AdminSummary = {
   avgFood: number | null;
   avgDrinks: number | null;
   avgHookah: number | null;
-  shiftsTotal: number;
-  openShift: {
-    id: string;
-    openedAt: string;
-    openedByManagerId: string;
-  } | null;
-};
-
-export type AdminShiftItem = {
-  id: string;
-  status: "OPEN" | "CLOSED";
-  openedAt: string;
-  closedAt: string | null;
-  openedByManager?: { id: string; username: string; role: StaffRole };
-  closedByManager?: { id: string; username: string; role: StaffRole } | null;
-  participants: Array<{
-    id: string;
-    staffId: string;
-    role: StaffRole;
-    joinedAt: string;
-    leftAt: string | null;
-    isActive: boolean;
-    staff?: { id: string; username: string; role: StaffRole };
-  }>;
-  guestSessions?: Array<{ id: string }>;
-};
-
-export type AdminShiftDetails = {
-  shift: {
-    id: string;
-    status: "OPEN" | "CLOSED";
-    openedAt: string;
-    closedAt: string | null;
-    openedByManager?: { id: string; username: string; role: StaffRole };
-    closedByManager?: { id: string; username: string; role: StaffRole } | null;
-    participants: Array<{
-      id: string;
-      staffId: string;
-      role: StaffRole;
-      joinedAt: string;
-      leftAt: string | null;
-      isActive: boolean;
-      staff?: { id: string; username: string; role: StaffRole };
-    }>;
-  };
-  stats: {
-    sessionsCount: number;
-    ordersCount: number;
-    callsCount: number;
-    ratingsCount: number;
-    paymentsCount: number;
-    revenueCzk: number;
-    avgOverall: number | null;
-    avgFood: number | null;
-    avgDrinks: number | null;
-    avgHookah: number | null;
-    registrationsCount: number;
-  };
-};
-
-export type AdminRatingItem = {
-  id: string;
-  overall: number;
-  food: number | null;
-  drinks: number | null;
-  hookah: number | null;
-  comment: string | null;
-  createdAt: string;
-  table: { id: number; code: string; label: string | null };
-  session: {
-    id: string;
-    shiftId: string | null;
-    user: { id: string; name: string; phone: string } | null;
-  };
+  byVenue: AdminVenueStat[];
 };
 
 export type AdminUserItem = {
@@ -701,140 +634,146 @@ export type AdminUserItem = {
   pendingBonusCzk: number;
 };
 
-export type AdminStaffPerformanceItem = {
-  id: string;
-  username: string;
-  role: StaffRole;
-  createdAt: string;
-  shiftsJoined: number;
-};
+function venueParam(venue: AdminVenueScope): string | undefined {
+  return venue === "all" ? undefined : venue;
+}
 
-export type AdminGuestSessionItem = {
-  id: string;
-  startedAt: string;
-  endedAt: string | null;
-  table: { id: number; code: string; label: string | null };
-  shift: { id: string; status: "OPEN" | "CLOSED"; openedAt: string } | null;
-  user: { id: string; name: string; phone: string; email: string | null } | null;
-  ordersCount: number;
-  callsCount: number;
-  paymentsCount: number;
-  ratingsCount: number;
-};
-
-export type AdminOrderItem = {
-  id: string;
-  status: OrderStatus;
-  comment: string | null;
-  createdAt: string;
-  table: { id: number; code: string; label: string | null };
-  user: { id: string; name: string; phone: string } | null;
-  session: { id: string; user: { id: string; name: string; phone: string } | null };
-  itemsCount: number;
-  totalCzk: number;
-};
-
-export type AdminCallItem = {
-  id: string;
-  type: CallType;
-  status: CallStatus;
-  message: string | null;
-  createdAt: string;
-  table: { id: number; code: string; label: string | null };
-  session: { id: string; user: { id: string; name: string; phone: string } | null };
-};
-
-export type AdminPaymentItem = {
-  id: string;
-  method: PaymentMethod;
-  status: PaymentStatus;
-  createdAt: string;
-  confirmedAt: string | null;
-  table: { id: number; code: string; label: string | null };
-  session: { id: string; user: { id: string; name: string; phone: string } | null };
-  confirmation: {
-    id: string;
-    amountCzk: number;
-    createdAt: string;
-    staff: { id: string; username: string; role: StaffRole };
-  } | null;
-};
-
-export async function getAdminSummary(range: AdminRange = "all"): Promise<ApiResult<{ summary: AdminSummary }>> {
+export async function getAdminSummary(
+  range: AdminRange = "all",
+  venue: AdminVenueScope = "all"
+): Promise<ApiResult<{ summary: AdminSummary }>> {
   return tryPaths<{ ok: true; summary: AdminSummary }>(
-    [withQuery("/staff/admin/summary", { range })],
+    [withQuery("/staff/admin/summary", { range, venue: venueParam(venue) })],
     { method: "GET" }
   ).then((r) => (r.ok ? { ok: true, data: { summary: r.data.summary } } : r));
 }
 
-export async function getAdminShifts(range: AdminRange = "all"): Promise<ApiResult<{ shifts: AdminShiftItem[] }>> {
-  return tryPaths<{ ok: true; shifts: AdminShiftItem[] }>(
-    [withQuery("/staff/admin/shifts", { range })],
-    { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { shifts: r.data.shifts } } : r));
-}
-
-export async function getAdminShiftDetails(id: string): Promise<ApiResult<AdminShiftDetails>> {
-  return tryPaths<{ ok: true; shift: AdminShiftDetails["shift"]; stats: AdminShiftDetails["stats"] }>(
-    [`/staff/admin/shifts/${id}`],
-    { method: "GET" }
-  ).then((r) =>
-    r.ok ? { ok: true, data: { shift: r.data.shift, stats: r.data.stats } } : r
-  );
-}
-
-export async function getAdminRatings(range: AdminRange = "all"): Promise<ApiResult<{ ratings: AdminRatingItem[] }>> {
-  return tryPaths<{ ok: true; ratings: AdminRatingItem[] }>(
-    [withQuery("/staff/admin/ratings", { range })],
-    { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { ratings: r.data.ratings } } : r));
-}
-
-export async function getAdminUsers(range: AdminRange = "all"): Promise<ApiResult<{ users: AdminUserItem[] }>> {
+export async function getAdminUsers(
+  range: AdminRange = "all",
+  venue: AdminVenueScope = "all"
+): Promise<ApiResult<{ users: AdminUserItem[] }>> {
   return tryPaths<{ ok: true; users: AdminUserItem[] }>(
-    [withQuery("/staff/admin/users", { range })],
+    [withQuery("/staff/admin/users", { range, venue: venueParam(venue) })],
     { method: "GET" }
   ).then((r) => (r.ok ? { ok: true, data: { users: r.data.users } } : r));
 }
 
-export async function getAdminStaffPerformance(
-  range: AdminRange = "all"
-): Promise<ApiResult<{ staff: AdminStaffPerformanceItem[] }>> {
-  return tryPaths<{ ok: true; staff: AdminStaffPerformanceItem[] }>(
-    [withQuery("/staff/admin/staff-performance", { range })],
+// ===== ADMIN MENU EDITOR =====
+export type AdminMenuSection = "DISHES" | "DRINKS" | "HOOKAH";
+
+export type AdminMenuItem = {
+  id: number;
+  name: string;
+  nameCs: string | null;
+  description: string | null;
+  descriptionCs: string | null;
+  priceCzk: number;
+  sort: number;
+  isActive: boolean;
+  imageUrl: string | null;
+  hasOrders: boolean;
+};
+
+export type AdminMenuCategory = {
+  id: number;
+  name: string;
+  nameCs: string | null;
+  section: AdminMenuSection;
+  sort: number;
+  items: AdminMenuItem[];
+};
+
+export type AdminMenu = {
+  venue: { id: number; slug: string; name: string };
+  categories: AdminMenuCategory[];
+};
+
+// The menu editor always targets ONE explicit venue (never "all").
+export type AdminMenuVenue = Exclude<AdminVenueScope, "all">;
+
+export async function getAdminMenu(venue: AdminMenuVenue): Promise<ApiResult<AdminMenu>> {
+  return tryPaths<{ ok: true } & AdminMenu>(
+    [withQuery("/staff/admin/menu", { venue })],
     { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { staff: r.data.staff } } : r));
+  ).then((r) => (r.ok ? { ok: true, data: { venue: r.data.venue, categories: r.data.categories } } : r));
 }
 
-export async function getAdminGuestSessions(
-  range: AdminRange = "all",
-  filter: AdminGuestFilter = "all"
-): Promise<ApiResult<{ sessions: AdminGuestSessionItem[] }>> {
-  return tryPaths<{ ok: true; sessions: AdminGuestSessionItem[] }>(
-    [withQuery("/staff/admin/guest-sessions", { range, filter })],
-    { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { sessions: r.data.sessions } } : r));
+export async function createAdminCategory(
+  venue: AdminMenuVenue,
+  body: { name: string; nameCs?: string; section: AdminMenuSection; sort?: number }
+): Promise<ApiResult<{ category: { id: number } }>> {
+  return tryPaths<{ ok: true; category: { id: number } }>(
+    [withQuery("/staff/admin/menu/categories", { venue })],
+    { method: "POST", body: JSON.stringify(body) }
+  ).then((r) => (r.ok ? { ok: true, data: { category: r.data.category } } : r));
 }
 
-export async function getAdminOrders(range: AdminRange = "all"): Promise<ApiResult<{ orders: AdminOrderItem[] }>> {
-  return tryPaths<{ ok: true; orders: AdminOrderItem[] }>(
-    [withQuery("/staff/admin/orders", { range })],
-    { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { orders: r.data.orders } } : r));
+export async function updateAdminCategory(
+  venue: AdminMenuVenue,
+  id: number,
+  body: { name?: string; nameCs?: string | null; section?: AdminMenuSection; sort?: number }
+): Promise<ApiResult<{ ok: true }>> {
+  return tryPaths<{ ok: true }>(
+    [withQuery(`/staff/admin/menu/categories/${id}`, { venue })],
+    { method: "PATCH", body: JSON.stringify(body) }
+  ).then((r) => (r.ok ? { ok: true, data: { ok: true } } : r));
 }
 
-export async function getAdminCalls(range: AdminRange = "all"): Promise<ApiResult<{ calls: AdminCallItem[] }>> {
-  return tryPaths<{ ok: true; calls: AdminCallItem[] }>(
-    [withQuery("/staff/admin/calls", { range })],
-    { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { calls: r.data.calls } } : r));
+export async function deleteAdminCategory(
+  venue: AdminMenuVenue,
+  id: number
+): Promise<ApiResult<{ ok: true }>> {
+  return tryPaths<{ ok: true }>(
+    [withQuery(`/staff/admin/menu/categories/${id}`, { venue })],
+    { method: "DELETE" }
+  ).then((r) => (r.ok ? { ok: true, data: { ok: true } } : r));
 }
 
-export async function getAdminPayments(
-  range: AdminRange = "all"
-): Promise<ApiResult<{ payments: AdminPaymentItem[] }>> {
-  return tryPaths<{ ok: true; payments: AdminPaymentItem[] }>(
-    [withQuery("/staff/admin/payments", { range })],
-    { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { payments: r.data.payments } } : r));
+export async function createAdminItem(
+  venue: AdminMenuVenue,
+  body: {
+    categoryId: number;
+    name: string;
+    nameCs?: string;
+    description?: string;
+    descriptionCs?: string;
+    priceCzk: number;
+    sort?: number;
+    isActive?: boolean;
+  }
+): Promise<ApiResult<{ item: { id: number } }>> {
+  return tryPaths<{ ok: true; item: { id: number } }>(
+    [withQuery("/staff/admin/menu/items", { venue })],
+    { method: "POST", body: JSON.stringify(body) }
+  ).then((r) => (r.ok ? { ok: true, data: { item: r.data.item } } : r));
+}
+
+export async function updateAdminItem(
+  venue: AdminMenuVenue,
+  id: number,
+  body: {
+    categoryId?: number;
+    name?: string;
+    nameCs?: string | null;
+    description?: string | null;
+    descriptionCs?: string | null;
+    priceCzk?: number;
+    sort?: number;
+    isActive?: boolean;
+  }
+): Promise<ApiResult<{ ok: true }>> {
+  return tryPaths<{ ok: true }>(
+    [withQuery(`/staff/admin/menu/items/${id}`, { venue })],
+    { method: "PATCH", body: JSON.stringify(body) }
+  ).then((r) => (r.ok ? { ok: true, data: { ok: true } } : r));
+}
+
+export async function deleteAdminItem(
+  venue: AdminMenuVenue,
+  id: number
+): Promise<ApiResult<{ softDeleted: boolean }>> {
+  return tryPaths<{ ok: true; softDeleted: boolean }>(
+    [withQuery(`/staff/admin/menu/items/${id}`, { venue })],
+    { method: "DELETE" }
+  ).then((r) => (r.ok ? { ok: true, data: { softDeleted: r.data.softDeleted } } : r));
 }

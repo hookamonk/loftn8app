@@ -5,8 +5,9 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { validate } from "../../middleware/validate";
 import { guestSessionAuth } from "../../middleware/auth/guestSession";
 import { requireUser } from "../../middleware/auth/requireUser";
-import { HttpError } from "../../utils/httpError";
-import { getOpenShift } from "../staff/shiftCache";
+// Use the shared shift-attach helper (fresh open-shift lookup) instead of a
+// local copy that read the stale 5s cache and could bind to a just-closed shift.
+import { attachSessionToActiveShiftIfNeeded } from "../staff/shiftCache";
 
 export const ratingsRouter = Router();
 
@@ -17,34 +18,6 @@ const RatingSchema = z.object({
   hookah: z.number().int().min(1).max(5).optional(),
   comment: z.string().max(800).optional(),
 });
-
-async function attachSessionToActiveShiftIfNeeded(sessionId: string) {
-  const session = await prisma.guestSession.findUnique({
-    where: { id: sessionId },
-    select: {
-      id: true,
-      shiftId: true,
-      table: { select: { venueId: true } },
-    },
-  });
-
-  if (!session) throw new HttpError(401, "SESSION_INVALID", "Session invalid");
-
-  const activeShift = await getOpenShift(session.table.venueId);
-
-  if (!activeShift) return session;
-  if (session.shiftId === activeShift.id) return session;
-
-  await prisma.guestSession.update({
-    where: { id: session.id },
-    data: { shiftId: activeShift.id },
-  });
-
-  return {
-    ...session,
-    shiftId: activeShift.id,
-  };
-}
 
 ratingsRouter.post(
   "/",

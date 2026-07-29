@@ -231,6 +231,7 @@ async function createOrAppendTableOrder(
     tableId: number;
     sessionId: string;
     userId?: string | null;
+    shiftId?: string | null;
     comment?: string | null;
     items: Array<{
       menuItemId: number;
@@ -240,10 +241,16 @@ async function createOrAppendTableOrder(
     }>;
   }
 ) {
+  // Scope the "open order to append to" and the paid-through cutoff to the
+  // CURRENT shift, so a stale unpaid order left over from a previous shift at
+  // this table can't be merged into (and re-billed on) the current session.
+  const shiftScope = params.shiftId ? { session: { shiftId: params.shiftId } } : {};
+
   const latestConfirmedPayment = await (tx as any).paymentRequest.findFirst({
     where: {
       tableId: params.tableId,
       status: "CONFIRMED",
+      ...shiftScope,
     },
     orderBy: { confirmedAt: "desc" },
     select: {
@@ -257,6 +264,7 @@ async function createOrAppendTableOrder(
     where: {
       tableId: params.tableId,
       status: { in: ["NEW", "ACCEPTED", "IN_PROGRESS"] },
+      ...shiftScope,
       ...(paidThroughAt
         ? {
             createdAt: {
@@ -327,17 +335,19 @@ staffDashboardRouter.get(
     const sections = orderSectionsForRole(role);
 
     const [newOrders, newCalls, pendingPayments] = await Promise.all([
-      role === "HOOKAH"
-        ? Promise.resolve(0)
-        : prisma.staffCall.count({
-            where: {
-              status: { in: ["NEW", "ACKED"] },
-              type: "HELP",
-              message: ORDER_REQUEST_MARKER,
-              table: { venueId },
-              createdAt: { gte: shift.openedAt },
-            },
-          }),
+      // Active (cooking) orders for this role's sections — the guest no longer
+      // sends order-requests; staff punch orders at the table, so the "Orders"
+      // badge reflects what's in progress.
+      prisma.order.count({
+        where: {
+          status: { in: ["NEW", "ACCEPTED", "IN_PROGRESS"] },
+          table: { venueId },
+          session: { shiftId: shift.id },
+          ...(sections
+            ? { items: { some: { menuItem: { category: { section: { in: sections } } } } } }
+            : {}),
+        },
+      }),
       prisma.staffCall.count({
         where: {
           status: "NEW",
@@ -633,6 +643,7 @@ staffDashboardRouter.post(
         tableId: body.tableId,
         sessionId: session.id,
         userId: session.userId,
+        shiftId: shift.id,
         comment: body.comment,
         items: body.items.map((it) => ({
           menuItemId: it.menuItemId,
@@ -1566,54 +1577,12 @@ staffDashboardRouter.post(
           table: {
             select: {
               venueId: true,
-              orders: {
-                where: {
-                  table: { venueId },
-                },
-                select: {
-                  createdAt: true,
-                  status: true,
-                  items: {
-                    select: {
-                      qty: true,
-                      priceCzk: true,
-                    },
-                  },
-                },
-              },
-              payments: {
-                where: { status: "CONFIRMED", table: { venueId } },
-                select: {
-                  id: true,
-                  confirmedAt: true,
-                  createdAt: true,
-                  confirmation: {
-                    select: { amountCzk: true, createdAt: true },
-                  },
-                },
-              },
             },
           },
           session: {
             select: {
               shiftId: true,
               userId: true,
-              user: {
-                select: {
-                  loyaltyTransactions: {
-                    where: {
-                      venueId,
-                    },
-                    select: {
-                      id: true,
-                      createdAt: true,
-                      cashbackCzk: true,
-                      redeemedAmountCzk: true,
-                      availableAt: true,
-                    },
-                  },
-                },
-              },
             },
           },
         },

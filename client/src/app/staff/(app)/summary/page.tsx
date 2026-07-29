@@ -237,7 +237,7 @@ export default function StaffSummaryPage() {
       <div className={card}>
         <div className="text-lg font-semibold">Режим администратора</div>
         <div className="mt-2 text-sm text-white/60">
-          Ваш раздел — «Гости»: список зарегистрированных гостей и их бонусы.
+          Ваш раздел — консоль: статистика по точкам, редактор меню и список гостей с бонусами.
         </div>
 
         <div className="mt-4">
@@ -346,7 +346,7 @@ export default function StaffSummaryPage() {
         </div>
 
         <div className="mt-4 grid grid-cols-3 gap-3">
-          <StatCard title="Заказы" value={data?.newOrders ?? 0} hint="Принять" href="/staff/orders" tone="emerald" />
+          <StatCard title="Заказы" value={data?.newOrders ?? 0} hint="Готовятся" href="/staff/orders" tone="emerald" />
           <StatCard title="Вызовы" value={data?.newCalls ?? 0} hint="Подойти" href="/staff/calls" tone="amber" />
           <StatCard title="Оплаты" value={data?.pendingPayments ?? 0} hint="Рассчитать" href="/staff/payments" tone="sky" />
         </div>

@@ -158,6 +158,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
       if (
         document.visibilityState === "visible" &&
         (e.kind === "CALL_CREATED" ||
+          e.kind === "GUEST_MESSAGE" ||
           e.kind === "ORDER_CREATED" ||
           e.kind === "PAYMENT_REQUESTED")
       ) {
@@ -195,7 +196,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
               <div className="min-w-0">
                 <div className="text-[11px] tracking-[0.24em] text-white/45">LOFT№8 • ПЕРСОНАЛ</div>
                 <div className="mt-2 text-xl font-semibold">
-                  {isAdminPage ? "Гости" : "Рабочая панель"}
+                  {isAdminPage ? "Администратор" : "Рабочая панель"}
                 </div>
 
                 {staff ? (
@@ -219,7 +220,25 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {!isAdmin && (
+              {isAdmin ? (
+                <>
+                  <NavLink
+                    href="/staff/admin"
+                    label="Статистика"
+                    active={pathname === "/staff/admin"}
+                  />
+                  <NavLink
+                    href="/staff/admin/menu"
+                    label="Меню"
+                    active={pathname.startsWith("/staff/admin/menu")}
+                  />
+                  <NavLink
+                    href="/staff/admin/guests"
+                    label="Гости"
+                    active={pathname.startsWith("/staff/admin/guests")}
+                  />
+                </>
+              ) : (
                 <>
                   <NavLink
                     href="/staff/summary"
@@ -250,10 +269,6 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                     active={pathname.startsWith("/staff/tables")}
                   />
                 </>
-              )}
-
-              {(isAdmin || isManager) && (
-                <NavLink href="/staff/admin" label="Гости" active={pathname.startsWith("/staff/admin")} />
               )}
             </div>
           </div>

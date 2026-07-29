@@ -8,6 +8,7 @@ import { getVenueName } from "@/lib/venue";
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
+import { useAuth } from "@/providers/auth";
 import { PaymentSheet } from "@/components/PaymentSheet";
 import { useEscapeToClose } from "@/lib/useModalA11y";
 import { useI18n } from "@/providers/i18n";
@@ -140,11 +141,13 @@ export default function CartPage() {
   const { isCz, locale, ready } = useI18n();
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const { feed, refresh } = useGuestFeed();
+  const { me } = useAuth();
   const { push } = useToast();
 
   const [payOpen, setPayOpen] = useState(false);
   // Shown when the guest tries to pay while the order is still being prepared.
   const [showPreparingBlock, setShowPreparingBlock] = useState(false);
+  const [changingMethod, setChangingMethod] = useState(false);
   const [useLoyalty, setUseLoyalty] = useState(false);
   const [selectedQtyByKey, setSelectedQtyByKey] = useState<Record<string, number>>({});
   const [localPendingMarker, setLocalPendingMarker] = useState<PendingPaymentMarker | null>(null);
@@ -397,6 +400,8 @@ export default function CartPage() {
   };
 
   const changeMyMethod = async (method: "CARD" | "CASH") => {
+    if (changingMethod) return;
+    setChangingMethod(true);
     try {
       // Reflect the new method immediately in the local fallback marker so the
       // label doesn't lag while the feed catches up.
@@ -417,11 +422,25 @@ export default function CartPage() {
       });
     } catch (e: any) {
       push({ kind: "error", title: isCz ? "Chyba" : "Error", message: e?.message ?? "Failed" });
+    } finally {
+      setChangingMethod(false);
     }
   };
 
   const openPaymentSheet = () => {
     if (!openTab || latestPendingPayment) return;
+    // Unregistered guests get the menu only — paying requires an account.
+    if (!me?.authenticated) {
+      push({
+        kind: "info",
+        title: isCz ? "Vyžaduje registraci" : "Registration required",
+        message: isCz
+          ? "Zaregistrujte se, abyste mohli zaplatit a získat cashback."
+          : "Register to pay and earn cashback.",
+        action: { label: isCz ? "Zaregistrovat se" : "Register", href: "/auth" },
+      });
+      return;
+    }
     // Can't pay while anything is still cooking — the bill isn't final yet.
     if (openTab.stage.phase !== "ready") {
       setShowPreparingBlock(true);
@@ -573,7 +592,7 @@ export default function CartPage() {
                                 <button
                                   key={m}
                                   type="button"
-                                  disabled={active}
+                                  disabled={active || changingMethod}
                                   onClick={() => void changeMyMethod(m)}
                                   className={[
                                     "rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-default",

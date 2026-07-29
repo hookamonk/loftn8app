@@ -1,86 +1,125 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { getAdminUsers, type AdminUserItem } from "@/lib/staffApi";
+import { useCallback, useEffect, useState } from "react";
+import {
+  getAdminSummary,
+  type AdminSummary,
+  type AdminRange,
+  type AdminVenueScope,
+} from "@/lib/staffApi";
 import { useStaffSession } from "@/providers/staffSession";
 
-function formatDate(value?: string | null) {
-  if (!value) return "—";
-  return new Date(value).toLocaleDateString("cs-CZ", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+const VENUES: Array<{ key: AdminVenueScope; label: string }> = [
+  { key: "all", label: "Все точки" },
+  { key: "zizkov", label: "Žižkov" },
+  { key: "garden", label: "Garden" },
+  { key: "nekazanka", label: "Nekázanka" },
+];
+
+const RANGES: Array<{ key: AdminRange; label: string }> = [
+  { key: "today", label: "День" },
+  { key: "week", label: "Неделя" },
+  { key: "month", label: "Месяц" },
+  { key: "all", label: "Всё время" },
+];
+
+function money(czk: number) {
+  return `${Math.round(czk).toLocaleString("cs-CZ")} Kč`;
 }
 
-function initials(name: string) {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  return ((words[0]?.[0] ?? "") + (words[1]?.[0] ?? "")).toUpperCase() || "—";
+function rating(value: number | null) {
+  return value == null ? "—" : value.toFixed(2);
 }
 
-export default function StaffAdminPage() {
+function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ key: T; label: string }>;
+  onChange: (key: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((o) => {
+        const active = o.key === value;
+        return (
+          <button
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            className={[
+              "rounded-2xl border px-4 py-2 text-sm font-semibold transition",
+              active
+                ? "border-white/20 bg-white text-black"
+                : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
+            ].join(" ")}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function StatCard({ title, value, hint }: { title: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-[24px] border border-white/10 bg-white/[0.05] p-5">
+      <div className="text-xs uppercase tracking-[0.14em] text-white/45">{title}</div>
+      <div className="mt-2 text-3xl font-bold text-white">{value}</div>
+      {hint ? <div className="mt-1 text-xs text-white/40">{hint}</div> : null}
+    </div>
+  );
+}
+
+export default function StaffAdminStatsPage() {
   const { staff } = useStaffSession();
-  const isAllowed = staff?.role === "MANAGER" || staff?.role === "ADMIN";
+  const isAdmin = staff?.role === "ADMIN";
 
-  const [users, setUsers] = useState<AdminUserItem[]>([]);
+  const [venue, setVenue] = useState<AdminVenueScope>("all");
+  const [range, setRange] = useState<AdminRange>("month");
+  const [data, setData] = useState<AdminSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setErr(null);
-    const r = await getAdminUsers("all");
+    const r = await getAdminSummary(range, venue);
     if (!r.ok) {
-      setErr(r.error || "Не удалось загрузить пользователей");
+      setErr(r.error || "Не удалось загрузить статистику");
       setLoading(false);
       return;
     }
-    setUsers(r.data.users);
+    setData(r.data.summary);
     setLoading(false);
-  };
+  }, [range, venue]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
-  const q = query.trim().toLowerCase();
-  const filtered = useMemo(() => {
-    if (!q) return users;
-    return users.filter(
-      (u) =>
-        u.name.toLowerCase().includes(q) ||
-        u.phone.toLowerCase().includes(q) ||
-        (u.email ?? "").toLowerCase().includes(q),
-    );
-  }, [users, q]);
-
-  if (!isAllowed) {
+  if (!isAdmin) {
     return (
       <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-6 text-white">
-        <div className="text-lg font-semibold">Админ-панель</div>
-        <div className="mt-2 text-sm text-white/55">
-          Доступ только для менеджера и администратора.
-        </div>
+        <div className="text-lg font-semibold">Статистика</div>
+        <div className="mt-2 text-sm text-white/55">Доступ только для администратора.</div>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2.5">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Поиск: имя, телефон или e-mail"
-          className="h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
-        />
-        <button
-          onClick={() => void load()}
-          className="h-12 shrink-0 rounded-2xl border border-white/10 bg-white/[0.06] px-5 text-sm font-semibold text-white transition hover:bg-white/10"
-        >
-          Обновить
-        </button>
+      <div className="rounded-[24px] border border-white/10 bg-white/[0.05] p-5 space-y-4">
+        <div>
+          <div className="mb-2 text-xs uppercase tracking-[0.14em] text-white/45">Точка</div>
+          <Segmented value={venue} options={VENUES} onChange={setVenue} />
+        </div>
+        <div>
+          <div className="mb-2 text-xs uppercase tracking-[0.14em] text-white/45">Период</div>
+          <Segmented value={range} options={RANGES} onChange={setRange} />
+        </div>
       </div>
 
       {err ? (
@@ -89,109 +128,78 @@ export default function StaffAdminPage() {
         </div>
       ) : null}
 
-      {loading ? (
-        <div className="space-y-2.5">
+      {loading && !data ? (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
             <div
               key={i}
-              className="h-[72px] animate-pulse rounded-[20px] border border-white/10 bg-white/[0.03]"
+              className="h-[112px] animate-pulse rounded-[24px] border border-white/10 bg-white/[0.03]"
             />
           ))}
         </div>
-      ) : filtered.length === 0 ? (
-        <div className="rounded-[24px] border border-white/10 bg-white/[0.03] px-5 py-10 text-center">
-          <div className="text-sm font-semibold text-white/80">
-            {q ? "Ничего не найдено" : "Пока нет зарегистрированных гостей"}
-          </div>
-          <div className="mx-auto mt-1.5 max-w-xs text-xs leading-5 text-white/45">
-            {q
-              ? "Измените запрос поиска."
-              : "Гость появится здесь после регистрации в приложении."}
-          </div>
-        </div>
-      ) : (
+      ) : data ? (
         <>
-          {/* Mobile: cards */}
-          <div className="space-y-2.5 lg:hidden">
-            {filtered.map((u) => (
-              <div
-                key={u.id}
-                className="rounded-[20px] border border-white/10 bg-white/[0.04] p-4"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-white/12 bg-white/10 text-sm font-semibold text-white">
-                    {initials(u.name)}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-white">
-                      {u.name}
-                    </div>
-                    <div className="truncate text-xs text-white/55">{u.phone}</div>
-                    <div className="truncate text-xs text-white/40">
-                      {u.email || "без e-mail"}
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="text-base font-semibold text-emerald-300">
-                      {u.bonusCzk} Kč
-                    </div>
-                    <div className="text-[10px] uppercase tracking-[0.14em] text-white/35">
-                      бонусы
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard
+              title="Регистрации"
+              value={String(data.usersCount)}
+              hint="зарегистрированных гостей"
+            />
+            <StatCard title="Выручка" value={money(data.totalRevenueCzk)} hint={`оплат: ${data.paymentsCount}`} />
+            <StatCard
+              title="Средняя оценка"
+              value={rating(data.avgOverall)}
+              hint={`отзывов: ${data.ratingsCount}`}
+            />
+            <StatCard
+              title="Сессии гостей"
+              value={String(data.guestSessionsCount)}
+              hint={`с аккаунтом: ${data.registeredGuestSessionsCount} · без: ${data.anonymousGuestSessionsCount}`}
+            />
           </div>
 
-          {/* Desktop: table */}
-          <div className="hidden overflow-hidden rounded-[20px] border border-white/10 lg:block">
-            <table className="min-w-full text-sm">
-              <thead className="bg-white/[0.04] text-left text-[11px] uppercase tracking-[0.14em] text-white/45">
-                <tr>
-                  <th className="px-5 py-3.5 font-medium">Гость</th>
-                  <th className="px-5 py-3.5 font-medium">Телефон</th>
-                  <th className="px-5 py-3.5 font-medium">E-mail</th>
-                  <th className="px-5 py-3.5 font-medium">Регистрация</th>
-                  <th className="px-5 py-3.5 text-right font-medium">Бонусы</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((u) => (
-                  <tr
-                    key={u.id}
-                    className="border-t border-white/8 text-white/80 transition hover:bg-white/[0.03]"
-                  >
-                    <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-3">
-                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/12 bg-white/10 text-xs font-semibold text-white">
-                          {initials(u.name)}
-                        </div>
-                        <span className="font-semibold text-white">{u.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5">{u.phone}</td>
-                    <td className="px-5 py-3.5 text-white/60">{u.email || "—"}</td>
-                    <td className="px-5 py-3.5 text-white/55">
-                      {formatDate(u.createdAt)}
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      <span className="font-semibold text-emerald-300">
-                        {u.bonusCzk} Kč
-                      </span>
-                      {u.pendingBonusCzk > 0 ? (
-                        <span className="ml-2 text-[11px] text-white/35">
-                          +{u.pendingBonusCzk} ждёт
-                        </span>
-                      ) : null}
-                    </td>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <StatCard title="Заказы" value={String(data.ordersCount)} />
+            <StatCard title="Вызовы" value={String(data.callsCount)} />
+            <StatCard
+              title="Оценки: еда / напитки / кальян"
+              value={`${rating(data.avgFood)} / ${rating(data.avgDrinks)} / ${rating(data.avgHookah)}`}
+            />
+          </div>
+
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <div className="text-sm font-semibold text-white">По точкам</div>
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-[0.14em] text-white/45">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Точка</th>
+                    <th className="px-3 py-2 text-right font-medium">Регистрации</th>
+                    <th className="px-3 py-2 text-right font-medium">Выручка</th>
+                    <th className="px-3 py-2 text-right font-medium">Ср. оценка</th>
+                    <th className="px-3 py-2 text-right font-medium">Отзывы</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.byVenue.map((v) => (
+                    <tr key={v.venueId} className="border-t border-white/8 text-white/85">
+                      <td className="px-3 py-2.5 font-semibold text-white">{v.shortName}</td>
+                      <td className="px-3 py-2.5 text-right">{v.usersCount}</td>
+                      <td className="px-3 py-2.5 text-right">{money(v.revenueCzk)}</td>
+                      <td className="px-3 py-2.5 text-right">{rating(v.avgOverall)}</td>
+                      <td className="px-3 py-2.5 text-right text-white/60">{v.ratingsCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/40">
+            ID-карты лояльности (Apple/Google Wallet) появятся здесь после подключения.
           </div>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

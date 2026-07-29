@@ -10,7 +10,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
-    "prisma:reset": "tsx prisma/resetData.ts"
+    "prisma:reset": "tsx prisma/resetData.ts",
+    "admin:create": "tsx prisma/createAdmin.ts"
   },
   "keywords": [],
   "author": "",

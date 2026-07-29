@@ -11,6 +11,28 @@ const SESSION_AUTO_END_AFTER_INACTIVITY_MS =
 const SESSION_AUTO_END_AFTER_STAY_MS =
   env.GUEST_SESSION_STAY_GRACE_MINUTES * 60 * 1000;
 
+// PERFORMANCE: the closure sweep is ~7 queries. It runs on every authenticated
+// guest request (and per session on the staff /tables poll), so we throttle it
+// per session — the grace period is minutes, so re-checking at most once per
+// window is plenty. In-memory + bounded; the app runs as a single instance
+// (a horizontally-scaled deploy would move this to Redis).
+const EXPIRY_CHECK_THROTTLE_MS = 20_000;
+const lastExpiryCheckAt = new Map<string, number>();
+
+function shouldSkipExpiryCheck(sessionId: string): boolean {
+  const now = Date.now();
+  const last = lastExpiryCheckAt.get(sessionId);
+  if (last !== undefined && now - last < EXPIRY_CHECK_THROTTLE_MS) return true;
+  lastExpiryCheckAt.set(sessionId, now);
+  // Bounded cleanup so the map can't grow unbounded over long uptime.
+  if (lastExpiryCheckAt.size > 2000) {
+    for (const [key, ts] of lastExpiryCheckAt) {
+      if (now - ts > EXPIRY_CHECK_THROTTLE_MS * 3) lastExpiryCheckAt.delete(key);
+    }
+  }
+  return false;
+}
+
 type SessionSnapshot = {
   id: string;
   endedAt: Date | null;
@@ -142,12 +164,15 @@ export async function getGuestSessionClosureState(
     },
   });
 
+  // Table-wide only within the SAME shift. Without a shift, fall back to this
+  // single session — never table-wide-across-all-history, which would drag in
+  // confirmed payments/orders from previous shifts and mis-judge "fully paid".
   const scope: any =
-    sessionRow?.tableId != null
+    sessionRow?.tableId != null && sessionRow?.shiftId
       ? {
           tableId: sessionRow.tableId,
           ...(sessionRow.table?.venueId != null ? { table: { venueId: sessionRow.table.venueId } } : {}),
-          ...(sessionRow.shiftId ? { session: { shiftId: sessionRow.shiftId } } : {}),
+          session: { shiftId: sessionRow.shiftId },
         }
       : { sessionId };
 
@@ -251,6 +276,15 @@ export async function expireGuestSessionIfInactiveAfterPayment(
   sessionId: string,
   sessionSnapshot?: SessionSnapshot
 ) {
+  // Already-ended sessions are cheap to short-circuit.
+  if (sessionSnapshot?.endedAt) {
+    return { expired: true as const, reason: "ended" as const };
+  }
+  // Skip the expensive sweep if we checked this session very recently.
+  if (shouldSkipExpiryCheck(sessionId)) {
+    return { expired: false as const, autoEndsAt: null, throttled: true as const };
+  }
+
   const state = await getGuestSessionClosureState(sessionId, sessionSnapshot);
 
   if ("missing" in state) {

@@ -4,6 +4,7 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { validate } from "../../middleware/validate";
 import { guestSessionAuth } from "../../middleware/auth/guestSession";
+import { requireUser } from "../../middleware/auth/requireUser";
 import { notifyPaymentRequested, notifyPaymentMethodChanged } from "../staff/push.service";
 import { emitGuestEvent } from "../guest/guestEvents";
 import { HttpError } from "../../utils/httpError";
@@ -29,6 +30,7 @@ const RequestPaymentSchema = z.object({
 paymentsRouter.post(
   "/request",
   guestSessionAuth,
+  requireUser,
   validate(RequestPaymentSchema),
   asyncHandler(async (req, res) => {
     const session = req.guestSession!;
@@ -259,6 +261,7 @@ const ChangeMethodSchema = z.object({ method: z.enum(["CARD", "CASH"]) });
 paymentsRouter.post(
   "/method",
   guestSessionAuth,
+  requireUser,
   validate(ChangeMethodSchema),
   asyncHandler(async (req, res) => {
     const session = req.guestSession!;

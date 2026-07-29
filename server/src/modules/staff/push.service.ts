@@ -272,7 +272,16 @@ export async function notifyCallCreated(callId: string) {
   const venueSlug = publicVenueSlug(call.table.venue.slug);
   const isOrderRequest = call.type === "HELP" && isOrderRequestMessage(call.message);
 
-  emitStaffEvent(venueId, { kind: "CALL_CREATED", tableCode, tag: `call_new:${call.id}` });
+  const messagePreview = normalizeCallMessage(call.type, call.message);
+  const isMessageOnly = call.type === "HELP" && !!messagePreview;
+
+  // Emit SSE with the SAME kind the push uses, so the in-app alert plays the
+  // right tone (a guest message sounds different from a service call).
+  emitStaffEvent(venueId, {
+    kind: isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
+    tableCode,
+    tag: `call_new:${call.id}`,
+  });
 
   const roles: StaffRole[] = ["MANAGER"];
   if (call.type === "HOOKAH") roles.push("HOOKAH");
@@ -290,9 +299,6 @@ export async function notifyCallCreated(callId: string) {
       : call.type === "BILL"
       ? "Запрос оплаты"
       : "Нужна помощь";
-
-  const messagePreview = normalizeCallMessage(call.type, call.message);
-  const isMessageOnly = call.type === "HELP" && !!messagePreview;
   const title = isOrderRequest ? "Order requested" : isMessageOnly ? "Новое сообщение от гостя" : "Новый вызов";
   const body = isOrderRequest
     ? `Table ${tableCode} wants to place an order`

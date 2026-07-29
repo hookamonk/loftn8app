@@ -4,6 +4,7 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { validate } from "../../middleware/validate";
 import { guestSessionAuth } from "../../middleware/auth/guestSession";
+import { requireUser } from "../../middleware/auth/requireUser";
 import { notifyCallCreated } from "../staff/push.service";
 import { attachSessionToActiveShiftIfNeeded } from "../staff/shiftCache";
 import { emitGuestEvent } from "../guest/guestEvents";
@@ -25,6 +26,9 @@ const CreateCallSchema = z.object({
 callsRouter.post(
   "/",
   guestSessionAuth,
+  // Only registered guests may call staff / order. Unregistered guests get the
+  // menu only.
+  requireUser,
   validate(CreateCallSchema),
   asyncHandler(async (req, res) => {
     const session = req.guestSession!;

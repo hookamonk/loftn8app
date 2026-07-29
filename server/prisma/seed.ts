@@ -189,6 +189,38 @@ async function seedVenueStaff(
 	}
 }
 
+async function seedAdmin() {
+	// One global ADMIN for the business console (cross-venue statistics + the
+	// menu editor). Tied to Žižkov for login — admins pick a home branch, then
+	// switch venues from the in-app picker. Managers never see this console.
+	// Override credentials via STAFF_ADMIN_USERNAME / STAFF_ADMIN_PASSWORD.
+	const username = process.env.STAFF_ADMIN_USERNAME || "admin";
+	const password = process.env.STAFF_ADMIN_PASSWORD || "admin_1234";
+
+	const venue = await prisma.venue.findFirst({
+		where: { slug: "zizkov" },
+		select: { id: true },
+	});
+	if (!venue) {
+		console.warn("⚠️  Admin seed skipped: Žižkov venue not found");
+		return;
+	}
+
+	const passwordHash = await bcrypt.hash(password, 10);
+	await prisma.staffUser.upsert({
+		where: { username },
+		update: { role: "ADMIN" as any, venueId: venue.id, passwordHash, isActive: true },
+		create: {
+			role: "ADMIN" as any,
+			venueId: venue.id,
+			username,
+			passwordHash,
+			isActive: true,
+		},
+	});
+	console.log(`✅ Admin account ready: ${username}`);
+}
+
 async function upsertCategory(
 	venueId: number,
 	name: string,
@@ -4176,6 +4208,8 @@ async function main() {
 			target.legacyPrefix,
 		);
 	}
+
+	await seedAdmin();
 
 	const tr = await applyMenuTranslations(prisma);
 	console.log(`✅ Menu translations: ${tr.cats} categories, ${tr.items} items`);

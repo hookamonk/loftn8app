@@ -11,6 +11,7 @@ import type { Response } from "express";
 
 export type StaffEventKind =
   | "CALL_CREATED"
+  | "GUEST_MESSAGE"
   | "ORDER_CREATED"
   | "PAYMENT_REQUESTED"
   | "DATA_CHANGED";

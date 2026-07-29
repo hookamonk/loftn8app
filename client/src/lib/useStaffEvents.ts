@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 
 export type StaffRealtimeEvent = {
-  kind: "CALL_CREATED" | "ORDER_CREATED" | "PAYMENT_REQUESTED" | "DATA_CHANGED";
+  kind: "CALL_CREATED" | "GUEST_MESSAGE" | "ORDER_CREATED" | "PAYMENT_REQUESTED" | "DATA_CHANGED";
   venueId: number;
   at: number;
   tableCode?: string | null;

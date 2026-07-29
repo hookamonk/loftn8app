@@ -341,8 +341,6 @@ const guestPasswordLoginHandler = asyncHandler(async (req, res) => {
   });
 
 authRouter.post("/guest/login-password", passwordLimiter, validate(PasswordLoginSchema), guestPasswordLoginHandler);
-authRouter.post("/guest/password-login", passwordLimiter, validate(PasswordLoginSchema), guestPasswordLoginHandler);
-authRouter.post("/guest/login", passwordLimiter, validate(PasswordLoginSchema), guestPasswordLoginHandler);
 
 authRouter.post(
   "/guest/request-password-reset",

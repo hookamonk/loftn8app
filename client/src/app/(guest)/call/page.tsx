@@ -198,6 +198,20 @@ export default function CallPage() {
 
   const send = async (type: string, message?: string) => {
     if (cooldown) return;
+
+    // Unregistered guests get the menu only — calling staff requires an account.
+    if (!me?.authenticated) {
+      push({
+        kind: "info",
+        title: isCz ? "Vyžaduje registraci" : "Registration required",
+        message: isCz
+          ? "Zaregistrujte se, abyste mohli přivolat obsluhu. Bez registrace je dostupné jen menu."
+          : "Register to call staff. Without an account only the menu is available.",
+        action: { label: isCz ? "Zaregistrovat se" : "Register", href: "/auth" },
+      });
+      return;
+    }
+
     setCooldown(true);
 
     try {
@@ -273,8 +287,8 @@ export default function CallPage() {
           {!loading && !me?.authenticated ? (
             <div className="mt-2 text-xs text-white/60">
               {isCz
-                ? "Jste v režimu hosta — přivolání obsluhy je dostupné. Objednávky a hodnocení jsou dostupné po přihlášení."
-                : "You are in guest mode — staff assistance is available. Orders and ratings are available after sign in."}
+                ? "Jste v režimu hosta — dostupné je jen menu. Zaregistrujte se, abyste mohli přivolat obsluhu, objednávat a získávat cashback."
+                : "You're in guest mode — only the menu is available. Register to call staff, order and earn cashback."}
             </div>
           ) : null}
         </div>
