@@ -1,65 +1,120 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
 import { markAnonBypassAuthOnce } from "@/lib/guestFlow";
-import { restartGuestOnboarding } from "@/lib/guestOnboarding";
 import { getVenueName } from "@/lib/venue";
 import { useToast } from "@/providers/toast";
 import { useAuth } from "@/providers/auth";
 import { useSession } from "@/providers/session";
 import { useI18n } from "@/providers/i18n";
 import { useEscapeToClose } from "@/lib/useModalA11y";
+import type { GuestUser } from "@/types";
+
+/**
+ * Guest sign-up and sign-in.
+ *
+ *   Register → name, e-mail, password, consent → code from the inbox → done.
+ *   Sign in  → e-mail + password. Nothing else.
+ *
+ * Reached right after the QR scan when the guest isn't signed in yet; a guest
+ * who already has an account never lands here at all.
+ */
 
 type Mode = "register" | "login" | "forgot";
 type Step = "form" | "code";
 
-function normalizePhone(x: string) {
-  const compact = x.replace(/\s+/g, "").trim();
-  if (!compact) return "";
-  if (compact.startsWith("+")) return compact;
-  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
-  if (/^\d+$/.test(compact)) {
-    if (compact.startsWith("420")) return `+${compact}`;
-    return `+420${compact}`;
-  }
-  return compact;
-}
-
-function isValidEmail(x: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(x).trim());
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
 function sanitizeNextPath(raw: string | null | undefined) {
   const value = String(raw ?? "").trim();
   if (!value.startsWith("/") || value.startsWith("//")) return "/menu";
   if (value === "/auth") return "/menu";
-  return value || "/menu";
+  return value;
 }
 
-function humanError(msg: string, isCz: boolean) {
-  const m = String(msg || "");
-  if (m.includes("NO_ACCOUNT")) return isCz ? "Účet nebyl nalezen. Prosím zaregistrujte se." : "Account not found. Please register.";
-  if (m.includes("NAME_MISMATCH")) return isCz ? "Účet nebyl nalezen. Zkontrolujte prosím jméno a telefon." : "Account not found (please check your name and phone) — please register.";
-  if (m.includes("ACCOUNT_EXISTS")) return isCz ? "Tento účet již existuje. Prosím přihlaste se." : "This account already exists. Please sign in.";
-  if (m.includes("EMAIL_REQUIRED")) return isCz ? "E-mail je povinný." : "Email is required.";
-  if (m.includes("EMAIL_MISMATCH")) return isCz ? "Účet nebyl nalezen. Zkontrolujte prosím e-mail." : "Account not found. Please check your email.";
-  if (m.includes("PASSWORD_INVALID")) return isCz ? "Nesprávné heslo." : "Incorrect password.";
-  if (m.includes("PASSWORD_NOT_SET")) return isCz ? "Pro tento účet zatím není nastavené heslo." : "Password is not set for this account yet.";
-  if (m.includes("PASSWORD_TOO_SHORT")) return isCz ? "Heslo je příliš krátké." : "Password is too short.";
-  if (m.includes("CONSENT_REQUIRED")) return isCz ? "Musíte souhlasit se zpracováním osobních údajů." : "You must agree to personal data processing.";
-  if (m.includes("NAME_REQUIRED")) return isCz ? "Jméno je povinné." : "Name is required.";
-  if (m.includes("OTP_INVALID")) return isCz ? "Neplatný kód." : "Invalid code.";
-  if (m.includes("OTP_NOT_FOUND")) return isCz ? "Kód nebyl nalezen nebo vypršel." : "Code not found or expired.";
-  if (m.includes("EMAIL_INVALID")) return isCz ? "Neplatný e-mail." : "Invalid email.";
-  return m || (isCz ? "Chyba" : "Error");
+function humanError(message: string, isCz: boolean) {
+  const raw = String(message || "");
+
+  if (raw.includes("ACCOUNT_EXISTS"))
+    return isCz ? "Tento účet už existuje. Přihlaste se." : "This account already exists. Please sign in.";
+  if (raw.includes("NO_ACCOUNT"))
+    return isCz ? "Účet nebyl nalezen. Zaregistrujte se." : "Account not found. Please register.";
+  if (raw.includes("PASSWORD_INVALID")) return isCz ? "Nesprávné heslo." : "Incorrect password.";
+  if (raw.includes("PASSWORD_NOT_SET"))
+    return isCz ? "Pro tento účet není nastavené heslo." : "No password is set for this account.";
+  if (raw.includes("OTP_TOO_MANY_ATTEMPTS"))
+    return isCz ? "Příliš mnoho pokusů. Vyžádejte si nový kód." : "Too many attempts. Request a new code.";
+  if (raw.includes("OTP_INVALID")) return isCz ? "Neplatný kód." : "Invalid code.";
+  if (raw.includes("OTP_NOT_FOUND"))
+    return isCz ? "Kód vypršel. Vyžádejte si nový." : "The code expired. Request a new one.";
+  if (raw.includes("RATE_LIMITED"))
+    return isCz
+      ? "Příliš mnoho pokusů. Zkuste to prosím za pár minut."
+      : "Too many attempts. Please try again in a few minutes.";
+  if (raw.includes("EMAIL_NOT_CONFIGURED"))
+    return isCz
+      ? "Odesílání e-mailů zatím nefunguje. Řekněte to prosím obsluze."
+      : "Email delivery isn't working. Please tell the staff.";
+  if (raw.includes("EMAIL_SEND_FAILED"))
+    return isCz
+      ? "Kód se nepodařilo odeslat. Zkuste to prosím znovu."
+      : "We couldn't send the code. Please try again.";
+  if (raw.includes("EMAIL_INVALID")) return isCz ? "Neplatný e-mail." : "Invalid email.";
+  if (raw.includes("EMAIL_REQUIRED")) return isCz ? "Zadejte e-mail." : "Enter your email.";
+  if (raw.includes("CONSENT_REQUIRED"))
+    return isCz ? "Musíte souhlasit se zpracováním údajů." : "You must agree to data processing.";
+  if (raw.includes("NAME_REQUIRED")) return isCz ? "Zadejte jméno." : "Enter your name.";
+
+  return raw || (isCz ? "Něco se pokazilo." : "Something went wrong.");
 }
 
-async function post<T = any>(path: string, body: any) {
-  return api<T>(path, { method: "POST", body: JSON.stringify(body) });
+function Input({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder,
+  autoComplete,
+  inputMode,
+  trailing,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  placeholder?: string;
+  autoComplete?: string;
+  inputMode?: "text" | "email" | "numeric";
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <div className="text-xs text-white/60">{label}</div>
+      <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4 focus-within:border-white/25">
+        <input
+          value={value}
+          type={type}
+          placeholder={placeholder}
+          autoComplete={autoComplete}
+          inputMode={inputMode}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+        />
+        {trailing}
+      </div>
+    </label>
+  );
 }
+
+const btnPrimary =
+  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-40";
+const btnGhost =
+  "h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/80 transition hover:text-white disabled:opacity-40";
 
 export default function AuthPage() {
   const router = useRouter();
@@ -67,329 +122,193 @@ export default function AuthPage() {
   const { push } = useToast();
   const { me, loading, setAuthenticated } = useAuth();
   const { restoreSession } = useSession();
-  const [nextPath, setNextPath] = useState<string | null>(null);
 
+  const [nextPath, setNextPath] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("register");
   const [step, setStep] = useState<Step>("form");
 
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("+420");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [passwordConfirm, setPasswordConfirm] = useState("");
   const [consent, setConsent] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
-
   const [code, setCode] = useState("");
-  // Dev only: when e-mail isn't configured the server returns the OTP so we can
-  // show it on the code step (in production with SMTP this stays null).
+  // Development only: with no SMTP the server hands the code back so the flow
+  // is testable. In production it refuses instead — it never leaks codes.
   const [devCode, setDevCode] = useState<string | null>(null);
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [suggestedMode, setSuggestedMode] = useState<Mode | null>(null);
+  const [suggested, setSuggested] = useState<Mode | null>(null);
+  const [anonOpen, setAnonOpen] = useState(false);
 
-  const [showAnonWarn, setShowAnonWarn] = useState(false);
-  useEscapeToClose(showAnonWarn, () => setShowAnonWarn(false));
+  useEscapeToClose(anonOpen, () => setAnonOpen(false));
 
-  const p = useMemo(() => normalizePhone(phone), [phone]);
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const targetPath = nextPath ?? "/menu";
   const cabinetMode = nextPath === "/cabinet";
-  const needsPasswordConfirm = mode === "register" || mode === "forgot";
-  const passwordsMatch = !needsPasswordConfirm || password === passwordConfirm;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     setNextPath(sanitizeNextPath(new URLSearchParams(window.location.search).get("next")));
+    void ensureBackendWarm();
   }, []);
 
-  useEffect(() => {
-    if (!nextPath) return;
-    // Registration/sign-in is the entry screen and works without a table
-    // context (the table is bound later when the guest scans the QR), so we
-    // don't bounce away when no venue is selected.
-    void ensureBackendWarm();
-  }, [nextPath]);
-
+  // Already signed in (e.g. came back to this URL) — go straight through.
   useEffect(() => {
     if (loading || !nextPath) return;
     if (me?.authenticated) router.replace(targetPath);
   }, [loading, me, nextPath, router, targetPath]);
 
-  const canSend =
+  const resetErrors = () => {
+    setErr(null);
+    setSuggested(null);
+  };
+
+  const switchMode = (next: Mode) => {
+    resetErrors();
+    setMode(next);
+    setStep("form");
+    setCode("");
+    setDevCode(null);
+    setPassword("");
+  };
+
+  const fail = (error: unknown) => {
+    const raw = error instanceof Error ? error.message : "";
+    const message = humanError(raw, isCz);
+    setErr(message);
+
+    if (raw.includes("ACCOUNT_EXISTS")) {
+      setSuggested("login");
+      setStep("form");
+    }
+    if (raw.includes("NO_ACCOUNT")) {
+      setSuggested("register");
+      setStep("form");
+    }
+
+    push({ kind: "error", title: isCz ? "Chyba" : "Error", message });
+  };
+
+  const signedIn = async (user: GuestUser, title: string) => {
+    setAuthenticated({ authenticated: true, user });
+    await restoreSession().catch(() => {});
+    push({ kind: "success", title, message: isCz ? "Vítejte!" : "Welcome!" });
+    router.replace(targetPath);
+  };
+
+  const showCodeSent = (result: { devCode?: string }) => {
+    setStep("code");
+
+    if (result.devCode) {
+      setCode(String(result.devCode));
+      setDevCode(String(result.devCode));
+      return;
+    }
+
+    setCode("");
+    setDevCode(null);
+    push({
+      kind: "success",
+      title: isCz ? "Kód odeslán" : "Code sent",
+      message: isCz ? "Zkontrolujte e-mail." : "Check your email.",
+    });
+  };
+
+  // --- actions -------------------------------------------------------------
+
+  const canSubmitForm =
     !busy &&
     (mode === "register"
-      ? p.length >= 6 &&
-        name.trim().length >= 1 &&
-        isValidEmail(email) &&
-        password.trim().length >= 6 &&
-        passwordsMatch &&
-        consent
+      ? name.trim().length >= 2 && isValidEmail(email) && password.trim().length >= 6 && consent
       : mode === "login"
-      ? isValidEmail(email) && password.trim().length >= 6
-      : isValidEmail(email));
+        ? isValidEmail(email) && password.length > 0
+        : isValidEmail(email));
 
-  const canVerify =
-    !busy &&
-    code.trim().length >= 4 &&
-    (mode !== "forgot" || (password.trim().length >= 6 && passwordsMatch));
+  const canSubmitCode =
+    !busy && code.trim().length >= 4 && (mode !== "forgot" || password.trim().length >= 6);
 
-  const requestOtp = async () => {
-    setErr(null);
-    setSuggestedMode(null);
-    if (!canSend) return;
-
-    if (mode === "login") {
-      await loginWithPassword();
-      return;
-    }
-
-    if (mode === "forgot") {
-      await requestPasswordReset();
-      return;
-    }
-
+  const submitForm = async () => {
+    if (!canSubmitForm) return;
+    resetErrors();
     setBusy(true);
-    try {
-      const r: any = await post("/auth/guest/request-otp", {
-        phone: p,
-        intent: mode,
-        name: name.trim(),
-        email: email.trim(),
-      });
 
-      setStep("code");
-      // Demo/dev: if e-mail isn't configured, the server returns the code so the
-      // flow works without inbox access — prefill it.
-      if (r?.devCode) {
-        setCode(String(r.devCode));
-        setDevCode(String(r.devCode));
-        push({
-          kind: "info",
-          title: isCz ? "Demo kód" : "Demo code",
-          message: isCz
-            ? `E-mail není nastaven. Váš kód: ${r.devCode}`
-            : `Email is not configured. Your code: ${r.devCode}`,
+    try {
+      if (mode === "login") {
+        const result = await api<{ ok: true; user: GuestUser }>("/auth/guest/login-password", {
+          method: "POST",
+          body: JSON.stringify({ email: email.trim(), password }),
         });
-      } else {
-        setCode("");
-        push({
-          kind: "success",
-          title: isCz ? "Kód odeslán" : "Code sent",
-          message: isCz ? "Zkontrolujte e-mail a zadejte kód." : "Check your email and enter the code.",
+        await signedIn(result.user, isCz ? "Přihlášeno" : "Signed in");
+        return;
+      }
+
+      if (mode === "forgot") {
+        const result = await api<{ ok: true; devCode?: string }>("/auth/guest/request-password-reset", {
+          method: "POST",
+          body: JSON.stringify({ email: email.trim() }),
         });
+        setPassword("");
+        showCodeSent(result);
+        return;
       }
-    } catch (e: any) {
-      const raw = String(e?.message || "");
-      const msg = humanError(e?.message ?? "Failed", isCz);
-      setErr(msg);
-      if (mode === "register" && raw.includes("ACCOUNT_EXISTS")) {
-        setSuggestedMode("login");
-      }
-      push({ kind: "error", title: isCz ? "Chyba" : "Error", message: msg });
+
+      const result = await api<{ ok: true; devCode?: string }>("/auth/guest/request-otp", {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim(), email: email.trim() }),
+      });
+      showCodeSent(result);
+    } catch (error) {
+      fail(error);
     } finally {
       setBusy(false);
     }
   };
 
-  const loginWithPassword = async () => {
+  const submitCode = async () => {
+    if (!canSubmitCode) return;
+    resetErrors();
     setBusy(true);
+
     try {
-      const login: any = await post("/auth/guest/login-password", {
-        email: email.trim(),
-        password,
-      });
-
-      setAuthenticated({
-        authenticated: true,
-        user: {
-          id: String((login as any).user.id),
-          name: String((login as any).user.name),
-          phone: String((login as any).user.phone),
-          email: String((login as any).user.email ?? ""),
-          role: String((login as any).user.role ?? "USER"),
-        },
-      });
-      await restoreSession().catch(() => {});
-      push({
-        kind: "success",
-        title: isCz ? "Hotovo" : "Done",
-        message: isCz ? "Jste přihlášeni." : "You are signed in.",
-      });
-      router.replace(targetPath);
-    } catch (e: any) {
-      const msg = humanError(e?.message ?? "Failed", isCz);
-      const raw = String(e?.message || "");
-      setErr(msg);
-      if (raw.includes("NO_ACCOUNT")) {
-        setSuggestedMode("register");
-      }
-      push({ kind: "error", title: isCz ? "Chyba" : "Error", message: msg });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const requestPasswordReset = async () => {
-    setBusy(true);
-    try {
-      const r: any = await post("/auth/guest/request-password-reset", {
-        email: email.trim(),
-      });
-
-      setStep("code");
-      setPassword("");
-      setPasswordConfirm("");
-      if (r?.devCode) {
-        setCode(String(r.devCode));
-        setDevCode(String(r.devCode));
-        push({
-          kind: "info",
-          title: isCz ? "Demo kód" : "Demo code",
-          message: isCz
-            ? `E-mail není nastaven. Váš kód: ${r.devCode}`
-            : `Email is not configured. Your code: ${r.devCode}`,
+      if (mode === "forgot") {
+        const result = await api<{ ok: true; user: GuestUser }>("/auth/guest/reset-password", {
+          method: "POST",
+          body: JSON.stringify({ email: email.trim(), code: code.trim(), password }),
         });
-      } else {
-        setCode("");
-        push({
-          kind: "success",
-          title: isCz ? "Kód odeslán" : "Code sent",
-          message: isCz ? "Zkontrolujte e-mail a vytvořte nové heslo." : "Check your email and create a new password.",
-        });
+        await signedIn(result.user, isCz ? "Heslo změněno" : "Password updated");
+        return;
       }
-    } catch (e: any) {
-      const msg = humanError(e?.message ?? "Failed", isCz);
-      const raw = String(e?.message || "");
-      setErr(msg);
-      if (raw.includes("NO_ACCOUNT")) {
-        setSuggestedMode("register");
-      }
-      push({ kind: "error", title: isCz ? "Chyba" : "Error", message: msg });
+
+      const result = await api<{ ok: true; user: GuestUser }>("/auth/guest/verify-otp", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          email: email.trim(),
+          password,
+          code: code.trim(),
+          consent,
+        }),
+      });
+      await signedIn(result.user, isCz ? "Registrace hotová" : "You're registered");
+    } catch (error) {
+      fail(error);
     } finally {
       setBusy(false);
     }
   };
 
-  const verifyOtp = async () => {
-    setErr(null);
-    setSuggestedMode(null);
-    if (!canVerify) return;
-
-    if (mode === "forgot") {
-      await resetPassword();
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const verify: any = await post("/auth/guest/verify-otp", {
-        phone: p,
-        code: code.trim(),
-        intent: mode,
-        name: name.trim(),
-        email: email.trim(),
-        password,
-        consent: mode === "register" ? consent : undefined,
-      });
-
-      setAuthenticated({
-        authenticated: true,
-        user: {
-          id: String((verify as any).user.id),
-          name: String((verify as any).user.name),
-          phone: String((verify as any).user.phone),
-          email: String((verify as any).user.email ?? ""),
-          role: String((verify as any).user.role ?? "USER"),
-        },
-      });
-      await restoreSession().catch(() => {});
-      // Show the short onboarding once, right after a fresh registration.
-      restartGuestOnboarding();
-      push({
-        kind: "success",
-        title: isCz ? "Hotovo" : "Done",
-        message: isCz ? "Jste přihlášeni." : "You are signed in.",
-      });
-      router.replace(targetPath);
-    } catch (e: any) {
-      const msg = humanError(e?.message ?? "Failed", isCz);
-      setErr(msg);
-
-      const raw = String(e?.message || "");
-      if (mode === "register" && raw.includes("ACCOUNT_EXISTS")) {
-        setStep("form");
-        setCode("");
-        setSuggestedMode("login");
-      }
-
-      if (mode === "login" && (raw.includes("NO_ACCOUNT") || raw.includes("NAME_MISMATCH"))) {
-        setStep("form");
-        setSuggestedMode("register");
-      }
-
-      push({ kind: "error", title: isCz ? "Chyba" : "Error", message: msg });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const resetPassword = async () => {
-    setBusy(true);
-    try {
-      const result: any = await post("/auth/guest/reset-password", {
-        email: email.trim(),
-        code: code.trim(),
-        password,
-      });
-
-      setAuthenticated({
-        authenticated: true,
-        user: {
-          id: String((result as any).user.id),
-          name: String((result as any).user.name),
-          phone: String((result as any).user.phone),
-          email: String((result as any).user.email ?? ""),
-          role: String((result as any).user.role ?? "USER"),
-        },
-      });
-      await restoreSession().catch(() => {});
-      push({
-        kind: "success",
-        title: isCz ? "Heslo změněno" : "Password updated",
-        message: isCz ? "Jste přihlášeni s novým heslem." : "You are signed in with the new password.",
-      });
-      router.replace(targetPath);
-    } catch (e: any) {
-      const msg = humanError(e?.message ?? "Failed", isCz);
-      const raw = String(e?.message || "");
-      setErr(msg);
-      if (raw.includes("NO_ACCOUNT")) {
-        setSuggestedMode("register");
-        setStep("form");
-      }
-      push({ kind: "error", title: isCz ? "Chyba" : "Error", message: msg });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const continueWithoutAccount = () => {
-    setShowAnonWarn(true);
-  };
-
-  const doAnonContinue = async () => {
-    setShowAnonWarn(false);
+  const continueWithoutAccount = async () => {
+    setAnonOpen(false);
     await restoreSession().catch(() => {});
 
-    const guestSession = await api<{ ok: boolean; session: unknown | null }>("/guest/me").catch(() => ({
+    const session = await api<{ ok: boolean; session: unknown | null }>("/guest/me").catch(() => ({
       ok: false,
       session: null,
     }));
 
-    if (guestSession.ok && guestSession.session) {
+    if (session.ok && session.session) {
       router.replace("/menu");
       return;
     }
@@ -398,310 +317,215 @@ export default function AuthPage() {
     router.replace("/");
   };
 
+  // --- render --------------------------------------------------------------
+
+  const title =
+    mode === "register"
+      ? isCz
+        ? "Registrace"
+        : "Register"
+      : mode === "forgot"
+        ? isCz
+          ? "Obnovit heslo"
+          : "Reset password"
+        : isCz
+          ? "Přihlášení"
+          : "Sign in";
+
   return (
-    <main className="min-h-dvh bg-[radial-gradient(80%_60%_at_50%_0%,rgba(255,255,255,0.08),transparent_60%)]">
-      {showAnonWarn ? (
+    <main className="min-h-dvh bg-[radial-gradient(80%_60%_at_50%_0%,rgba(255,255,255,0.07),transparent_60%)]">
+      {anonOpen ? (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center"
           role="dialog"
           aria-modal="true"
+          onClick={() => setAnonOpen(false)}
         >
-          <div className="w-full max-w-md rounded-3xl border border-gold/25 bg-[rgba(20,20,20,0.96)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur">
+          <div
+            className="w-full max-w-md rounded-3xl border border-gold/25 bg-[rgba(20,20,20,0.97)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.6)]"
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="grid h-12 w-12 place-items-center rounded-2xl bg-gold/15 text-xl text-amber-200">★</div>
 
             <div className="mt-4 text-lg font-semibold text-white">
-              {isCz ? "Pokračovat bez registrace?" : "Continue without registration?"}
+              {isCz ? "Pokračovat bez registrace?" : "Continue without an account?"}
             </div>
 
-            <div className="mt-3 rounded-2xl border border-gold/25 bg-gold/12 p-3.5 text-sm leading-6 text-amber-50">
+            <div className="mt-3 rounded-2xl border border-gold/20 bg-gold/10 p-3.5 text-sm leading-6 text-amber-50">
               {isCz
-                ? "Bez registrace si můžete jen prohlížet menu a přivolat obsluhu. Objednávky a cashback z útrat nebudou dostupné."
-                : "Without an account you can only browse the menu and call staff. Ordering and cashback on your spending won't be available."}
-            </div>
-
-            <div className="mt-3 text-xs leading-5 text-white/55">
-              {isCz
-                ? "Registrace zabere pár sekund a hned odemkne objednávky i cashback."
-                : "Registration takes a few seconds and unlocks ordering and cashback right away."}
+                ? "Uvidíte jen menu. Objednávat ani získávat cashback z útraty nebude možné."
+                : "You'll only see the menu. Ordering and earning cashback won't be available."}
             </div>
 
             <div className="mt-4 grid gap-2">
-              <button
-                className="h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.98]"
-                onClick={() => {
-                  setShowAnonWarn(false);
-                  setMode("register");
-                  setStep("form");
-                }}
-              >
+              <button type="button" className={btnPrimary} onClick={() => setAnonOpen(false)}>
                 {isCz ? "Zaregistrovat se" : "Register"}
               </button>
-              <button
-                className="h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/85 transition hover:text-white"
-                onClick={doAnonContinue}
-              >
+              <button type="button" className={btnGhost} onClick={() => void continueWithoutAccount()}>
                 {isCz ? "Pokračovat jen s menu" : "Continue with menu only"}
               </button>
             </div>
-
-            <button
-              className="mt-3 w-full text-xs text-white/60 underline underline-offset-4"
-              onClick={() => setShowAnonWarn(false)}
-            >
-              {isCz ? "Zrušit" : "Cancel"}
-            </button>
           </div>
         </div>
       ) : null}
 
       <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
-        <div className="mb-4 flex flex-col items-center">
+        <div className="mb-5 flex flex-col items-center">
           <div className="mb-3 grid h-16 w-16 place-items-center rounded-2xl border border-white/10 bg-white/5">
             <img src="/logo.svg" alt="LOFT№8" className="h-10 w-10 opacity-90" />
           </div>
-
           <div className="w-full">
             <div className="text-[11px] tracking-[0.24em] text-white/45">
               {cabinetMode ? "LOFT№8 ACCOUNT" : venueName}
             </div>
-            <h1 className="mt-1 text-left text-2xl font-bold text-white">
-              {cabinetMode ? (
-                <>{isCz ? <>Přihlaste se do svého <span className="text-white/80">osobního účtu</span></> : <>Sign in to your <span className="text-white/80">personal cabinet</span></>}</>
-              ) : (
-                <>{isCz ? <>Vítejte v <span className="text-white/80">{venueName}</span></> : <>Welcome to <span className="text-white/80">{venueName}</span></>}</>
-              )}
+            <h1 className="mt-1 text-2xl font-bold text-white">
+              {cabinetMode
+                ? isCz
+                  ? "Váš osobní účet"
+                  : "Your personal account"
+                : isCz
+                  ? "Vítejte"
+                  : "Welcome"}
             </h1>
-            {!cabinetMode ? (
-              <button
-                type="button"
-                className="mt-2 text-xs text-white/60 underline underline-offset-4"
-                onClick={() => router.push("/")}
-              >
-                {isCz ? "Změnit pobočku" : "Change branch"}
-              </button>
-            ) : (
-              <div className="mt-2 text-xs text-white/55">
-                {isCz ? "Použijte stejný e-mail a heslo jako v aplikaci." : "Use the same email and password as in the app."}
-              </div>
-            )}
           </div>
         </div>
 
-        <div className="rounded-3xl border border-white/10 bg-[rgba(20,20,20,0.72)] p-4 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold text-white">
-              {mode === "register" ? (isCz ? "Registrace" : "Register") : mode === "forgot" ? (isCz ? "Obnovit heslo" : "Reset password") : isCz ? "Přihlášení" : "Sign in"}
-            </div>
-
-            {mode !== "forgot" ? (
-              <button
-                type="button"
-                className="text-xs text-white/70 underline underline-offset-4"
-                onClick={() => {
-                  setErr(null);
-                  setStep("form");
-                  setSuggestedMode(null);
-                  setCode("");
-                  setPassword("");
-                  setPasswordConfirm("");
-                  setMode((m) => (m === "register" ? "login" : "register"));
-                }}
-              >
-                {mode === "register" ? (isCz ? "Už máte účet? Přihlaste se" : "Already have an account? Sign in") : isCz ? "Nemáte účet? Registrace" : "No account? Register"}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="text-xs text-white/70 underline underline-offset-4"
-                onClick={() => {
-                  setErr(null);
-                  setStep("form");
-                  setSuggestedMode(null);
-                  setCode("");
-                  setPassword("");
-                  setPasswordConfirm("");
-                  setMode("login");
-                }}
-              >
-                {isCz ? "Zpět na přihlášení" : "Back to sign in"}
-              </button>
-            )}
+        <div className="rounded-3xl border border-white/10 bg-[rgba(20,20,20,0.75)] p-4 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold text-white">{title}</div>
+            <button
+              type="button"
+              className="text-xs text-white/70 underline underline-offset-4"
+              onClick={() => switchMode(mode === "login" ? "register" : "login")}
+            >
+              {mode === "login"
+                ? isCz
+                  ? "Nemáte účet? Registrace"
+                  : "No account? Register"
+                : isCz
+                  ? "Máte účet? Přihlásit se"
+                  : "Have an account? Sign in"}
+            </button>
           </div>
 
           {step === "form" ? (
             <>
               <div className="mt-4 grid gap-3">
                 {mode === "register" ? (
-                  <>
-                    <div>
-                      <label className="text-xs text-white/60">{isCz ? "Jméno *" : "Name *"}</label>
-                      <input
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder={isCz ? "Vaše jméno" : "Your name"}
-                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-                        autoComplete="name"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-white/60">{isCz ? "Telefon *" : "Phone *"}</label>
-                      <input
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        placeholder="+420 777 000 000"
-                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-                        inputMode="tel"
-                        autoComplete="tel"
-                      />
-                    </div>
-                  </>
+                  <Input
+                    label={isCz ? "Jméno a příjmení" : "Full name"}
+                    value={name}
+                    onChange={setName}
+                    placeholder={isCz ? "Jan Novák" : "John Smith"}
+                    autoComplete="name"
+                  />
                 ) : null}
 
-                <div>
-                  <label className="text-xs text-white/60">
-                    {mode === "register" ? (isCz ? "E-mail *" : "Email *") : mode === "forgot" ? (isCz ? "E-mail účtu *" : "Account email *") : isCz ? "Přihlašovací e-mail *" : "Login email *"}
-                  </label>
-                  <input
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@email.com"
-                    className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-                    inputMode="email"
-                    autoComplete="email"
-                    type="email"
-                  />
-                </div>
+                <Input
+                  label="E-mail"
+                  value={email}
+                  onChange={setEmail}
+                  type="email"
+                  inputMode="email"
+                  placeholder="name@email.com"
+                  autoComplete="email"
+                />
 
                 {mode !== "forgot" ? (
-                  <div>
-                    <label className="text-xs text-white/60">{isCz ? "Heslo *" : "Password *"}</label>
-                    <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
-                      <input
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder={mode === "register" ? (isCz ? "Vytvořte heslo" : "Create password") : isCz ? "Zadejte heslo" : "Enter password"}
-                        className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
-                        autoComplete={mode === "register" ? "new-password" : "current-password"}
-                        type={showPassword ? "text" : "password"}
-                      />
+                  <Input
+                    label={isCz ? "Heslo" : "Password"}
+                    value={password}
+                    onChange={setPassword}
+                    type={showPassword ? "text" : "password"}
+                    placeholder={mode === "register" ? (isCz ? "Alespoň 6 znaků" : "At least 6 characters") : undefined}
+                    autoComplete={mode === "register" ? "new-password" : "current-password"}
+                    trailing={
                       <button
                         type="button"
-                        className="text-xs font-semibold text-white/70"
-                        onClick={() => setShowPassword((v) => !v)}
+                        className="shrink-0 text-xs font-semibold text-white/60"
+                        onClick={() => setShowPassword((shown) => !shown)}
                       >
                         {showPassword ? (isCz ? "Skrýt" : "Hide") : isCz ? "Zobrazit" : "Show"}
                       </button>
-                    </div>
-                  </div>
+                    }
+                  />
                 ) : null}
 
                 {mode === "register" ? (
-                  <div>
-                    <label className="text-xs text-white/60">{isCz ? "Zopakujte heslo *" : "Repeat password *"}</label>
-                    <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
-                      <input
-                        value={passwordConfirm}
-                        onChange={(e) => setPasswordConfirm(e.target.value)}
-                        placeholder={isCz ? "Zopakujte heslo" : "Repeat password"}
-                        className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
-                        autoComplete="new-password"
-                        type={showPasswordConfirm ? "text" : "password"}
-                      />
-                      <button
-                        type="button"
-                        className="text-xs font-semibold text-white/70"
-                        onClick={() => setShowPasswordConfirm((v) => !v)}
-                      >
-                        {showPasswordConfirm ? (isCz ? "Skrýt" : "Hide") : isCz ? "Zobrazit" : "Show"}
-                      </button>
-                    </div>
-                    {!passwordsMatch && passwordConfirm ? (
-                      <div className="mt-2 text-xs text-red-200">{isCz ? "Hesla se neshodují." : "Passwords do not match."}</div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {mode === "register" ? (
-                  <label className="mt-1 flex cursor-pointer items-start gap-3 text-xs text-white/70">
+                  <label className="mt-1 flex cursor-pointer items-start gap-3 text-xs leading-5 text-white/70">
                     <input
                       type="checkbox"
                       checked={consent}
-                      onChange={(e) => setConsent(e.target.checked)}
-                      className="mt-1 h-4 w-4 rounded border-white/20 bg-black/30"
+                      onChange={(event) => setConsent(event.target.checked)}
+                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/30"
                     />
-                    <span>{isCz ? "Souhlasím se zpracováním osobních údajů *" : "I agree to personal data processing *"}</span>
+                    <span>
+                      {isCz
+                        ? "Souhlasím se zpracováním osobních údajů"
+                        : "I agree to the processing of my personal data"}
+                    </span>
                   </label>
                 ) : null}
               </div>
 
               {err ? (
-                <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs text-red-200">
+                <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs leading-5 text-red-200">
                   <div>{err}</div>
-                  {suggestedMode ? (
+                  {suggested ? (
                     <button
                       type="button"
                       className="mt-3 inline-flex h-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-semibold text-white"
-                      onClick={() => {
-                        setErr(null);
-                        setSuggestedMode(null);
-                        setCode("");
-                        setStep("form");
-                        setMode(suggestedMode);
-                      }}
+                      onClick={() => switchMode(suggested)}
                     >
-                      {suggestedMode === "login" ? (isCz ? "Přihlásit se" : "Log in") : isCz ? "Registrovat" : "Register"}
+                      {suggested === "login"
+                        ? isCz
+                          ? "Přihlásit se"
+                          : "Sign in"
+                        : isCz
+                          ? "Zaregistrovat se"
+                          : "Register"}
                     </button>
                   ) : null}
                 </div>
               ) : null}
 
-              <button
-                disabled={!canSend}
-                onClick={requestOtp}
-                className="mt-4 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black disabled:opacity-50"
-              >
+              <button disabled={!canSubmitForm} onClick={() => void submitForm()} className={`${btnPrimary} mt-4`}>
                 {busy
-                  ? mode === "register"
-                    ? isCz
-                      ? "Odesílám…"
-                      : "Sending…"
-                    : mode === "forgot"
-                    ? isCz
-                      ? "Odesílám…"
-                      : "Sending…"
-                    : isCz
-                    ? "Přihlašuji…"
-                    : "Signing in…"
+                  ? isCz
+                    ? "Moment…"
+                    : "One moment…"
                   : mode === "register"
-                  ? isCz
-                    ? "Registrovat"
-                    : "Register"
-                  : mode === "forgot"
-                  ? isCz
-                    ? "Odeslat kód"
-                    : "Send code"
-                  : isCz
-                  ? "Přihlásit se"
-                  : "Sign in"}
+                    ? isCz
+                      ? "Zaregistrovat se"
+                      : "Register"
+                    : mode === "forgot"
+                      ? isCz
+                        ? "Odeslat kód"
+                        : "Send code"
+                      : isCz
+                        ? "Přihlásit se"
+                        : "Sign in"}
               </button>
 
               {mode === "login" ? (
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => {
-                    setErr(null);
-                    setSuggestedMode(null);
-                    setStep("form");
-                    setCode("");
-                    setPassword("");
-                    setPasswordConfirm("");
-                    setMode("forgot");
-                  }}
-                  className="mt-2 w-full text-xs text-white/60 underline underline-offset-4 disabled:opacity-50"
+                  onClick={() => switchMode("forgot")}
+                  className="mt-3 w-full text-xs text-white/55 underline underline-offset-4 disabled:opacity-50"
                 >
                   {isCz ? "Zapomenuté heslo?" : "Forgot password?"}
+                </button>
+              ) : null}
+
+              {mode === "forgot" ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => switchMode("login")}
+                  className="mt-3 w-full text-xs text-white/55 underline underline-offset-4 disabled:opacity-50"
+                >
+                  {isCz ? "Zpět na přihlášení" : "Back to sign in"}
                 </button>
               ) : null}
 
@@ -709,151 +533,98 @@ export default function AuthPage() {
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={continueWithoutAccount}
-                  className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/80 hover:text-white disabled:opacity-50"
+                  onClick={() => setAnonOpen(true)}
+                  className={`${btnGhost} mt-2`}
                 >
-                  {isCz ? "Pokračovat bez registrace" : "Continue without registration"}
+                  {isCz ? "Pokračovat bez registrace" : "Continue without an account"}
                 </button>
               ) : null}
             </>
           ) : (
             <>
+              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3 text-xs leading-5 text-white/65">
+                {isCz ? "Poslali jsme kód na" : "We sent a code to"}{" "}
+                <span className="font-semibold text-white">{email.trim()}</span>
+              </div>
+
               {devCode ? (
-                <div className="mt-4 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-3 text-center">
+                <div className="mt-3 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-3 text-center">
                   <div className="text-[10px] uppercase tracking-[0.18em] text-amber-200/70">
-                    {isCz ? "Demo režim · kód" : "Demo mode · code"}
+                    {isCz ? "Vývojový režim" : "Development mode"}
                   </div>
                   <div className="mt-1 text-2xl font-bold tracking-[0.3em] text-amber-100">{devCode}</div>
-                  <div className="mt-1 text-[11px] text-amber-100/70">
-                    {isCz ? "E-mail není nastaven, kód je zde." : "Email isn't configured — your code is here."}
-                  </div>
                 </div>
               ) : null}
 
-              <div className="mt-4">
-                <div className="text-xs text-white/60">
-                  {mode === "forgot" ? (isCz ? "Kód pro obnovu hesla" : "Password reset code") : isCz ? "E-mailový kód" : "Email code"}
-                </div>
-                <input
+              <div className="mt-3 grid gap-3">
+                <Input
+                  label={isCz ? "Kód z e-mailu" : "Code from the email"}
                   value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  placeholder="123456"
-                  className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
+                  onChange={setCode}
                   inputMode="numeric"
+                  placeholder="123456"
                   autoComplete="one-time-code"
                 />
 
                 {mode === "forgot" ? (
-                  <div className="mt-3 grid gap-3">
-                    <div>
-                      <label className="text-xs text-white/60">{isCz ? "Nové heslo *" : "New password *"}</label>
-                      <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
-                        <input
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder={isCz ? "Vytvořte nové heslo" : "Create new password"}
-                          className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
-                          autoComplete="new-password"
-                          type={showPassword ? "text" : "password"}
-                        />
-                        <button
-                          type="button"
-                          className="text-xs font-semibold text-white/70"
-                          onClick={() => setShowPassword((v) => !v)}
-                        >
-                          {showPassword ? (isCz ? "Skrýt" : "Hide") : isCz ? "Zobrazit" : "Show"}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-white/60">{isCz ? "Zopakujte nové heslo *" : "Repeat new password *"}</label>
-                      <div className="mt-2 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4">
-                        <input
-                          value={passwordConfirm}
-                          onChange={(e) => setPasswordConfirm(e.target.value)}
-                          placeholder={isCz ? "Zopakujte nové heslo" : "Repeat new password"}
-                          className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
-                          autoComplete="new-password"
-                          type={showPasswordConfirm ? "text" : "password"}
-                        />
-                        <button
-                          type="button"
-                          className="text-xs font-semibold text-white/70"
-                          onClick={() => setShowPasswordConfirm((v) => !v)}
-                        >
-                          {showPasswordConfirm ? (isCz ? "Skrýt" : "Hide") : isCz ? "Zobrazit" : "Show"}
-                        </button>
-                      </div>
-                      {!passwordsMatch && passwordConfirm ? (
-                        <div className="mt-2 text-xs text-red-200">{isCz ? "Hesla se neshodují." : "Passwords do not match."}</div>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-
-                {err ? (
-                  <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs text-red-200">
-                    <div>{err}</div>
-                    {suggestedMode ? (
+                  <Input
+                    label={isCz ? "Nové heslo" : "New password"}
+                    value={password}
+                    onChange={setPassword}
+                    type={showPassword ? "text" : "password"}
+                    placeholder={isCz ? "Alespoň 6 znaků" : "At least 6 characters"}
+                    autoComplete="new-password"
+                    trailing={
                       <button
                         type="button"
-                        className="mt-3 inline-flex h-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-semibold text-white"
-                        onClick={() => {
-                          setErr(null);
-                          setSuggestedMode(null);
-                          setCode("");
-                          setStep("form");
-                          setMode(suggestedMode);
-                        }}
+                        className="shrink-0 text-xs font-semibold text-white/60"
+                        onClick={() => setShowPassword((shown) => !shown)}
                       >
-                        {suggestedMode === "login" ? (isCz ? "Přihlásit se" : "Log in") : isCz ? "Registrovat" : "Register"}
+                        {showPassword ? (isCz ? "Skrýt" : "Hide") : isCz ? "Zobrazit" : "Show"}
                       </button>
-                    ) : null}
-                  </div>
+                    }
+                  />
                 ) : null}
               </div>
 
-              <button
-                disabled={!canVerify}
-                onClick={verifyOtp}
-                className="mt-4 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black disabled:opacity-50"
-              >
+              {err ? (
+                <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 p-3 text-xs leading-5 text-red-200">
+                  {err}
+                </div>
+              ) : null}
+
+              <button disabled={!canSubmitCode} onClick={() => void submitCode()} className={`${btnPrimary} mt-4`}>
                 {busy
-                  ? mode === "forgot"
-                    ? isCz
-                      ? "Aktualizuji…"
-                      : "Updating…"
-                    : isCz
-                    ? "Ověřuji…"
-                    : "Verifying…"
-                  : mode === "forgot"
                   ? isCz
-                    ? "Uložit nové heslo"
-                    : "Save new password"
-                  : isCz
-                  ? "Potvrdit"
-                  : "Confirm"}
+                    ? "Moment…"
+                    : "One moment…"
+                  : mode === "forgot"
+                    ? isCz
+                      ? "Uložit heslo"
+                      : "Save password"
+                    : isCz
+                      ? "Potvrdit"
+                      : "Confirm"}
               </button>
 
               <button
                 type="button"
                 disabled={busy}
-                onClick={requestOtp}
-                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/80 hover:text-white disabled:opacity-50"
+                onClick={() => void submitForm()}
+                className={`${btnGhost} mt-2`}
               >
-                {isCz ? "Odeslat kód znovu" : "Send code again"}
+                {isCz ? "Poslat kód znovu" : "Send the code again"}
               </button>
 
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => {
-                  setErr(null);
+                  resetErrors();
                   setStep("form");
                   setCode("");
                 }}
-                className="mt-2 text-xs text-white/60 underline underline-offset-4"
+                className="mt-3 w-full text-xs text-white/55 underline underline-offset-4 disabled:opacity-50"
               >
                 {isCz ? "Zpět" : "Back"}
               </button>

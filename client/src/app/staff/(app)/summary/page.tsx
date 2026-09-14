@@ -3,8 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  getStaffSummary,
-  type StaffSummary,
   getCurrentShift,
   openShift,
   joinShift,
@@ -12,57 +10,16 @@ import {
   type ActiveShift,
 } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
-import { ensurePushSubscribed, rebindPushIfPossible } from "@/lib/staffPush";
-import { armAudio } from "@/lib/staffAlerts";
 import { useStaffSession } from "@/providers/staffSession";
 import { useToast } from "@/providers/toast";
-import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
-import { StaffTraining } from "@/components/staff/StaffTraining";
-
-function StatCard({
-  title,
-  value,
-  hint,
-  href,
-  tone,
-}: {
-  title: string;
-  value: number;
-  hint: string;
-  href: string;
-  tone: "emerald" | "amber" | "sky";
-}) {
-  const active = value > 0;
-  const ring = active
-    ? {
-        emerald: "border-emerald-400/45 bg-emerald-500/12",
-        amber: "border-amber-400/45 bg-amber-400/12",
-        sky: "border-sky-400/45 bg-sky-500/12",
-      }[tone]
-    : "border-white/10 bg-white/6";
-  const num = active
-    ? { emerald: "text-emerald-200", amber: "text-amber-200", sky: "text-sky-200" }[tone]
-    : "text-white";
-  return (
-    <Link
-      href={href}
-      className={`rounded-[24px] border p-4 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur transition active:scale-[0.98] hover:brightness-110 ${ring}`}
-    >
-      <div className="text-xs text-white/55">{title}</div>
-      <div className={`mt-2 text-3xl font-bold ${num}`}>{value}</div>
-      <div className="mt-2 text-xs text-white/40">{hint} ›</div>
-    </Link>
-  );
-}
+import { NotificationSetup } from "@/components/staff/NotificationSetup";
 
 const card =
   "rounded-[28px] border border-white/10 bg-white/6 p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl";
-const btn =
-  "rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-50";
 const btnPrimary =
-  "rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-white/90 disabled:opacity-50";
+  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.99] disabled:opacity-50";
 const btnGhost =
-  "rounded-2xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white";
+  "h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50";
 
 function roleLabel(role?: string) {
   if (role === "WAITER") return "Официант";
@@ -72,33 +29,18 @@ function roleLabel(role?: string) {
   return role ?? "Персонал";
 }
 
-function humanizePushError(error?: string | null) {
-  if (!error) return "Не удалось включить уведомления";
-  if (error.includes("IOS_HOME_SCREEN_REQUIRED")) {
-    return "На iPhone/iPad откройте приложение с экрана Домой: обычная вкладка браузера не может держать боевые web push на заблокированном экране.";
-  }
-  if (error.includes("NOT_ALLOWED")) {
-    return "Разрешение на уведомления не выдано.";
-  }
-  return error;
-}
-
-export default function StaffSummaryPage() {
+export default function StaffShiftPage() {
   const { staff } = useStaffSession();
   const { push } = useToast();
 
-  const [data, setData] = useState<StaffSummary | null>(null);
   const [shift, setShift] = useState<ActiveShift | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [last, setLast] = useState<number | null>(null);
-  const [pushStatus, setPushStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [trainingOpen, setTrainingOpen] = useState(false);
 
   const isAdmin = staff?.role === "ADMIN";
   const isManager = staff?.role === "MANAGER";
 
-  const loadShift = async () => {
+  const load = async () => {
     const r = await getCurrentShift();
     if (!r.ok) {
       if (r.status === 401) setErr("Нужен вход");
@@ -107,251 +49,133 @@ export default function StaffSummaryPage() {
     setShift(r.data.shift);
   };
 
-  const loadSummary = async (opts?: { silent?: boolean }) => {
-    const silent = opts?.silent ?? false;
-    if (!silent) setErr(null);
-
-    const r = await getStaffSummary();
-
-    if (!r.ok) {
-      if (r.status === 409) {
-        setData({ newOrders: 0, newCalls: 0, pendingPayments: 0 });
-        return;
-      }
-
-      if (!silent) setErr(r.error || "Ошибка");
-      return;
-    }
-
-    setData(r.data);
-    setLast(Date.now());
-  };
-
-  const loadAll = async (opts?: { silent?: boolean }) => {
-    await Promise.all([loadShift(), loadSummary(opts)]);
-  };
-
-  const { tick } = usePolling(() => loadAll({ silent: true }), {
-    activeMs: 10000,
-    idleMs: 30000,
+  usePolling(() => load(), {
+    activeMs: 15000,
+    idleMs: 45000,
     immediate: false,
     enabled: !isAdmin,
   });
 
   useEffect(() => {
-    async function boot() {
-      await loadAll({ silent: false });
-      await rebindPushIfPossible();
-    }
-    void boot();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void load();
   }, []);
 
-  useStaffPushEvents((payload) => {
-    if (
-      payload.kind === "CALL_CREATED" ||
-      payload.kind === "GUEST_MESSAGE" ||
-      payload.kind === "ORDER_CREATED" ||
-      payload.kind === "PAYMENT_REQUESTED"
-    ) {
-      void tick();
-    }
-  });
+  type ShiftAction = () => Promise<{ ok: true } | { ok: false; error: string }>;
 
-  const onEnableNotifications = async () => {
-    setPushStatus(null);
-    setErr(null);
-
-    const r = await ensurePushSubscribed();
-    if (!r.ok) {
-      const message = humanizePushError(r.error);
-      setErr(message);
-      push({
-        kind: "error",
-        title: "Ошибка",
-        message,
-      });
-      return;
-    }
-
-    await armAudio();
-    setPushStatus("Уведомления включены");
-    push({ kind: "success", title: "Готово", message: "Уведомления включены" });
-  };
-
-  const onOpenShift = async () => {
+  const run = async (action: ShiftAction, okTitle: string) => {
     setBusy(true);
     setErr(null);
-
-    const r = await openShift();
+    const r = await action();
     setBusy(false);
 
     if (!r.ok) {
-      setErr(r.error || "Не удалось открыть смену");
+      setErr(r.error || "Не удалось выполнить действие");
       return;
     }
 
-    push({ kind: "success", title: "Смена открыта" });
-    await loadAll({ silent: false });
-  };
-
-  const onJoinShift = async () => {
-    setBusy(true);
-    setErr(null);
-
-    const r = await joinShift();
-    setBusy(false);
-
-    if (!r.ok) {
-      setErr(r.error || "Не удалось войти в смену");
-      return;
-    }
-
-    push({ kind: "success", title: "Вы вошли в смену" });
-    await loadAll({ silent: false });
-  };
-
-  const onCloseShift = async () => {
-    if (!confirm("Закрыть текущую смену?")) return;
-
-    setBusy(true);
-    setErr(null);
-
-    const r = await closeShift();
-    setBusy(false);
-
-    if (!r.ok) {
-      setErr(r.error || "Не удалось закрыть смену");
-      return;
-    }
-
-    push({ kind: "success", title: "Смена закрыта" });
-    await loadAll({ silent: false });
+    push({ kind: "success", title: okTitle });
+    await load();
   };
 
   const participants = shift?.participants ?? [];
-  const isInShift = !!staff && participants.some((p) => p.staffId === staff.id && p.role === staff.role);
+  const isInShift = !!staff && participants.some((p) => p.staffId === staff.id);
 
   if (isAdmin) {
     return (
       <div className={card}>
-        <div className="text-lg font-semibold">Режим администратора</div>
+        <div className="text-lg font-semibold text-white">Режим администратора</div>
         <div className="mt-2 text-sm text-white/60">
           Ваш раздел — консоль: статистика по точкам, редактор меню и список гостей с бонусами.
         </div>
-
-        <div className="mt-4">
-          <Link
-            href="/staff/admin"
-            className="inline-flex rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black"
-          >
-            Открыть
-          </Link>
-        </div>
+        <Link
+          href="/staff/admin"
+          className="mt-4 inline-flex rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black"
+        >
+          Открыть
+        </Link>
       </div>
     );
   }
 
   return (
-    <div>
+    <div className="space-y-4">
       <div className={card}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-xl font-semibold">Главная</div>
-              <div className="mt-1 text-xs text-white/50">
-                {roleLabel(staff?.role)}
-                {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
-              </div>
-              <div className="mt-2">
-                {shift ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-500/12 px-3 py-1 text-xs font-semibold text-emerald-200">
-                    <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                    Смена открыта · {new Date(shift.openedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-200">
-                    <span className="h-2 w-2 rounded-full bg-amber-400" />
-                    Смена не открыта
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <button className={btnGhost} onClick={() => void tick()}>
-              Обновить
-            </button>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xl font-semibold text-white">Смена</div>
+            <div className="mt-1 text-xs text-white/50">{roleLabel(staff?.role)}</div>
           </div>
 
-          <div className="mt-4 grid gap-2">
+          {shift ? (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-500/12 px-3 py-1 text-xs font-semibold text-emerald-200">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              Открыта с {new Date(shift.openedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          ) : (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-200">
+              <span className="h-2 w-2 rounded-full bg-amber-400" />
+              Не открыта
+            </span>
+          )}
+        </div>
+
+        <div className="mt-4 grid gap-2">
+          {!shift && isManager ? (
+            <button className={btnPrimary} disabled={busy} onClick={() => void run(openShift, "Смена открыта")}>
+              Открыть смену
+            </button>
+          ) : null}
+
+          {!shift && !isManager ? (
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/55">
+              Дождитесь, пока менеджер откроет смену.
+            </div>
+          ) : null}
+
+          {shift && !isInShift ? (
+            <button className={btnPrimary} disabled={busy} onClick={() => void run(joinShift, "Вы вошли в смену")}>
+              Войти в смену
+            </button>
+          ) : null}
+
+          {shift && isManager ? (
             <button
-              className="flex items-center justify-center gap-2 rounded-2xl border border-sky-400/25 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-100 transition hover:bg-sky-500/15"
-              onClick={() => setTrainingOpen(true)}
+              className={btnGhost}
+              disabled={busy}
+              onClick={() => {
+                if (!confirm("Закрыть смену? Все столы будут отключены.")) return;
+                void run(closeShift, "Смена закрыта");
+              }}
             >
-              <span className="grid h-5 w-5 place-items-center rounded-full border border-sky-300/40 bg-sky-400/10 text-[11px] font-bold">
-                ?
-              </span>
-              Обучение — как работать в панели
+              Закрыть смену
             </button>
+          ) : null}
+        </div>
 
-            <button className={btn} onClick={onEnableNotifications}>
-              Включить уведомления
-            </button>
-
-            {!shift && isManager ? (
-              <button className={btnPrimary} disabled={busy} onClick={onOpenShift}>
-                Открыть смену
-              </button>
-            ) : null}
-
-            {shift && !isInShift ? (
-              <button className={btnPrimary} disabled={busy} onClick={onJoinShift}>
-                Войти в смену
-              </button>
-            ) : null}
-
-            {shift && isManager ? (
-              <button className={btnGhost} disabled={busy} onClick={onCloseShift}>
-                Закрыть смену
-              </button>
-            ) : null}
+        {participants.length ? (
+          <div className="mt-4 border-t border-white/8 pt-3">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-white/40">В смене</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {participants.map((p) => (
+                <span
+                  key={p.id}
+                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80"
+                >
+                  {p.staff?.username ?? p.staffId} · {roleLabel(p.role)}
+                </span>
+              ))}
+            </div>
           </div>
+        ) : null}
 
-          {shift?.participants?.length ? (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3">
-              <div className="text-xs text-white/50">Кто сейчас в смене</div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {shift.participants.map((p) => (
-                  <div
-                    key={p.id}
-                    className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/85"
-                  >
-                    {p.staff?.username ?? p.staffId} • {roleLabel(p.role)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
+        {err ? (
+          <div className="mt-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
+            {err}
+          </div>
+        ) : null}
+      </div>
 
-          {pushStatus ? (
-            <div className="mt-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-sm text-emerald-100">
-              {pushStatus}
-            </div>
-          ) : null}
-
-          {err ? (
-            <div className="mt-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
-              {err}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          <StatCard title="Заказы" value={data?.newOrders ?? 0} hint="Готовятся" href="/staff/orders" tone="emerald" />
-          <StatCard title="Вызовы" value={data?.newCalls ?? 0} hint="Подойти" href="/staff/calls" tone="amber" />
-          <StatCard title="Оплаты" value={data?.pendingPayments ?? 0} hint="Рассчитать" href="/staff/payments" tone="sky" />
-        </div>
-
-      <StaffTraining open={trainingOpen} onClose={() => setTrainingOpen(false)} />
+      <NotificationSetup />
     </div>
   );
 }

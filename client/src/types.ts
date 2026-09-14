@@ -32,18 +32,18 @@ export type CartItem = {
   comment?: string;
 };
 
-export type AuthMeResponse =
-  | { authenticated: false }
-  | {
-      authenticated: true;
-      user: {
-        id: string;
-        name: string;
-        phone: string;
-        email: string;
-        role: string;
-      };
-    };
+export type GuestUser = {
+  id: string;
+  name: string;
+  email: string | null;
+  /** Optional — registration never asks for it. */
+  phone: string | null;
+  /** Loyalty card number, assigned once at registration. */
+  cardNumber: string;
+  role: string;
+};
+
+export type AuthMeResponse = { authenticated: false } | { authenticated: true; user: GuestUser };
 
 export type AccountReceipt = {
   id: string;
@@ -82,8 +82,10 @@ export type AccountOverviewResponse = {
   user: {
     id: string;
     name: string;
+    /** Empty string when the guest never gave a number. */
     phone: string;
     email: string;
+    cardNumber: string;
     role: string;
     privacyAcceptedAt: string | null;
     createdAt: string;

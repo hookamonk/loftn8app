@@ -7,6 +7,7 @@ import { requireStaffAuth } from "./staff.middleware";
 import { HttpError } from "../../utils/httpError";
 import { pushToStaff } from "./push.service";
 import { env } from "../../config/env";
+import { rateLimit } from "../../middleware/rateLimit";
 
 export const staffPushRouter = Router();
 
@@ -95,29 +96,37 @@ const TestSendSchema = z.object({
   url: z.string().max(200).optional(),
 });
 
-const devSendHandler = asyncHandler(async (req, res) => {
-  if (env.NODE_ENV === "production") {
-    throw new HttpError(404, "NOT_FOUND", "Not found");
-  }
+// Staff must be able to verify on their OWN phone that notifications really
+// arrive — including in production. Safe by construction: it requires a valid
+// staff session and only ever pushes to that same staff member's devices.
+const testSendLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 5,
+  keyPrefix: "push-test",
+  message: "Слишком часто. Подождите минуту и попробуйте снова.",
+});
 
+const testSendHandler = asyncHandler(async (req, res) => {
   const staffId = req.staff!.staffId;
 
-  const title = (req.body as any)?.title ?? "Test push";
-  const body = (req.body as any)?.body ?? `Hello from server • ${new Date().toLocaleString()}`;
+  const title = (req.body as any)?.title ?? "LOFT№8 — проверка";
+  const body =
+    (req.body as any)?.body ??
+    `Уведомления работают. ${new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`;
   const url = (req.body as any)?.url ?? "/staff/summary";
 
-  // tag push
   const { sent, failed, removed } = await pushToStaff(staffId, {
     title,
     body,
     url,
-    tag: `dev_test:${Date.now()}`,
+    tag: `push_test:${Date.now()}`,
     ts: Date.now(),
+    kind: "CALL_CREATED",
+    vibrate: [200, 100, 200],
   });
 
   res.json({ ok: true, sent, failed, removed });
 });
 
-
-staffPushRouter.post("/dev/send-test", requireStaffAuth, validate(TestSendSchema), devSendHandler);
-staffPushRouter.post("/test-send", requireStaffAuth, validate(TestSendSchema), devSendHandler);
+staffPushRouter.post("/test-send", requireStaffAuth, testSendLimiter, validate(TestSendSchema), testSendHandler);
+staffPushRouter.post("/dev/send-test", requireStaffAuth, testSendLimiter, validate(TestSendSchema), testSendHandler);

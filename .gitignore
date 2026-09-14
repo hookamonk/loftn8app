@@ -5,6 +5,9 @@ server/node_modules/
 client/.next/
 server/dist/
 server/.env
+# Real secrets for the docker-compose deploy — never commit.
+# Copy server/.env.docker.example and fill it in locally.
+server/.env.docker
 server/backups/
 **/*.tsbuildinfo
 client/.vercel/

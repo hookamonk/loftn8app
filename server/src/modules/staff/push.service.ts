@@ -270,7 +270,8 @@ export async function notifyCallCreated(callId: string) {
   const venueId = call.table.venueId;
   const tableCode = publicTableCode(call.table.code);
   const venueSlug = publicVenueSlug(call.table.venue.slug);
-  const isOrderRequest = call.type === "HELP" && isOrderRequestMessage(call.message);
+  // "Call the waiter" from the guest menu IS the request to order.
+  const isOrderRequest = call.type === "WAITER" || isOrderRequestMessage(call.message);
 
   const messagePreview = normalizeCallMessage(call.type, call.message);
   const isMessageOnly = call.type === "HELP" && !!messagePreview;
@@ -278,30 +279,32 @@ export async function notifyCallCreated(callId: string) {
   // Emit SSE with the SAME kind the push uses, so the in-app alert plays the
   // right tone (a guest message sounds different from a service call).
   emitStaffEvent(venueId, {
-    kind: isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
+    kind: isOrderRequest ? "ORDER_CREATED" : isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
     tableCode,
     tag: `call_new:${call.id}`,
   });
 
+  // An order request is taken by a waiter (manager is always notified too); a
+  // plain guest message goes to waiter + hookah.
   const roles: StaffRole[] = ["MANAGER"];
-  if (call.type === "HOOKAH") roles.push("HOOKAH");
-  if (call.type === "WAITER") roles.push("WAITER");
-  // Order request → waiter + manager take it; a plain guest message/help →
-  // waiter + hookah (manager is always notified via the base role above).
-  if (call.type === "HELP") roles.push("WAITER", isOrderRequest ? "MANAGER" : "HOOKAH");
-  if (call.type === "BILL") roles.push("WAITER");
+  if (isOrderRequest) roles.push("WAITER");
+  else if (call.type === "HOOKAH") roles.push("HOOKAH");
+  else if (call.type === "BILL") roles.push("WAITER");
+  else roles.push("WAITER", "HOOKAH");
 
   const kind =
     call.type === "HOOKAH"
       ? "Нужен кальянщик"
-      : call.type === "WAITER"
-      ? "Нужен официант"
       : call.type === "BILL"
       ? "Запрос оплаты"
       : "Нужна помощь";
-  const title = isOrderRequest ? "Order requested" : isMessageOnly ? "Новое сообщение от гостя" : "Новый вызов";
+  const title = isOrderRequest
+    ? "Новый заказ"
+    : isMessageOnly
+    ? "Сообщение от гостя"
+    : "Новый вызов";
   const body = isOrderRequest
-    ? `Table ${tableCode} wants to place an order`
+    ? `Стол ${tableCode} готов заказать`
     : isMessageOnly
     ? `Стол ${tableCode} • ${messagePreview}`
     : messagePreview
@@ -311,10 +314,10 @@ export async function notifyCallCreated(callId: string) {
   await pushToVenueRoles(venueId, Array.from(new Set(roles)), {
     title,
     body,
-    url: "/staff/calls",
+    url: isOrderRequest ? "/staff/orders" : "/staff/calls",
     tag: `call_new:${call.id}`,
     ts: Date.now(),
-    kind: isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
+    kind: isOrderRequest ? "ORDER_CREATED" : isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
     message: messagePreview ?? undefined,
     tableCode,
     venueId,
@@ -330,6 +333,7 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
       id: true,
       status: true,
       method: true,
+      tableId: true,
       table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
     },
   });
@@ -349,7 +353,7 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
     title: "Запрос оплаты",
     body: `${pr.method === "CARD" ? "Карта" : "Наличные"} • Стол ${publicTableCode(pr.table.code)}`,
-    url: "/staff/payments",
+    url: `/staff/tables/${pr.tableId}`,
     tag: `payment_pending:${pr.id}`,
     ts: Date.now(),
     kind: "PAYMENT_REQUESTED",
@@ -369,6 +373,7 @@ export async function notifyPaymentMethodChanged(paymentRequestId: string) {
       id: true,
       status: true,
       method: true,
+      tableId: true,
       table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
     },
   });
@@ -386,7 +391,7 @@ export async function notifyPaymentMethodChanged(paymentRequestId: string) {
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
     title: "Способ оплаты изменён",
     body: `Стол ${tableCode} • теперь ${pr.method === "CARD" ? "Карта" : "Наличные"}`,
-    url: "/staff/payments",
+    url: `/staff/tables/${pr.tableId}`,
     tag: `payment_method:${pr.id}`,
     ts: Date.now(),
     kind: "PAYMENT_REQUESTED",

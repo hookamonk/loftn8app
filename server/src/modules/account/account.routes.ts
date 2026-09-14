@@ -13,9 +13,10 @@ import { effectiveAvailableAt, summarizeLoyalty } from "../../utils/loyalty";
 export const accountRouter = Router();
 
 const UpdateProfileSchema = z.object({
-  name: z.string().min(1),
-  phone: z.string().min(6),
-  email: z.string().min(3),
+  name: z.string().trim().min(1).max(120),
+  // Optional: registration never asks for it, the guest may add it later.
+  phone: z.string().trim().max(40).optional(),
+  email: z.string().trim().min(3).max(200),
 });
 
 const ChangePasswordSchema = z.object({
@@ -60,8 +61,9 @@ function paymentMethodLabel(method: PaymentMethod) {
 function serializeUser(user: {
   id: string;
   name: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
+  cardNumber: string;
   role: string;
   privacyAcceptedAt: Date | null;
   createdAt: Date;
@@ -69,8 +71,9 @@ function serializeUser(user: {
   return {
     id: user.id,
     name: user.name,
-    phone: user.phone,
+    phone: user.phone ?? "",
     email: user.email ?? "",
+    cardNumber: user.cardNumber,
     role: user.role,
     privacyAcceptedAt: user.privacyAcceptedAt,
     createdAt: user.createdAt,
@@ -125,6 +128,7 @@ accountRouter.get(
           name: true,
           phone: true,
           email: true,
+          cardNumber: true,
           role: true,
           privacyAcceptedAt: true,
           createdAt: true,
@@ -225,7 +229,7 @@ accountRouter.patch(
   asyncHandler(async (req, res) => {
     const authUser = req.user!;
     const name = String((req.body as any).name ?? "").trim();
-    const phone = normalizePhone(String((req.body as any).phone ?? ""));
+    const phone = normalizePhone(String((req.body as any).phone ?? "")) || null;
     const email = assertEmail(normalizeEmail((req.body as any).email));
 
     if (!name) {
@@ -233,7 +237,8 @@ accountRouter.patch(
     }
 
     const [phoneOwner, emailOwner] = await Promise.all([
-      prisma.user.findUnique({ where: { phone } }),
+      // Only a real number can clash — many guests legitimately have none.
+      phone ? prisma.user.findUnique({ where: { phone } }) : Promise.resolve(null),
       prisma.user.findUnique({ where: { email } }).catch(() => null),
     ]);
 
@@ -257,6 +262,7 @@ accountRouter.patch(
         name: true,
         phone: true,
         email: true,
+        cardNumber: true,
         role: true,
         privacyAcceptedAt: true,
         createdAt: true,

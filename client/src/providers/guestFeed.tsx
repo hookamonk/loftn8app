@@ -133,8 +133,15 @@ type GuestFeedState = {
 
 const Ctx = createContext<GuestFeedState | null>(null);
 
+// The menu needs the feed too: its "call the waiter" button shows the LIVE
+// state of the request (sent → waiter on the way), not a local timer.
 function isGuestSurface(pathname: string) {
-  return pathname === "/cart" || pathname === "/call" || pathname === "/profile";
+  return (
+    pathname === "/menu" ||
+    pathname === "/cart" ||
+    pathname === "/call" ||
+    pathname === "/profile"
+  );
 }
 
 export function GuestFeedProvider({ children }: { children: React.ReactNode }) {

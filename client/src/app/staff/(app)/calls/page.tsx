@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { listCalls, updateCallStatus, type StaffCall, type CallStatus } from "@/lib/staffApi";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { listCalls, updateCallStatus, type StaffCall } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
@@ -10,7 +9,12 @@ import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 import { WaitBadge, TONE_BORDER, waitInfo, queueCardBase } from "@/lib/staffQueue";
 
-const STATUSES: CallStatus[] = ["NEW", "ACKED", "DONE"];
+/**
+ * Service calls only — hookah, free-text messages and "bring me the bill".
+ * A guest asking to ORDER is not a call: it lands in the Orders tab instead.
+ *
+ * One list, one button: tap «Принять» and the card is gone.
+ */
 
 const TYPE_CHIP: Record<StaffCall["type"], string> = {
   WAITER: "bg-sky-500/20 text-sky-200",
@@ -19,72 +23,48 @@ const TYPE_CHIP: Record<StaffCall["type"], string> = {
   HELP: "bg-amber-500/20 text-amber-200",
 };
 
-function statusLabel(s: CallStatus) {
-  if (s === "NEW") return "Новые";
-  if (s === "ACKED") return "Взяты";
-  return "Завершены";
-}
-
-function typeLabel(t: StaffCall["type"]) {
-  if (t === "WAITER") return "Официант";
-  if (t === "HOOKAH") return "Кальянщик";
-  if (t === "BILL") return "Оплата";
-  return "Помощь";
-}
-
-function nextAction(s: CallStatus) {
-  if (s === "NEW") return { status: "ACKED" as CallStatus, label: "Взять в работу" };
-  if (s === "ACKED") return { status: "DONE" as CallStatus, label: "Завершить" };
-  return null;
+function typeLabel(type: StaffCall["type"]) {
+  if (type === "HOOKAH") return "Кальян";
+  if (type === "BILL") return "Оплата";
+  if (type === "WAITER") return "Официант";
+  return "Сообщение";
 }
 
 const card =
   "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
-const btn =
-  "rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-50";
 const btnPrimary =
-  "rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-white/90 disabled:opacity-50";
-const btnGhost =
-  "rounded-2xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white";
+  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
 
 export default function StaffCallsPage() {
-  const router = useRouter();
-  const [status, setStatus] = useState<CallStatus>("NEW");
+  const { push } = useToast();
+
   const [calls, setCalls] = useState<StaffCall[]>([]);
   const [err, setErr] = useState<string | null>(null);
-  const [last, setLast] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const { push } = useToast();
+
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 15000);
-    return () => clearInterval(t);
+    const timer = window.setInterval(() => setNow(Date.now()), 15000);
+    return () => window.clearInterval(timer);
   }, []);
 
-  // Oldest-waiting first for active calls — most urgent on top.
-  const sortedCalls =
-    status === "DONE"
-      ? calls
-      : [...calls].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-
-  const load = async (opts?: { silent?: boolean }) => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
     if (!silent) setLoading(true);
-    setErr(null);
 
-    const r = await listCalls(status);
+    const result = await listCalls("NEW");
 
     if (!silent) setLoading(false);
 
-    if (!r.ok) {
-      setErr(r.error);
+    if (!result.ok) {
+      setErr(result.error);
       return;
     }
 
-    setCalls(r.data.calls);
-    setLast(Date.now());
-  };
+    setErr(null);
+    setCalls(result.data.calls);
+  }, []);
 
   const { tick } = usePolling(() => load({ silent: true }), {
     activeMs: 8000,
@@ -95,91 +75,54 @@ export default function StaffCallsPage() {
 
   useEffect(() => {
     void load({ silent: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [load]);
 
   useStaffPushEvents((payload) => {
-    if (payload.kind === "CALL_CREATED" || payload.kind === "GUEST_MESSAGE") {
-      void tick();
-    }
+    if (payload.kind === "CALL_CREATED" || payload.kind === "GUEST_MESSAGE") void tick();
   });
 
   useStaffEvents((e) => {
-    if (e.kind === "CALL_CREATED" || e.kind === "DATA_CHANGED") {
-      void tick();
-    }
+    if (e.kind === "CALL_CREATED" || e.kind === "GUEST_MESSAGE" || e.kind === "DATA_CHANGED") void tick();
   });
 
-  const setTo = async (id: string, st: CallStatus, okText: string) => {
-    setBusyId(id);
-    const r = await updateCallStatus(id, st);
+  // Longest wait on top.
+  const sorted = useMemo(
+    () => [...calls].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
+    [calls]
+  );
+
+  const accept = async (call: StaffCall) => {
+    setBusyId(call.id);
+    // Optimistic: the card disappears immediately, the poll confirms it.
+    setCalls((current) => current.filter((c) => c.id !== call.id));
+
+    const result = await updateCallStatus(call.id, "DONE");
     setBusyId(null);
 
-    if (!r.ok) {
-      push({ kind: "error", title: "Ошибка", message: r.error });
+    if (!result.ok) {
+      push({ kind: "error", title: "Ошибка", message: result.error });
+      await load({ silent: true });
       return;
     }
 
-    push({ kind: "success", title: "Готово", message: okText });
-    emitStaffLiveSync("call-status-updated");
-    await load({ silent: false });
-  };
-
-  // «Подключиться к столу» — берёт вызов в работу (если ещё новый) и открывает
-  // стол, чтобы сразу пробить на него заказ.
-  const connectToTable = async (c: StaffCall) => {
-    setBusyId(c.id);
-
-    if (c.status === "NEW") {
-      const r = await updateCallStatus(c.id, "ACKED");
-      if (!r.ok) {
-        setBusyId(null);
-        push({ kind: "error", title: "Ошибка", message: r.error });
-        return;
-      }
-      emitStaffLiveSync("call-status-updated");
-    }
-
-    setBusyId(null);
-    router.push(`/staff/tables/${c.table.id}`);
+    emitStaffLiveSync("call-accepted");
+    await load({ silent: true });
   };
 
   return (
     <div>
       <div className={card}>
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-xl font-semibold text-white">Вызовы</div>
-            <div className="mt-1.5 text-xs text-white/55">
-              Вызовов: {calls.length}
-              {last ? ` • обновлено ${new Date(last).toLocaleTimeString()}` : ""}
-            </div>
-          </div>
-
-          <button className={btnGhost} onClick={() => void tick()}>
-            Обновить
-          </button>
-        </div>
-
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-          {STATUSES.map((s) => (
-            <button
-              key={s}
-              className={[
-                "whitespace-nowrap rounded-2xl border px-4 py-2 text-sm transition",
-                s === status
-                  ? "border-white/20 bg-white text-black"
-                  : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
-              ].join(" ")}
-              onClick={() => setStatus(s)}
-            >
-              {statusLabel(s)}
-            </button>
-          ))}
+          <div className="text-xl font-semibold text-white">Вызовы</div>
+          {calls.length > 0 ? (
+            <span className="shrink-0 rounded-full bg-white px-2.5 py-0.5 text-[11px] font-bold text-black">
+              {calls.length}
+            </span>
+          ) : null}
         </div>
 
         {err ? (
-          <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
+          <div className="mt-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
             {err}
           </div>
         ) : null}
@@ -188,82 +131,49 @@ export default function StaffCallsPage() {
       {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
 
       <div className="mt-4 space-y-3">
-        {sortedCalls.map((c) => {
-          const action = nextAction(c.status);
-          const active = c.status !== "DONE";
-
-          return (
-            <div
-              key={c.id}
-              className={active ? `${queueCardBase} ${TONE_BORDER[waitInfo(c.createdAt, now).tone]}` : card}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs text-white/45">
-                    {new Date(c.createdAt).toLocaleString()} • {statusLabel(c.status)}
-                  </div>
-
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
-                    <div className="text-lg font-semibold text-white">
-                      Стол {c.table.code}
-                      {c.table.label ? ` • ${c.table.label}` : ""}
-                    </div>
-                    {active ? <WaitBadge createdAt={c.createdAt} now={now} /> : null}
-                  </div>
-
-                  <div className="mt-2">
-                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${TYPE_CHIP[c.type]}`}>
-                      {typeLabel(c.type)}
-                    </span>
-                  </div>
-
-                  <div className="mt-1.5 text-sm text-white/60">
-                    {c.session?.user
-                      ? `${c.session.user.name} • ${c.session.user.phone}`
-                      : "Гость без аккаунта"}
-                  </div>
+        {sorted.map((call) => (
+          <div
+            key={call.id}
+            className={`${queueCardBase} ${TONE_BORDER[waitInfo(call.createdAt, now).tone]}`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="text-lg font-semibold text-white">Стол {call.table.code}</div>
+                  <WaitBadge createdAt={call.createdAt} now={now} />
                 </div>
-              </div>
 
-              {c.message ? (
-                <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/85">
-                  Сообщение: {c.message}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${TYPE_CHIP[call.type]}`}
+                  >
+                    {typeLabel(call.type)}
+                  </span>
+                  <span className="text-sm text-white/55">
+                    {call.session?.user ? call.session.user.name : "Гость без аккаунта"}
+                  </span>
                 </div>
-              ) : null}
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                {active ? (
-                  <button
-                    className={btnPrimary}
-                    disabled={busyId === c.id}
-                    onClick={() => void connectToTable(c)}
-                  >
-                    {busyId === c.id ? "…" : "Подключиться к столу"}
-                  </button>
-                ) : null}
-
-                {action ? (
-                  <button
-                    className={btn}
-                    disabled={busyId === c.id}
-                    onClick={() =>
-                      void setTo(
-                        c.id,
-                        action.status,
-                        action.status === "ACKED" ? "Вызов взят в работу" : "Вызов завершён"
-                      )
-                    }
-                  >
-                    {busyId === c.id ? "Сохраняем…" : action.label}
-                  </button>
-                ) : null}
               </div>
             </div>
-          );
-        })}
 
-        {!loading && calls.length === 0 ? (
-          <div className={`${card} text-sm text-white/60`}>Нет вызовов в этом разделе.</div>
+            {call.message ? (
+              <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/85">
+                {call.message}
+              </div>
+            ) : null}
+
+            <button
+              className={`${btnPrimary} mt-4`}
+              disabled={busyId === call.id}
+              onClick={() => void accept(call)}
+            >
+              Принять
+            </button>
+          </div>
+        ))}
+
+        {!loading && sorted.length === 0 ? (
+          <div className={`${card} text-sm text-white/60`}>Новых вызовов нет.</div>
         ) : null}
       </div>
     </div>

@@ -113,10 +113,16 @@ model GuestSession {
 
 model User {
   id                 String    @id @default(cuid())
-  phone              String    @unique
+  // Registration asks for e-mail + password only; the phone stays as an
+  // optional detail the guest can add later from their profile.
+  phone              String?   @unique
   email              String?   @unique
   passwordHash       String?
   name               String
+  // Loyalty card number shown on the guest card and, later, in Apple/Google
+  // Wallet. Assigned by a Postgres sequence, so it is unique by construction
+  // and never changes for a guest.
+  cardNumber         String    @unique @default(dbgenerated("lpad((nextval('\"User_cardNumber_seq\"'::regclass))::text, 9, '0'::text)"))
   role               UserRole  @default(USER)
   privacyAcceptedAt  DateTime?
   createdAt          DateTime  @default(now())
@@ -130,14 +136,14 @@ model User {
 
 model OtpCode {
   id        String    @id @default(cuid())
-  phone     String
+  email     String
   codeHash  String
   expiresAt DateTime
   usedAt    DateTime?
   attempts  Int       @default(0)
   createdAt DateTime  @default(now())
 
-  @@index([phone, createdAt])
+  @@index([email, createdAt])
 }
 
 model MenuCategory {

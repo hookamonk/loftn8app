@@ -1,100 +1,70 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import {
-  disconnectActiveTable,
+  cancelPayment,
+  confirmPayment,
   getActiveTableDetails,
   requestTablePayment,
-  cancelOrderItem,
-  changePaymentMethod,
   type StaffActiveTableDetails,
 } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync, subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 import { useToast } from "@/providers/toast";
-import { useStaffSession } from "@/providers/staffSession";
+import { OrderComposer } from "@/components/staff/OrderComposer";
+
+/**
+ * Everything a waiter needs at a table, on one screen: what is unpaid right
+ * now, one button to settle it, and — when the guest started the payment from
+ * their own phone — one button to confirm it.
+ */
 
 const card =
   "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
-const btn =
-  "rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-50";
 const btnPrimary =
-  "rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-white/90 disabled:opacity-50";
+  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
+const btnAccent =
+  "h-12 w-full rounded-2xl bg-emerald-400 text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
 const btnGhost =
-  "rounded-2xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white";
-
-function callTypeLabel(type: "WAITER" | "HOOKAH" | "BILL" | "HELP") {
-  if (type === "WAITER") return "Официант";
-  if (type === "HOOKAH") return "Кальянщик";
-  if (type === "BILL") return "Оплата";
-  return "Помощь";
-}
-
-function paymentMethodLabel(method: "CARD" | "CASH") {
-  return method === "CARD" ? "Карта" : "Наличные";
-}
-
-function orderStatusChip(status: string) {
-  if (status === "DELIVERED") return { label: "Готов", cls: "bg-emerald-500/20 text-emerald-200" };
-  if (status === "CANCELLED") return { label: "Отменён", cls: "bg-red-500/20 text-red-200" };
-  return { label: "Готовится", cls: "bg-amber-400/20 text-amber-200" };
-}
+  "h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50";
 
 export default function StaffTableDetailsPage() {
   const params = useParams<{ tableId: string }>();
-  const router = useRouter();
   const { push } = useToast();
-  const { staff } = useStaffSession();
   const tableId = Number(params.tableId);
 
   const [data, setData] = useState<StaffActiveTableDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [last, setLast] = useState<number | null>(null);
-  const [busyMethod, setBusyMethod] = useState<"CARD" | "CASH" | null>(null);
-  const [disconnecting, setDisconnecting] = useState(false);
-  const [cancelingItemId, setCancelingItemId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [askMethod, setAskMethod] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
 
-  const onCancelItem = async (orderId: string, itemId: string) => {
-    if (cancelingItemId) return;
-    setCancelingItemId(itemId);
-    const r = await cancelOrderItem(orderId, itemId);
-    setCancelingItemId(null);
-    if (!r.ok) {
-      push({ kind: "error", title: "Не удалось отменить", message: r.error });
-      return;
-    }
-    push({
-      kind: "success",
-      title: r.data.orderCancelled ? "Заказ отменён" : "Позиция отменена",
-      message: r.data.orderCancelled ? "В заказе не осталось позиций." : "Позиция убрана из заказа.",
-    });
-    emitStaffLiveSync("order-item-cancelled");
-    await load({ silent: false });
-  };
+  const load = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent ?? false;
+      if (!silent) setLoading(true);
 
-  const load = async (opts?: { silent?: boolean }) => {
-    const silent = opts?.silent ?? false;
-    if (!silent) setLoading(true);
-    setErr(null);
+      const result = await getActiveTableDetails(tableId);
 
-    const result = await getActiveTableDetails(tableId);
+      if (!silent) setLoading(false);
 
-    if (!silent) setLoading(false);
+      if (!result.ok) {
+        setErr(result.error);
+        return;
+      }
 
-    if (!result.ok) {
-      setErr(result.error);
-      return;
-    }
+      setErr(null);
+      setData(result.data.table);
+    },
+    [tableId]
+  );
 
-    setData(result.data.table);
-    setLast(Date.now());
-  };
-
-  const { tick, isRunning } = usePolling(() => load({ silent: true }), {
+  const { tick } = usePolling(() => load({ silent: true }), {
     activeMs: 5000,
     idleMs: 12000,
     immediate: false,
@@ -104,39 +74,19 @@ export default function StaffTableDetailsPage() {
   useEffect(() => {
     if (!Number.isFinite(tableId) || tableId <= 0) return;
     void load({ silent: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tableId]);
+  }, [tableId, load]);
 
-  useStaffPushEvents((payload) => {
-    if (
-      payload.kind === "ORDER_CREATED" ||
-      payload.kind === "CALL_CREATED" ||
-      payload.kind === "PAYMENT_REQUESTED" ||
-      payload.kind === "GUEST_MESSAGE"
-    ) {
-      void tick();
-    }
-  });
-
+  useStaffPushEvents(() => void tick());
+  useStaffEvents(() => void tick());
   useEffect(() => subscribeStaffLiveSync(() => void tick()), [tick]);
 
-  const totalCurrentItems = useMemo(
-    () => data?.payableItems.reduce((sum, item) => sum + item.qty, 0) ?? 0,
-    [data]
-  );
+  const settle = async (method: "CARD" | "CASH") => {
+    if (!data || busy) return;
 
-  const addHref = data
-    ? `/staff/orders/create?tableId=${encodeURIComponent(String(data.table.id))}&tableCode=${encodeURIComponent(
-        data.table.code
-      )}&sessionId=${encodeURIComponent(data.session.id)}&returnTo=${encodeURIComponent(`/staff/tables/${data.table.id}`)}`
-    : "/staff/tables";
-
-  const onRequestPayment = async (method: "CARD" | "CASH") => {
-    if (!data || !data.capabilities.canSettle || busyMethod) return;
-
-    setBusyMethod(method);
+    setBusy(true);
     const result = await requestTablePayment(data.table.id, method);
-    setBusyMethod(null);
+    setBusy(false);
+    setAskMethod(false);
 
     if (!result.ok) {
       push({ kind: "error", title: "Ошибка", message: result.error });
@@ -145,285 +95,190 @@ export default function StaffTableDetailsPage() {
 
     push({
       kind: "success",
-      title: "Расчёт создан",
-      message: `Для стола отправлен запрос на оплату: ${paymentMethodLabel(method)}.`,
+      title: "Счёт выставлен",
+      message: method === "CARD" ? "Картой — несите терминал." : "Наличными.",
     });
-
     emitStaffLiveSync("payment-request-created");
-    await load({ silent: false });
+    await load({ silent: true });
   };
 
-  const onDisconnect = async () => {
-    if (!data || disconnecting) return;
+  const confirm = async () => {
+    if (!data?.pendingPayment || busy) return;
 
-    if (!data.capabilities.canDisconnect) {
-      push({
-        kind: "error",
-        title: "Нельзя закрыть стол",
-        message: data.capabilities.disconnectBlockedReason ?? "Сначала нужно полностью закрыть счет.",
-      });
-      return;
-    }
-
-    setDisconnecting(true);
-    const result = await disconnectActiveTable(data.table.id);
-    setDisconnecting(false);
+    setBusy(true);
+    const result = await confirmPayment(data.pendingPayment.id);
+    setBusy(false);
 
     if (!result.ok) {
       push({ kind: "error", title: "Ошибка", message: result.error });
       return;
     }
 
-    push({
-      kind: "success",
-      title: "Сессия завершена",
-      message: "Гость отключен от этого стола.",
-    });
-
-    emitStaffLiveSync("table-session-disconnected");
-    router.replace("/staff/tables");
+    push({ kind: "success", title: "Оплата принята", message: "Счёт закрыт." });
+    emitStaffLiveSync("payment-confirmed");
+    await load({ silent: true });
   };
+
+  const cancel = async () => {
+    if (!data?.pendingPayment || busy) return;
+
+    setBusy(true);
+    const result = await cancelPayment(data.pendingPayment.id);
+    setBusy(false);
+
+    if (!result.ok) {
+      push({ kind: "error", title: "Ошибка", message: result.error });
+      return;
+    }
+
+    push({ kind: "info", title: "Счёт отменён" });
+    emitStaffLiveSync("payment-cancelled");
+    await load({ silent: true });
+  };
+
+  const pending = data?.pendingPayment ?? null;
 
   return (
-    <div>
+    <div className="space-y-4">
       <div className={card}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[11px] tracking-[0.24em] text-white/45">ACTIVE TABLE</div>
-            <div className="mt-2 text-xl font-semibold text-white">
-              {data ? `Стол ${data.table.code}${data.table.label ? ` • ${data.table.label}` : ""}` : "Стол"}
+            <div className="text-[11px] tracking-[0.24em] text-white/45">СТОЛ</div>
+            <div className="mt-1 text-2xl font-bold text-white">{data ? data.table.code : "—"}</div>
+            <div className="mt-1 text-sm text-white/55">
+              {data?.session.user ? data.session.user.name : "Гость без аккаунта"}
             </div>
-            <div className="mt-1 text-xs text-white/50">
-              Автообновление: {isRunning ? "включено" : "выключено"}
-              {last ? ` • ${new Date(last).toLocaleTimeString()}` : ""}
-            </div>
-            {data ? (
-              <div className="mt-3 space-y-1 text-sm text-white/65">
-                <div>
-                  {data.session.user
-                    ? `${data.session.user.name} • ${data.session.user.phone}`
-                    : "Гость без аккаунта"}
-                </div>
-                <div>Текущих позиций: {totalCurrentItems}</div>
-                <div>Сумма к расчёту: {data.billTotalCzk} Kč</div>
-              </div>
-            ) : null}
           </div>
 
-          <Link href="/staff/tables" className={btnGhost}>
+          <Link
+            href="/staff/tables"
+            className="shrink-0 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/80"
+          >
             Назад
           </Link>
         </div>
 
         {err ? (
-          <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
+          <div className="mt-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
             {err}
           </div>
         ) : null}
-
-        {data ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {data.capabilities.canAddItems ? (
-              <Link href={addHref} className={btnPrimary}>
-                Добавить позиции
-              </Link>
-            ) : null}
-
-            <button
-              className={btnGhost}
-              disabled={disconnecting || !data.capabilities.canDisconnect}
-              onClick={() => void onDisconnect()}
-              title={data.capabilities.disconnectBlockedReason ?? undefined}
-            >
-              {disconnecting ? "Отключаем…" : "Отключить стол"}
-            </button>
-
-            {data.capabilities.canSettle ? (
-              <>
-                <button
-                  className={btn}
-                  disabled={busyMethod !== null || data.billTotalCzk <= 0}
-                  onClick={() => void onRequestPayment("CARD")}
-                >
-                  {busyMethod === "CARD" ? "Создаём…" : "Рассчитать: карта"}
-                </button>
-                <button
-                  className={btn}
-                  disabled={busyMethod !== null || data.billTotalCzk <= 0}
-                  onClick={() => void onRequestPayment("CASH")}
-                >
-                  {busyMethod === "CASH" ? "Создаём…" : "Рассчитать: наличные"}
-                </button>
-              </>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
-      {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
+      {loading && !data ? <div className="text-sm text-white/60">Загрузка…</div> : null}
 
-      {data?.pendingPayment ? (
-        <div className={`${card} mt-4`}>
-          <div className="text-sm font-semibold text-white">Активный расчёт</div>
-          <div className="mt-1 text-lg font-bold text-white">{data.pendingPayment.billTotalCzk} Kč</div>
-          <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-white/45">Способ оплаты</div>
-          <div className="mt-1 inline-flex rounded-2xl border border-white/10 bg-black/30 p-1">
-            {(["CARD", "CASH"] as const).map((m) => {
-              const active = data.pendingPayment!.method === m;
-              return (
-                <button
-                  key={m}
-                  type="button"
-                  disabled={active || busyMethod !== null}
-                  onClick={async () => {
-                    setBusyMethod(m);
-                    const r = await changePaymentMethod(data.pendingPayment!.id, m);
-                    if (!r.ok) {
-                      setBusyMethod(null);
-                      push({ kind: "error", title: "Ошибка", message: r.error });
-                      return;
-                    }
-                    push({ kind: "success", title: "Способ изменён", message: m === "CARD" ? "Картой." : "Наличными." });
-                    emitStaffLiveSync("payment-method-changed");
-                    await load({ silent: false });
-                    setBusyMethod(null);
-                  }}
-                  className={[
-                    "rounded-xl px-3 py-1.5 text-sm font-semibold transition disabled:cursor-default",
-                    active ? "bg-white text-black" : "text-white/60 hover:text-white",
-                  ].join(" ")}
-                >
-                  {m === "CARD" ? "Карта" : "Наличные"}
-                </button>
-              );
-            })}
-          </div>
-          <div className="mt-2 text-xs text-white/50">
-            Отправлен {new Date(data.pendingPayment.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </div>
-        </div>
-      ) : null}
-
-      <div className={`${card} mt-4`}>
+      {/* Current unpaid bill */}
+      <div className={card}>
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-white">Текущий заказ</div>
-            <div className="mt-1 text-xs text-white/55">Актуальные позиции по столу, которые еще не закрыты оплатой.</div>
-          </div>
-          <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/75">
-            {totalCurrentItems}
-          </div>
+          <div className="text-sm font-semibold text-white">Счёт</div>
+          <div className="text-2xl font-bold text-white">{data?.billTotalCzk ?? 0} Kč</div>
         </div>
 
-        <div className="mt-3 space-y-2">
+        <div className="mt-3 space-y-1.5">
           {data && data.payableItems.length > 0 ? (
             data.payableItems.map((item) => (
               <div
-                key={`${item.orderItemId}:${item.qty}`}
-                className="rounded-2xl border border-white/10 bg-black/20 p-3"
+                key={item.orderItemId}
+                className="flex items-start justify-between gap-3 rounded-xl bg-black/20 px-3 py-2 text-sm text-white/85"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-white">
-                      {item.name} × {item.qty}
-                    </div>
-                    {item.comment ? <div className="mt-1 text-xs text-white/50">{item.comment}</div> : null}
+                <div className="min-w-0">
+                  <div className="truncate">
+                    {item.name} × {item.qty}
                   </div>
-                  <div className="text-sm font-semibold text-white">{item.totalCzk} Kč</div>
+                  {item.comment ? (
+                    <div className="mt-0.5 text-[11px] text-white/45">{item.comment}</div>
+                  ) : null}
                 </div>
+                <div className="shrink-0 text-white/70">{item.totalCzk} Kč</div>
               </div>
             ))
           ) : (
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
-              По этому столу сейчас нет активных неоплаченных позиций.
+            <div className="rounded-xl bg-black/20 px-3 py-3 text-sm text-white/55">
+              Неоплаченных позиций нет.
             </div>
           )}
         </div>
       </div>
 
-      <div className={`${card} mt-4`}>
-        <div className="text-sm font-semibold text-white">История по текущей сессии</div>
-        <div className="mt-3 space-y-3">
-          {data && data.orders.length > 0 ? (
-            data.orders.map((order) => {
-              const chip = orderStatusChip(order.status);
-              const canCancel = order.status === "IN_PROGRESS";
-              return (
-              <div key={order.id} className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <div className="text-sm font-semibold text-white">
-                        Заказ • {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </div>
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${chip.cls}`}>{chip.label}</span>
-                    </div>
-                    {order.comment ? <div className="mt-2 text-xs text-white/50">{order.comment}</div> : null}
-                  </div>
-                  <div className="text-sm font-semibold text-white">{order.totalCzk} Kč</div>
-                </div>
+      {/* The guest started the payment from their phone — just confirm it. */}
+      {pending ? (
+        <div className="rounded-[28px] border border-sky-400/35 bg-sky-500/12 p-4">
+          <div className="text-sm font-semibold text-sky-100">
+            Гость ждёт оплату · {pending.method === "CARD" ? "Карта" : "Наличные"}
+          </div>
+          <div className="mt-1 text-2xl font-bold text-white">{pending.billTotalCzk} Kč</div>
+          {pending.loyaltyAppliedCzk > 0 ? (
+            <div className="mt-1 text-xs text-sky-100/80">
+              Списывается кэшбэк: {pending.loyaltyAppliedCzk} Kč
+            </div>
+          ) : null}
 
-                <div className="mt-3 space-y-2">
-                  {order.items.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between gap-3 text-sm text-white/80">
-                      <div className="min-w-0 truncate">
-                        {item.menuItem.name} × {item.qty}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <span>{item.qty * item.priceCzk} Kč</span>
-                        {canCancel ? (
-                          <button
-                            className="rounded-lg border border-red-400/25 bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-200 transition hover:bg-red-500/20 disabled:opacity-50"
-                            disabled={cancelingItemId === item.id}
-                            onClick={() => void onCancelItem(order.id, item.id)}
-                          >
-                            {cancelingItemId === item.id ? "…" : "Убрать"}
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+          <button className={`${btnAccent} mt-4`} disabled={busy} onClick={() => void confirm()}>
+            {busy ? "Сохраняем…" : "Подтвердить оплату"}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void cancel()}
+            className="mt-2 w-full text-xs text-white/40 underline underline-offset-4 disabled:opacity-50"
+          >
+            Отменить счёт
+          </button>
+        </div>
+      ) : null}
+
+      {/* Actions */}
+      {data ? (
+        <div className={card}>
+          {!pending && data.capabilities.canSettle ? (
+            askMethod ? (
+              <div className="grid gap-2">
+                <div className="text-sm font-semibold text-white">Чем платит гость?</div>
+                <button className={btnPrimary} disabled={busy} onClick={() => void settle("CARD")}>
+                  Картой
+                </button>
+                <button className={btnPrimary} disabled={busy} onClick={() => void settle("CASH")}>
+                  Наличными
+                </button>
+                <button className={btnGhost} disabled={busy} onClick={() => setAskMethod(false)}>
+                  Отмена
+                </button>
               </div>
-              );
-            })
-          ) : (
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
-              По этой сессии еще нет сохраненных заказов.
-            </div>
-          )}
-        </div>
-      </div>
+            ) : (
+              <button
+                className={btnAccent}
+                disabled={busy || data.billTotalCzk <= 0}
+                onClick={() => setAskMethod(true)}
+              >
+                Рассчитать
+              </button>
+            )
+          ) : null}
 
-      <div className={`${card} mt-4`}>
-        <div className="text-sm font-semibold text-white">Активные вызовы</div>
-        <div className="mt-3 space-y-2">
-          {data && data.activeCalls.length > 0 ? (
-            data.activeCalls.map((call) => (
-              <div key={call.id} className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-white">{callTypeLabel(call.type)}</div>
-                    <div className="mt-1 text-xs text-white/55">
-                      {new Date(call.createdAt).toLocaleTimeString()} • {call.status}
-                    </div>
-                  </div>
-                </div>
-                {call.message ? <div className="mt-2 text-sm text-white/75">{call.message}</div> : null}
-              </div>
-            ))
-          ) : (
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
-              Активных вызовов по этому столу нет.
-            </div>
-          )}
+          {!askMethod ? (
+            <button
+              className={`${btnGhost} ${!pending && data.capabilities.canSettle ? "mt-2" : ""}`}
+              onClick={() => setComposerOpen(true)}
+            >
+              Добавить позиции
+            </button>
+          ) : null}
         </div>
-      </div>
+      ) : null}
 
-      {staff?.role === "HOOKAH" ? (
-        <div className="mt-4 rounded-2xl border border-sky-400/15 bg-sky-500/10 p-3 text-sm text-sky-100/90">
-          Кальянщик может добавлять только кальяны. Кнопка расчёта доступна только официанту и менеджеру.
-        </div>
+      {data ? (
+        <OrderComposer
+          open={composerOpen}
+          tableId={data.table.id}
+          tableCode={data.table.code}
+          sessionId={data.session.id}
+          onClose={() => setComposerOpen(false)}
+          onSaved={async () => {
+            setComposerOpen(false);
+            emitStaffLiveSync("order-created");
+            await load({ silent: true });
+          }}
+        />
       ) : null}
     </div>
   );

@@ -485,23 +485,23 @@ function paymentStatusView(
 function orderRequestStatusView(status: CallStatus) {
   if (status === "NEW") {
     return {
-      title: "Order requested",
-      description: "The staff can already see that your table wants to order.",
+      title: "Waiter called",
+      description: "The staff can see your table and will come to take the order.",
       tone: "info" as const,
     };
   }
 
   if (status === "ACKED") {
     return {
-      title: "On the way",
-      description: "A staff member is coming to your table to take the order.",
+      title: "Waiter is on the way",
+      description: "A staff member is heading to your table to take the order.",
       tone: "success" as const,
     };
   }
 
   return {
     title: "Taken by staff",
-    description: "The order is now being entered by the staff.",
+    description: "The order is being entered by the staff.",
     tone: "success" as const,
   };
 }
@@ -785,13 +785,17 @@ guestRouter.get(
         where: {
           tableId: session.tableId,
           table: { venueId: session.table.venueId },
-          type: "HELP",
-          message: ORDER_REQUEST_MARKER,
+          // Tapping "call the waiter" in the menu IS the request to order —
+          // that is what staff pick up in their Orders tab. Legacy requests
+          // (HELP + marker) stay supported so existing rows still render.
+          OR: [{ type: "WAITER" }, { type: "HELP", message: ORDER_REQUEST_MARKER }],
+          status: { in: ["NEW", "ACKED"] },
           ...(session.shiftId ? { session: { shiftId: session.shiftId } } : {}),
         },
         orderBy: { createdAt: "desc" },
         select: {
           id: true,
+          type: true,
           status: true,
           message: true,
           requestedItemsJson: true,
@@ -1017,7 +1021,7 @@ guestRouter.get(
     const loyalty = summarizeLoyalty(loyaltyTransactions as any[]);
 
     const orderRequestView =
-      orderRequest && isOrderRequestMessage(orderRequest.message)
+      orderRequest && (orderRequest.type === "WAITER" || isOrderRequestMessage(orderRequest.message))
         ? orderRequestStatusView(orderRequest.status)
         : null;
 

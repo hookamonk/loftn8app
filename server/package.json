@@ -11,7 +11,10 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:reset": "tsx prisma/resetData.ts",
-    "admin:create": "tsx prisma/createAdmin.ts"
+    "admin:create": "tsx prisma/createAdmin.ts",
+    "push:keys": "web-push generate-vapid-keys",
+    "mail:check": "tsx prisma/checkMail.ts",
+    "mail:check:built": "node dist/prisma/checkMail.js"
   },
   "keywords": [],
   "author": "",

@@ -7,6 +7,7 @@ import type { MenuResponse, MenuCategory, MenuItem, MenuSection } from "@/types"
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useAuth } from "@/providers/auth";
+import { useGuestFeed } from "@/providers/guestFeed";
 import { getVenueName } from "@/lib/venue";
 import { useI18n } from "@/providers/i18n";
 
@@ -35,6 +36,41 @@ function Pill({
   );
 }
 
+function BellIcon() {
+  return (
+    <svg
+      className="h-4 w-4 shrink-0"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7" />
+      <path d="M13.7 20a1.9 1.9 0 0 1-3.4 0" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      className="h-4 w-4 shrink-0"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m5 13 4 4L19 7" />
+    </svg>
+  );
+}
+
 function firstSection(categories: MenuCategory[]): MenuSection {
   return (categories[0]?.section as MenuSection) ?? "DISHES";
 }
@@ -51,12 +87,6 @@ type CatGroup = {
   label: string;
   sort: number;
   cats: MenuCategory[];
-};
-
-type SearchItem = MenuItem & {
-  __catId?: number;
-  __catName?: string;
-  __section?: MenuSection;
 };
 
 const MENU_CACHE_TTL_MS = 60 * 1000;
@@ -119,15 +149,21 @@ function MenuPage() {
   const [err, setErr] = useState<string | null>(null);
 
   // Single "call the waiter" action — the guest browses the menu and a waiter
-  // comes to take the order in person. A short cooldown prevents accidental
-  // repeat calls.
+  // comes to take the order in person.
   const [calling, setCalling] = useState(false);
-  const [justCalled, setJustCalled] = useState(false);
 
   const { push } = useToast();
   const { me } = useAuth();
+  const { feed, refresh } = useGuestFeed();
   const router = useRouter();
   const isRegistered = Boolean(me?.authenticated);
+
+  // The button mirrors the REAL state of the request, so the guest is never
+  // told "waiter called" when the request has already been handled (or the
+  // other way round). It clears itself once staff punch the order in.
+  const request = feed?.orderRequest ?? null;
+  const waiterOnTheWay = request?.status === "ACKED";
+  const waiterCalled = Boolean(request);
 
   const sectionLabel: Record<MenuSection, string> = useMemo(
     () => ({
@@ -161,9 +197,11 @@ function MenuPage() {
         const m = await api<MenuResponse>("/menu");
         writeCachedMenu(venueName, m);
         applyMenu(m);
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!cached) {
-          setErr(e?.message ?? (isCz ? "Menu se nepodařilo načíst" : "Failed to load menu"));
+          setErr(
+            e instanceof Error ? e.message : isCz ? "Menu se nepodařilo načíst" : "Failed to load menu"
+          );
         }
       }
     };
@@ -234,27 +272,18 @@ function MenuPage() {
     setActiveCatId(groups[0].cats[0]?.id ?? null);
   }, [activeSection, groupsBySection, activeCatId]);
 
-  const filteredItems = useMemo<SearchItem[]>(() => {
+  const filteredItems = useMemo<MenuItem[]>(() => {
     const query = q.trim().toLowerCase();
+    if (!query) return activeCat?.items ?? [];
 
-    if (!query) return (activeCat?.items ?? []) as SearchItem[];
-
-    const hits: SearchItem[] = [];
+    const hits: MenuItem[] = [];
     for (const c of cats) {
-      const sec = c.section as MenuSection;
       for (const i of c.items ?? []) {
         const haystack = [i.name, i.nameCs, i.description, i.descriptionCs]
           .filter(Boolean)
           .join(" ")
           .toLowerCase();
-        if (haystack.includes(query)) {
-          hits.push({
-            ...(i as any),
-            __catId: c.id,
-            __catName: tCat(c),
-            __section: sec,
-          });
-        }
+        if (haystack.includes(query)) hits.push(i);
       }
     }
     return hits;
@@ -263,7 +292,7 @@ function MenuPage() {
   const isSearching = q.trim().length > 0;
 
   const callWaiter = async () => {
-    if (calling || justCalled) return;
+    if (calling || waiterCalled) return;
 
     // Unregistered guests get the menu only — ordering (calling the waiter)
     // requires an account.
@@ -282,18 +311,22 @@ function MenuPage() {
     setCalling(true);
     try {
       await api("/calls", { method: "POST", body: JSON.stringify({ type: "WAITER" }) });
+      await refresh();
       push({
         kind: "success",
         title: isCz ? "Obsluha přivolána" : "Waiter called",
         message: isCz ? "Číšník je na cestě k vašemu stolu." : "A waiter is on the way to your table.",
       });
-      setJustCalled(true);
-      window.setTimeout(() => setJustCalled(false), 15000);
-    } catch (e: any) {
+    } catch (e: unknown) {
       push({
         kind: "error",
         title: isCz ? "Chyba" : "Error",
-        message: e?.message ?? (isCz ? "Nepodařilo se přivolat obsluhu" : "Failed to call the waiter"),
+        message:
+          e instanceof Error
+            ? e.message
+            : isCz
+              ? "Nepodařilo se přivolat obsluhu"
+              : "Failed to call the waiter",
       });
     } finally {
       setCalling(false);
@@ -311,17 +344,6 @@ function MenuPage() {
         <div className="mb-4">
           <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">{venueName}</div>
           <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
-        </div>
-
-        <div className="mb-4 rounded-2xl border border-gold/25 bg-gold/10 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gold/20 text-sm text-amber-200">★</span>
-            <div className="text-xs leading-5 text-amber-100/90">
-              {isCz
-                ? "Prohlédněte si menu a zavolejte obsluhu — objednávku přijme přímo u stolu."
-                : "Browse the menu and call a waiter — they'll take your order at the table."}
-            </div>
-          </div>
         </div>
 
         <div className="sticky top-0 z-30 -mx-1 rounded-3xl border border-white/10 bg-[#0c0c11]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
@@ -421,11 +443,6 @@ function MenuPage() {
           ) : null}
 
           {filteredItems.map((i) => {
-            const meta =
-              isSearching && i.__catName && i.__section
-                ? `${sectionLabel[i.__section]} · ${i.__catName}`
-                : null;
-
             return (
               <div
                 key={i.id}
@@ -453,8 +470,6 @@ function MenuPage() {
                   </div>
 
                   <div className="flex min-w-0 flex-1 flex-col">
-                    {meta ? <div className="text-[11px] text-white/55">{meta}</div> : null}
-
                     <div className="line-clamp-2 text-[16px] font-semibold leading-5 text-white">
                       {tName(i)}
                     </div>
@@ -480,29 +495,45 @@ function MenuPage() {
         </div>
       </main>
 
-      {/* Single, always-visible action: call the waiter to place the order. */}
-      <div className="pointer-events-none fixed inset-x-0 bottom-24 z-40 px-4">
+      {/* The only action on this screen: get a waiter to the table. Sits just
+          above the tab bar and reflects the LIVE state of the request. */}
+      <div className="pointer-events-none fixed inset-x-0 bottom-[100px] z-40 flex justify-center px-4">
         <button
           type="button"
-          disabled={calling || justCalled}
+          disabled={calling || (isRegistered && waiterCalled)}
           onClick={() => void callWaiter()}
-          className="pointer-events-auto mx-auto flex h-14 w-full max-w-md items-center justify-center rounded-2xl border border-white/15 bg-[#16161a] text-base font-semibold text-white shadow-[0_20px_60px_rgba(0,0,0,0.5)] transition active:scale-[0.98] hover:bg-[#1f1f26] disabled:opacity-60"
+          className={[
+            "pointer-events-auto inline-flex h-12 max-w-full items-center justify-center gap-2 rounded-full px-6",
+            "text-sm font-semibold shadow-[0_12px_34px_rgba(0,0,0,0.55)] transition",
+            "active:scale-[0.97] disabled:active:scale-100",
+            isRegistered && waiterCalled
+              ? "border border-gold/30 bg-[#17150f]/95 text-amber-100 backdrop-blur-xl"
+              : "bg-white text-black hover:bg-white/90 disabled:opacity-70",
+          ].join(" ")}
         >
-          {!isRegistered
-            ? isCz
-              ? "Zaregistrovat se pro objednávku"
-              : "Register to order"
-            : calling
-            ? isCz
-              ? "Volám…"
-              : "Calling…"
-            : justCalled
-            ? isCz
-              ? "Obsluha je na cestě"
-              : "Waiter is on the way"
-            : isCz
-            ? "Zavolat obsluhu"
-            : "Call the waiter"}
+          {!isRegistered ? (
+            <>
+              <BellIcon />
+              <span className="truncate">{isCz ? "Zaregistrovat se a objednat" : "Register to order"}</span>
+            </>
+          ) : calling ? (
+            <span className="truncate">{isCz ? "Voláme…" : "Calling…"}</span>
+          ) : waiterOnTheWay ? (
+            <>
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+              <span className="truncate">{isCz ? "Číšník je na cestě" : "Waiter is on the way"}</span>
+            </>
+          ) : waiterCalled ? (
+            <>
+              <CheckIcon />
+              <span className="truncate">{isCz ? "Obsluha přivolána" : "Waiter called"}</span>
+            </>
+          ) : (
+            <>
+              <BellIcon />
+              <span className="truncate">{isCz ? "Zavolat obsluhu" : "Call the waiter"}</span>
+            </>
+          )}
         </button>
       </div>
     </RequireTable>

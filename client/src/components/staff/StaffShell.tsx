@@ -107,7 +107,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   // disabling it on the summary page made badges update only «через раз».
   const shouldPollSummary = !isAdmin;
 
-  const loadSummary = async (opts?: { silent?: boolean }) => {
+  const loadSummary = async () => {
     if (isAdmin) return;
 
     const r = await getStaffSummary();
@@ -133,7 +133,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
     setSummary(r.data);
   };
 
-  const { tick } = usePolling(() => loadSummary({ silent: true }), {
+  const { tick } = usePolling(() => loadSummary(), {
     activeMs: 4000,
     idleMs: 12000,
     immediate: false,
@@ -171,7 +171,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!shouldPollSummary) return;
-    void loadSummary({ silent: false });
+    void loadSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldPollSummary, staff?.role]);
 
@@ -242,7 +242,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                 <>
                   <NavLink
                     href="/staff/summary"
-                    label="Главная"
+                    label="Смена"
                     active={pathname.startsWith("/staff/summary")}
                   />
                   <NavLink
@@ -256,12 +256,6 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                     label="Вызовы"
                     active={pathname.startsWith("/staff/calls")}
                     badge={summary?.newCalls ?? 0}
-                  />
-                  <NavLink
-                    href="/staff/payments"
-                    label="Оплата"
-                    active={pathname.startsWith("/staff/payments")}
-                    badge={summary?.pendingPayments ?? 0}
                   />
                   <NavLink
                     href="/staff/tables"
@@ -279,8 +273,8 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
             <div className="font-semibold">Смена не открыта</div>
             <div className="mt-1 text-amber-100/80">
               {isManager
-                ? "Откройте смену в разделе «Сводка», иначе новые вызовы, заказы и оплаты не отображаются."
-                : "Дождитесь, пока менеджер откроет смену — до этого новые вызовы, заказы и оплаты не отображаются."}
+                ? "Откройте смену в разделе «Смена», иначе новые заказы, вызовы и оплаты не приходят."
+                : "Дождитесь, пока менеджер откроет смену — до этого новые заказы и вызовы не приходят."}
             </div>
           </div>
         ) : null}

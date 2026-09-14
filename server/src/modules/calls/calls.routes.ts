@@ -43,14 +43,34 @@ callsRouter.post(
       } as any;
     }
 
-    const call = await prisma.staffCall.create({
-      data: {
-        sessionId: session.id,
-        tableId: session.tableId,
-        type: body.type,
-        message: body.message,
-      },
-    });
+    // "Call the waiter" is the request to order, and it shows up as a card in
+    // the staff Orders tab. Tapping it again (impatient guest, second person at
+    // the table) must NOT pile up duplicate cards for the same table — reuse the
+    // open one and just re-notify the team.
+    let call =
+      body.type === "WAITER"
+        ? await prisma.staffCall.findFirst({
+            where: {
+              tableId: session.tableId,
+              table: { venueId: session.table.venueId },
+              type: "WAITER",
+              status: { in: ["NEW", "ACKED"] },
+              ...(attachedSession.shiftId ? { session: { shiftId: attachedSession.shiftId } } : {}),
+            },
+            orderBy: { createdAt: "desc" },
+          })
+        : null;
+
+    if (!call) {
+      call = await prisma.staffCall.create({
+        data: {
+          sessionId: session.id,
+          tableId: session.tableId,
+          type: body.type,
+          message: body.message,
+        },
+      });
+    }
 
     void notifyCallCreated(call.id).catch((e) => {
       console.warn("push notifyCallCreated failed", e);

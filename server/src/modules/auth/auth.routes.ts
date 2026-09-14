@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Request } from "express";
 import { randomInt } from "node:crypto";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
@@ -8,56 +9,143 @@ import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
-import { sendGuestOtpEmail, isEmailConfigured } from "../../utils/mailer";
+import { sendGuestOtpEmail, isEmailConfigured, missingEmailSettings } from "../../utils/mailer";
 import { rateLimit } from "../../middleware/rateLimit";
 
+/**
+ * Guest identity is an e-mail address and a password. Registration confirms the
+ * address with a one-time code; signing in needs nothing else.
+ */
 export const authRouter = Router();
 
-// Throttle OTP issuance/verification and password auth to stop brute-force / e-mail spam.
-const otpRequestLimiter = rateLimit({ windowMs: 15 * 60_000, max: 5, keyPrefix: "otp-request" });
-const otpVerifyLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "otp-verify" });
-const passwordLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "auth-pw" });
+const OTP_TTL_MS = 10 * 60 * 1000;
+const OTP_MAX_ATTEMPTS = 5;
+const USER_TOKEN_TTL_SEC = 60 * 60 * 24 * 30;
 
-// SECURITY: the raw OTP/reset code may only ever be returned to the caller in
-// non-production environments (local/dev/demo without SMTP). In production a
-// missing SMTP config must NEVER leak codes in the API response — otherwise any
-// caller could request a code for any e-mail and take the account over.
+// SECURITY: the raw code may only ever be handed back to the caller outside
+// production. In production a missing SMTP config must NEVER leak codes in the
+// response — otherwise anyone could request a code for any address and take
+// over the account. It fails loudly instead.
 const exposeDevCode = env.NODE_ENV !== "production";
 
-type Intent = "login" | "register";
+function normalizeEmail(raw?: unknown) {
+  const value = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  return value.length ? value : null;
+}
 
+function assertEmail(email: string | null) {
+  if (!email) throw new HttpError(400, "EMAIL_REQUIRED", "Email is required");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpError(400, "EMAIL_INVALID", "Email is invalid");
+  }
+  return email;
+}
+
+function assertEmailDeliverable() {
+  if (isEmailConfigured()) return;
+
+  if (!exposeDevCode) {
+    // Silently "succeeding" here is what makes registration look broken with no
+    // trace: the guest waits for a code that was never sent.
+    throw new HttpError(
+      503,
+      "EMAIL_NOT_CONFIGURED",
+      `Email delivery is not configured on the server (missing: ${missingEmailSettings().join(", ")})`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+//
+// Counted per E-MAIL, not per IP: every guest in the venue shares one Wi-Fi
+// address, so an IP budget would lock the whole room out after a few sign-ups.
+// The address is also the thing worth protecting — one inbox, one account. A
+// separate, far higher IP ceiling still catches genuine abuse.
+// ---------------------------------------------------------------------------
+const emailKey = (req: Request) => normalizeEmail((req.body as { email?: unknown } | undefined)?.email) ?? "";
+
+const TOO_MANY_CODES = "Too many codes requested for this email. Please wait a few minutes.";
+const TOO_MANY_ATTEMPTS = "Too many attempts. Please wait a few minutes.";
+
+const otpRequestByEmail = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 5,
+  keyPrefix: "otp-req-email",
+  key: emailKey,
+  message: TOO_MANY_CODES,
+});
+const otpRequestByIp = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 60,
+  keyPrefix: "otp-req-ip",
+  message: TOO_MANY_CODES,
+});
+
+const otpVerifyByEmail = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 10,
+  keyPrefix: "otp-verify-email",
+  key: emailKey,
+  message: TOO_MANY_ATTEMPTS,
+});
+const otpVerifyByIp = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 120,
+  keyPrefix: "otp-verify-ip",
+  message: TOO_MANY_ATTEMPTS,
+});
+
+const passwordByEmail = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 10,
+  keyPrefix: "auth-pw-email",
+  key: emailKey,
+  message: TOO_MANY_ATTEMPTS,
+});
+const passwordByIp = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 120,
+  keyPrefix: "auth-pw-ip",
+  message: TOO_MANY_ATTEMPTS,
+});
+
+// ---------------------------------------------------------------------------
+// Schemas
+// ---------------------------------------------------------------------------
 const RequestOtpSchema = z.object({
-  phone: z.string().min(6),
-  intent: z.enum(["register"]).optional(),
-  name: z.string().min(1),
-  email: z.string().min(3),
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().min(3).max(200),
 });
 
 const VerifyOtpSchema = z.object({
-  phone: z.string().min(6),
-  code: z.string().min(4),
-  intent: z.enum(["register"]).optional(),
-  name: z.string().min(1),
-  email: z.string().min(3),
-  password: z.string().min(6),
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().min(3).max(200),
+  password: z.string().min(6).max(200),
+  code: z.string().trim().min(4).max(10),
   consent: z.boolean(),
 });
 
 const PasswordLoginSchema = z.object({
-  email: z.string().min(3),
-  password: z.string().min(6),
+  email: z.string().trim().min(3).max(200),
+  password: z.string().min(1).max(200),
 });
 
 const RequestPasswordResetSchema = z.object({
-  email: z.string().min(3),
+  email: z.string().trim().min(3).max(200),
 });
 
 const ConfirmPasswordResetSchema = z.object({
-  email: z.string().min(3),
-  code: z.string().min(4),
-  password: z.string().min(6),
+  email: z.string().trim().min(3).max(200),
+  code: z.string().trim().min(4).max(10),
+  password: z.string().min(6).max(200),
 });
 
+// ---------------------------------------------------------------------------
+// Cookies
+// ---------------------------------------------------------------------------
 function setCookie(res: any, name: string, value: string, maxAgeSeconds: number) {
   const isProd = env.NODE_ENV === "production";
 
@@ -82,83 +170,93 @@ function clearCookie(res: any, name: string) {
   });
 }
 
-function normalizePhone(phone: string) {
-  const compact = phone.replace(/\s+/g, "").trim();
-  if (!compact) return "";
-  if (compact.startsWith("+")) return compact;
-  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
-  if (/^\d+$/.test(compact)) {
-    if (compact.startsWith("420")) return `+${compact}`;
-    return `+420${compact}`;
+type PublicUser = {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  cardNumber: string;
+  role: string;
+  privacyAcceptedAt: Date | null;
+};
+
+function serializeUser(user: PublicUser) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    cardNumber: user.cardNumber,
+    role: user.role,
+    privacyAcceptedAt: user.privacyAcceptedAt,
+  };
+}
+
+/** Sign the guest in and attach the table session they already opened, if any. */
+async function completeSignIn(req: Request, res: any, user: PublicUser) {
+  const token = jwt.sign({ userId: user.id, role: user.role }, env.JWT_USER_SECRET, {
+    expiresIn: "30d",
+  });
+  setCookie(res, "uid", token, USER_TOKEN_TTL_SEC);
+
+  // The guest scanned the QR before registering, so a table session already
+  // exists — bind it to the account now, otherwise their bill and cashback
+  // would stay anonymous.
+  const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
+  if (gsid) {
+    try {
+      const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
+      await prisma.guestSession.updateMany({
+        where: { id: payload.sessionId, endedAt: null },
+        data: { userId: user.id },
+      });
+    } catch {
+      // stale or foreign cookie — signing in still succeeds
+    }
   }
-  return compact;
+
+  return { ok: true as const, user: serializeUser(user) };
 }
 
-function normalizeName(name: string) {
-  return name.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function normalizeEmail(raw?: string | null) {
-  const v = String(raw ?? "").trim().toLowerCase();
-  return v.length ? v : null;
-}
-
-function assertEmailOrNull(email: string | null) {
-  if (!email) return null;
-  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  if (!ok) throw new HttpError(400, "EMAIL_INVALID", "Email is invalid");
-  return email;
-}
-
-function assertEmail(email: string | null) {
-  const normalized = assertEmailOrNull(email);
-  if (!normalized) {
-    throw new HttpError(400, "EMAIL_REQUIRED", "Email is required");
-  }
-  return normalized;
-}
-
-function genOtpCode() {
+// ---------------------------------------------------------------------------
+// One-time codes
+// ---------------------------------------------------------------------------
+function generateOtpCode() {
   // Cryptographically secure 6-digit code (Math.random is predictable).
   return String(randomInt(100_000, 1_000_000));
 }
 
-function assertRegisterAllowed(existingUser: { id: string } | null) {
-  if (existingUser) {
-    throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
-  }
-}
-
-const OTP_MAX_ATTEMPTS = 5;
-
-async function issueOtpForPhone(phone: string) {
-  const code = genOtpCode();
+async function issueOtp(email: string) {
+  const code = generateOtpCode();
   const codeHash = await bcrypt.hash(code, 10);
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-  // Opportunistic cleanup: drop this phone's used/expired codes so the table
-  // doesn't grow unbounded and only the freshest code stays active.
+  // Opportunistic cleanup: drop this address's used/expired codes so the table
+  // can't grow unbounded and only the freshest code stays active.
   await prisma.otpCode
-    .deleteMany({ where: { phone, OR: [{ usedAt: { not: null } }, { expiresAt: { lt: new Date() } }] } })
+    .deleteMany({
+      where: { email, OR: [{ usedAt: { not: null } }, { expiresAt: { lt: new Date() } }] },
+    })
     .catch(() => {});
 
-  await prisma.otpCode.create({ data: { phone, codeHash, expiresAt } });
-  return { code, expiresInSec: 600 };
+  await prisma.otpCode.create({ data: { email, codeHash, expiresAt } });
+  return { code, expiresInSec: Math.floor(OTP_TTL_MS / 1000) };
 }
 
-// Verify a submitted code against the freshest active OTP, counting failed
-// attempts so the 6-digit code can't be brute-forced. Returns on success;
-// throws HttpError otherwise.
-async function consumeOtpOrThrow(phone: string, code: string) {
+/**
+ * Check a submitted code against the freshest active one, counting failures so
+ * a 6-digit code cannot be brute-forced. Returns on success, throws otherwise.
+ */
+async function consumeOtpOrThrow(email: string, code: string) {
   const otp = await prisma.otpCode.findFirst({
-    where: { phone, usedAt: null, expiresAt: { gt: new Date() } },
+    where: { email, usedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
 
-  if (!otp) throw new HttpError(400, "OTP_NOT_FOUND", "OTP code not found or expired");
+  if (!otp) throw new HttpError(400, "OTP_NOT_FOUND", "Code not found or expired");
 
   if (otp.attempts >= OTP_MAX_ATTEMPTS) {
-    // Burn the code so a fresh one must be requested.
+    // Burn it so a fresh code has to be requested.
     await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } }).catch(() => {});
     throw new HttpError(429, "OTP_TOO_MANY_ATTEMPTS", "Too many attempts. Request a new code.");
   }
@@ -166,273 +264,211 @@ async function consumeOtpOrThrow(phone: string, code: string) {
   const ok = await bcrypt.compare(String(code), otp.codeHash);
   if (!ok) {
     await prisma.otpCode.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } }).catch(() => {});
-    throw new HttpError(400, "OTP_INVALID", "OTP code is invalid");
+    throw new HttpError(400, "OTP_INVALID", "Code is invalid");
   }
 
   await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
 }
 
-// POST /auth/guest/request-otp
+function isUniqueViolation(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === "P2002"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Registration — step 1: send the code
+// ---------------------------------------------------------------------------
 authRouter.post(
   "/guest/request-otp",
-  otpRequestLimiter,
+  otpRequestByEmail,
+  otpRequestByIp,
   validate(RequestOtpSchema),
   asyncHandler(async (req, res) => {
-    const phone = normalizePhone((req.body as any).phone);
-    const intent: Intent = "register";
-    const nameRaw = String((req.body as any).name ?? "").trim();
-    const email = assertEmail(normalizeEmail((req.body as any).email));
-    const user = await prisma.user.findUnique({ where: { phone } });
-    const existingEmailUser = await prisma.user.findUnique({ where: { email } }).catch(() => null);
+    const body = req.body as z.infer<typeof RequestOtpSchema>;
+    const email = assertEmail(normalizeEmail(body.email));
+    const name = body.name.trim();
 
-    assertRegisterAllowed(user);
-    if (existingEmailUser) {
+    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (existing) {
       throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
     }
 
-    const { code, expiresInSec } = await issueOtpForPhone(phone);
+    assertEmailDeliverable();
+
+    const { code, expiresInSec } = await issueOtp(email);
 
     if (!isEmailConfigured()) {
-      // No SMTP configured (demo/dev) — surface the code so registration works
-      // without email. In production with SMTP set, this never runs.
-      console.log(`[DEV OTP] register phone=${phone} email=${email} code=${code}`);
-      return res.json({ ok: true, expiresInSec, delivery: "none", ...(exposeDevCode ? { devCode: code } : {}) });
+      // Development only — assertEmailDeliverable() already refused in prod.
+      console.log(`[DEV OTP] register ${email} → ${code}`);
+      return res.json({ ok: true, expiresInSec, delivery: "none", devCode: code });
     }
 
-    await sendGuestOtpEmail({
-      to: email,
-      guestName: nameRaw || user?.name || null,
-      code,
-      purpose: "verification",
-    });
-    return res.json({
-      ok: true,
-      expiresInSec,
-      delivery: "email",
-    });
+    await sendGuestOtpEmail({ to: email, guestName: name, code, purpose: "verification" });
+    res.json({ ok: true, expiresInSec, delivery: "email" });
   })
 );
 
-// POST /auth/guest/verify-otp
+// ---------------------------------------------------------------------------
+// Registration — step 2: confirm the code and create the account
+// ---------------------------------------------------------------------------
 authRouter.post(
   "/guest/verify-otp",
-  otpVerifyLimiter,
+  otpVerifyByEmail,
+  otpVerifyByIp,
   validate(VerifyOtpSchema),
   asyncHandler(async (req, res) => {
-    const { phone: rawPhone, code } = req.body as any;
-    const intent: Intent = "register";
-    const nameRaw = String((req.body as any).name ?? "").trim();
-    const consent = Boolean((req.body as any).consent);
-    const passwordRaw = String((req.body as any).password ?? "");
+    const body = req.body as z.infer<typeof VerifyOtpSchema>;
+    const email = assertEmail(normalizeEmail(body.email));
+    const name = body.name.trim();
 
-    const phone = normalizePhone(rawPhone);
-    const email = assertEmail(normalizeEmail((req.body as any).email));
+    if (!body.consent) {
+      throw new HttpError(400, "CONSENT_REQUIRED", "Consent is required");
+    }
 
-    await consumeOtpOrThrow(phone, String(code));
-
-    let user = await prisma.user.findUnique({ where: { phone } });
-
-    if (!nameRaw) throw new HttpError(400, "NAME_REQUIRED", "Name is required");
-    if (!consent) throw new HttpError(400, "CONSENT_REQUIRED", "Consent is required");
-    if (passwordRaw.length < 6) throw new HttpError(400, "PASSWORD_TOO_SHORT", "Password is too short");
-    assertRegisterAllowed(user);
-    const existingEmailUser = await prisma.user.findUnique({ where: { email } }).catch(() => null);
-    if (existingEmailUser) {
+    // Check before burning the code, so a guest who already has an account
+    // doesn't lose a freshly requested one.
+    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (existing) {
       throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
     }
 
-    const passwordHash = await bcrypt.hash(passwordRaw, 10);
+    await consumeOtpOrThrow(email, body.code);
 
-    user = await prisma.user.create({
-      data: {
-        phone,
-        name: nameRaw,
-        email,
-        passwordHash,
-        privacyAcceptedAt: new Date(),
-      },
-    });
+    const passwordHash = await bcrypt.hash(body.password, 10);
 
-    const uidToken = jwt.sign(
-      { userId: user!.id, role: user!.role },
-      env.JWT_USER_SECRET,
-      { expiresIn: "30d" }
-    );
-
-    setCookie(res, "uid", uidToken, 60 * 60 * 24 * 30);
-
-    const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
-    if (gsid) {
-      try {
-        const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
-        await prisma.guestSession.update({
-          where: { id: payload.sessionId },
-          data: { userId: user!.id },
-        });
-      } catch {
-        // ignore
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: { name, email, passwordHash, privacyAcceptedAt: new Date() },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          cardNumber: true,
+          role: true,
+          privacyAcceptedAt: true,
+        },
+      });
+    } catch (error) {
+      // Two devices confirming the same address at once — the unique index is
+      // the real guard, not the check above.
+      if (isUniqueViolation(error)) {
+        throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
       }
+      throw error;
     }
 
-    res.json({
-      ok: true,
-      user: {
-        id: user!.id,
-        name: user!.name,
-        phone: user!.phone,
-        email: user!.email,
-        role: user!.role,
-        privacyAcceptedAt: (user as any).privacyAcceptedAt ?? null,
-      },
-    });
+    res.json(await completeSignIn(req, res, user));
   })
 );
 
-const guestPasswordLoginHandler = asyncHandler(async (req, res) => {
-    const email = assertEmail(normalizeEmail((req.body as any).email));
-    const password = String((req.body as any).password ?? "");
+// ---------------------------------------------------------------------------
+// Sign in — e-mail + password, nothing else
+// ---------------------------------------------------------------------------
+authRouter.post(
+  "/guest/login-password",
+  passwordByEmail,
+  passwordByIp,
+  validate(PasswordLoginSchema),
+  asyncHandler(async (req, res) => {
+    const body = req.body as z.infer<typeof PasswordLoginSchema>;
+    const email = assertEmail(normalizeEmail(body.email));
 
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
-    }
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        cardNumber: true,
+        role: true,
+        privacyAcceptedAt: true,
+        passwordHash: true,
+      },
+    });
 
+    if (!user) throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
     if (!user.passwordHash) {
       throw new HttpError(400, "PASSWORD_NOT_SET", "Password is not set for this account");
     }
 
-    const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) {
-      throw new HttpError(400, "PASSWORD_INVALID", "Password is invalid");
-    }
+    const ok = await bcrypt.compare(body.password, user.passwordHash);
+    if (!ok) throw new HttpError(400, "PASSWORD_INVALID", "Password is invalid");
 
-    const uidToken = jwt.sign(
-      { userId: user.id, role: user.role },
-      env.JWT_USER_SECRET,
-      { expiresIn: "30d" }
-    );
+    res.json(await completeSignIn(req, res, user));
+  })
+);
 
-    setCookie(res, "uid", uidToken, 60 * 60 * 24 * 30);
-
-    const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
-    if (gsid) {
-      try {
-        const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
-        await prisma.guestSession.update({
-          where: { id: payload.sessionId },
-          data: { userId: user.id },
-        });
-      } catch {
-        // ignore
-      }
-    }
-
-    res.json({
-      ok: true,
-      user: {
-        id: user.id,
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-        role: user.role,
-        privacyAcceptedAt: (user as any).privacyAcceptedAt ?? null,
-      },
-    });
-  });
-
-authRouter.post("/guest/login-password", passwordLimiter, validate(PasswordLoginSchema), guestPasswordLoginHandler);
-
+// ---------------------------------------------------------------------------
+// Password reset
+// ---------------------------------------------------------------------------
 authRouter.post(
   "/guest/request-password-reset",
-  otpRequestLimiter,
+  otpRequestByEmail,
+  otpRequestByIp,
   validate(RequestPasswordResetSchema),
   asyncHandler(async (req, res) => {
-    const email = assertEmail(normalizeEmail((req.body as any).email));
-    const user = await prisma.user.findUnique({ where: { email } });
+    const body = req.body as z.infer<typeof RequestPasswordResetSchema>;
+    const email = assertEmail(normalizeEmail(body.email));
 
-    if (!user) {
-      throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
-    }
+    const user = await prisma.user.findUnique({ where: { email }, select: { name: true } });
+    if (!user) throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
 
-    const { code, expiresInSec } = await issueOtpForPhone(user.phone);
+    assertEmailDeliverable();
+
+    const { code, expiresInSec } = await issueOtp(email);
 
     if (!isEmailConfigured()) {
-      console.log(`[DEV OTP] reset email=${email} code=${code}`);
-      return res.json({ ok: true, expiresInSec, delivery: "none", ...(exposeDevCode ? { devCode: code } : {}) });
+      console.log(`[DEV OTP] reset ${email} → ${code}`);
+      return res.json({ ok: true, expiresInSec, delivery: "none", devCode: code });
     }
 
-    await sendGuestOtpEmail({
-      to: email,
-      guestName: user.name,
-      code,
-      purpose: "password-reset",
-    });
-
-    res.json({
-      ok: true,
-      expiresInSec,
-      delivery: "email",
-    });
+    await sendGuestOtpEmail({ to: email, guestName: user.name, code, purpose: "password-reset" });
+    res.json({ ok: true, expiresInSec, delivery: "email" });
   })
 );
 
 authRouter.post(
   "/guest/reset-password",
-  otpVerifyLimiter,
+  otpVerifyByEmail,
+  otpVerifyByIp,
   validate(ConfirmPasswordResetSchema),
   asyncHandler(async (req, res) => {
-    const email = assertEmail(normalizeEmail((req.body as any).email));
-    const code = String((req.body as any).code ?? "").trim();
-    const passwordRaw = String((req.body as any).password ?? "");
+    const body = req.body as z.infer<typeof ConfirmPasswordResetSchema>;
+    const email = assertEmail(normalizeEmail(body.email));
 
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
-    }
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (!user) throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
 
-    await consumeOtpOrThrow(user.phone, code);
+    await consumeOtpOrThrow(email, body.code);
 
-    const passwordHash = await bcrypt.hash(passwordRaw, 10);
-    const updatedUser = await prisma.user.update({
+    const passwordHash = await bcrypt.hash(body.password, 10);
+    const updated = await prisma.user.update({
       where: { id: user.id },
       data: { passwordHash },
-    });
-
-    const uidToken = jwt.sign(
-      { userId: updatedUser.id, role: updatedUser.role },
-      env.JWT_USER_SECRET,
-      { expiresIn: "30d" }
-    );
-
-    setCookie(res, "uid", uidToken, 60 * 60 * 24 * 30);
-
-    const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
-    if (gsid) {
-      try {
-        const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
-        await prisma.guestSession.update({
-          where: { id: payload.sessionId },
-          data: { userId: updatedUser.id },
-        });
-      } catch {
-        // ignore
-      }
-    }
-
-    res.json({
-      ok: true,
-      user: {
-        id: updatedUser.id,
-        name: updatedUser.name,
-        phone: updatedUser.phone,
-        email: updatedUser.email,
-        role: updatedUser.role,
-        privacyAcceptedAt: (updatedUser as any).privacyAcceptedAt ?? null,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        cardNumber: true,
+        role: true,
+        privacyAcceptedAt: true,
       },
     });
+
+    res.json(await completeSignIn(req, res, updated));
   })
 );
 
+// ---------------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------------
 authRouter.get(
   "/guest/me",
   asyncHandler(async (req, res) => {
@@ -440,21 +476,22 @@ authRouter.get(
     if (!uid) return res.json({ authenticated: false });
 
     try {
-      const payload = jwt.verify(uid, env.JWT_USER_SECRET) as { userId: string; role: string };
-      const user = await prisma.user.findUnique({ where: { id: payload.userId } });
-      if (!user) return res.json({ authenticated: false });
-
-      return res.json({
-        authenticated: true,
-        user: {
-          id: user.id,
-          name: user.name,
-          phone: user.phone,
-          email: user.email,
-          role: user.role,
-          privacyAcceptedAt: (user as any).privacyAcceptedAt ?? null,
+      const payload = jwt.verify(uid, env.JWT_USER_SECRET) as { userId: string };
+      const user = await prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          cardNumber: true,
+          role: true,
+          privacyAcceptedAt: true,
         },
       });
+      if (!user) return res.json({ authenticated: false });
+
+      return res.json({ authenticated: true, user: serializeUser(user) });
     } catch {
       return res.json({ authenticated: false });
     }
@@ -468,4 +505,4 @@ authRouter.post(
     clearCookie(res, "gsid");
     res.json({ ok: true });
   })
-); 
+);

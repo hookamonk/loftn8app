@@ -1,4 +1,4 @@
-import type { RequestHandler } from "express";
+import type { Request, RequestHandler } from "express";
 import { HttpError } from "../utils/httpError";
 
 /**
@@ -28,12 +28,29 @@ export function rateLimit(opts: {
   max: number;
   keyPrefix: string;
   message?: string;
+  /**
+   * What to count per, instead of the client IP.
+   *
+   * Every guest in the venue shares one Wi-Fi address, so an IP-based limit on
+   * sign-up would lock the whole room out after a handful of registrations.
+   * Those routes count per e-mail instead — which is also the thing actually
+   * worth protecting (one inbox, one account) — and keep a separate, much
+   * higher IP ceiling for real abuse.
+   *
+   * Return an empty string to skip the limit for this request.
+   */
+  key?: (req: Request) => string;
 }): RequestHandler {
   ensureSweep();
 
   return (req, _res, next) => {
-    const ip = req.ip || req.socket.remoteAddress || "unknown";
-    const key = `${opts.keyPrefix}:${ip}`;
+    const identity = opts.key
+      ? opts.key(req)
+      : req.ip || req.socket.remoteAddress || "unknown";
+
+    if (!identity) return next();
+
+    const key = `${opts.keyPrefix}:${identity}`;
     const now = Date.now();
 
     const bucket = buckets.get(key);

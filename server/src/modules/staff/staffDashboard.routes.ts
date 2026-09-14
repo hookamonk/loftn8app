@@ -64,10 +64,27 @@ staffDashboardRouter.get("/events", (req, res) => {
   });
 });
 
+// A guest tapping "Call the waiter" in the menu IS the request to order: staff
+// accept it under Orders, walk to the table and punch the order in there. Only
+// plain service calls (hookah / free-text message / bill) stay under Calls.
 function callTypesForRole(role: StaffRole): CallType[] {
-  if (role === "WAITER") return ["WAITER", "BILL", "HELP"];
+  if (role === "WAITER") return ["BILL", "HELP"];
   if (role === "HOOKAH") return ["HOOKAH", "HELP"];
-  return ["WAITER", "HOOKAH", "BILL", "HELP"];
+  return ["HOOKAH", "BILL", "HELP"];
+}
+
+/** Everything that shows up in the staff "Orders" tab as an incoming request. */
+function orderRequestWhere(): Prisma.StaffCallWhereInput {
+  return {
+    OR: [
+      { type: "WAITER" },
+      { type: "HELP", message: ORDER_REQUEST_MARKER },
+    ],
+  };
+}
+
+function isOrderRequestCall(call: { type: CallType; message: string | null }) {
+  return call.type === "WAITER" || isOrderRequestMessage(call.message);
 }
 
 function orderSectionsForRole(role: StaffRole): MenuSection[] | null {
@@ -335,19 +352,28 @@ staffDashboardRouter.get(
     const sections = orderSectionsForRole(role);
 
     const [newOrders, newCalls, pendingPayments] = await Promise.all([
-      // Active (cooking) orders for this role's sections — the guest no longer
-      // sends order-requests; staff punch orders at the table, so the "Orders"
-      // badge reflects what's in progress.
-      prisma.order.count({
-        where: {
-          status: { in: ["NEW", "ACCEPTED", "IN_PROGRESS"] },
-          table: { venueId },
-          session: { shiftId: shift.id },
-          ...(sections
-            ? { items: { some: { menuItem: { category: { section: { in: sections } } } } } }
-            : {}),
-        },
-      }),
+      // The "Orders" badge counts what still needs an action from THIS role:
+      // waiters/managers take incoming order requests, the hookah master only
+      // ever works his own in-progress orders.
+      role === "HOOKAH"
+        ? prisma.order.count({
+            where: {
+              status: { in: ["NEW", "ACCEPTED", "IN_PROGRESS"] },
+              table: { venueId },
+              session: { shiftId: shift.id },
+              ...(sections
+                ? { items: { some: { menuItem: { category: { section: { in: sections } } } } } }
+                : {}),
+            },
+          })
+        : prisma.staffCall.count({
+            where: {
+              status: "NEW",
+              ...orderRequestWhere(),
+              table: { venueId },
+              createdAt: { gte: shift.openedAt },
+            },
+          }),
       prisma.staffCall.count({
         where: {
           status: "NEW",
@@ -661,8 +687,7 @@ staffDashboardRouter.post(
       await tx.staffCall.updateMany({
         where: {
           tableId: body.tableId,
-          type: "HELP",
-          message: ORDER_REQUEST_MARKER,
+          ...orderRequestWhere(),
           status: { in: ["NEW", "ACKED"] },
           session: { shiftId: shift.id },
         },
@@ -730,11 +755,7 @@ staffDashboardRouter.get(
         calls: {
           where: {
             status: { in: ["NEW", "ACKED"] },
-            ...(role === "HOOKAH"
-              ? { type: { in: ["HOOKAH", "HELP"] as CallType[] } }
-              : role === "WAITER"
-              ? { type: { in: ["WAITER", "BILL", "HELP"] as CallType[] } }
-              : {}),
+            type: { in: callTypesForRole(role) },
             ...excludeOrderRequestMarker(),
           },
           select: {
@@ -954,11 +975,7 @@ staffDashboardRouter.get(
         where: {
           sessionId: session.id,
           status: { in: ["NEW", "ACKED"] },
-          ...(role === "HOOKAH"
-            ? { type: { in: ["HOOKAH", "HELP"] as CallType[] } }
-            : role === "WAITER"
-            ? { type: { in: ["WAITER", "BILL", "HELP"] as CallType[] } }
-            : {}),
+          type: { in: callTypesForRole(role) },
           ...excludeOrderRequestMarker(),
         },
         orderBy: { createdAt: "desc" },
@@ -1266,8 +1283,7 @@ staffDashboardRouter.get(
     const requests = await prisma.staffCall.findMany({
       where: {
         status: { in: ["NEW", "ACKED"] },
-        type: "HELP",
-        message: ORDER_REQUEST_MARKER,
+        ...orderRequestWhere(),
         table: { venueId },
         createdAt: { gte: shift.openedAt },
       },
@@ -1341,7 +1357,7 @@ staffDashboardRouter.post(
       },
     });
 
-    if (!request || !isOrderRequestMessage(request.message)) {
+    if (!request || !isOrderRequestCall(request)) {
       throw new HttpError(404, "REQUEST_NOT_FOUND", "Order request not found");
     }
     if (request.table.venueId !== venueId || request.createdAt < shift.openedAt) {
@@ -1368,6 +1384,44 @@ staffDashboardRouter.post(
         session: request.session,
       },
     });
+  })
+);
+
+// A request that will never turn into an order (guest changed their mind, or
+// just had a question) must be closable, otherwise its card would sit in the
+// Orders tab forever.
+staffDashboardRouter.post(
+  "/order-requests/:id/done",
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const shift = await getActiveShiftOrThrow(venueId);
+
+    const { id } = IdParamSchema.parse(req.params);
+    const request = await prisma.staffCall.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        type: true,
+        message: true,
+        tableId: true,
+        createdAt: true,
+        table: { select: { venueId: true } },
+      },
+    });
+
+    if (!request || !isOrderRequestCall(request)) {
+      throw new HttpError(404, "REQUEST_NOT_FOUND", "Order request not found");
+    }
+    if (request.table.venueId !== venueId || request.createdAt < shift.openedAt) {
+      throw new HttpError(404, "REQUEST_NOT_FOUND", "Order request not found");
+    }
+
+    await prisma.staffCall.update({ where: { id: request.id }, data: { status: "DONE" } });
+
+    emitGuestEvent(request.tableId, "order-request-done");
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    res.json({ ok: true });
   })
 );
 

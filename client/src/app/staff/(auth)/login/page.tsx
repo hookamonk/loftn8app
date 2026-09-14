@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { staffLogin } from "@/lib/staffApi";
 import { useStaffSession } from "@/providers/staffSession";
-import { ensurePushSubscribed, rebindPushIfPossible } from "@/lib/staffPush";
+import { enablePush, ensureServiceWorker, rebindPushIfPossible } from "@/lib/staffPush";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
 import {
   getStoredStaffVenueSlug,
@@ -72,8 +72,11 @@ export default function StaffLoginPage() {
     // Подписку на push запускаем в фоне (не блокируя переход) — иначе медленный
     // запрос/диалог разрешения задерживал вход и приходилось жать дважды.
     // Вызов стартует синхронно в рамках жеста клика, поэтому диалог разрешения
-    // браузер всё равно показывает.
-    void ensurePushSubscribed()
+    // браузер всё равно показывает. Если здесь не выйдет (iOS без установки на
+    // экран «Домой», отказ в разрешении) — на экране «Смена» есть пошаговый
+    // мастер, который доводит уведомления до рабочего состояния.
+    void ensureServiceWorker()
+      .then(() => enablePush())
       .then(() => rebindPushIfPossible())
       .catch(() => {});
 

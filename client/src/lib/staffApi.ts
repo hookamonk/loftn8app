@@ -302,7 +302,7 @@ export type StaffOrder = {
   createdAt: string;
   updatedAt: string;
   table: { code: string; label: string | null };
-  session: { id: string; user: { id: string; name: string; phone: string } | null };
+  session: { id: string; user: { id: string; name: string; phone: string | null } | null };
   items: Array<{
     id: string;
     qty: number;
@@ -317,7 +317,7 @@ export type StaffOrderRequest = {
   status: CallStatus;
   createdAt: string;
   table: { id: number; code: string; label: string | null };
-  session: { id: string; user: { id: string; name: string; phone: string } | null };
+  session: { id: string; user: { id: string; name: string; phone: string | null } | null };
   items?: Array<{ menuItemId: number; name: string; qty: number; priceCzk: number }>;
 };
 
@@ -335,19 +335,6 @@ export async function updateOrderStatus(id: string, status: OrderStatus): Promis
   );
 }
 
-export async function cancelOrderItem(
-  orderId: string,
-  itemId: string
-): Promise<ApiResult<{ ok: true; orderCancelled: boolean }>> {
-  return tryPaths<{ ok: true; orderCancelled: boolean }>(
-    [
-      `/staff/dashboard/orders/${orderId}/items/${itemId}/cancel`,
-      `/staff/orders/${orderId}/items/${itemId}/cancel`,
-    ],
-    { method: "POST" }
-  );
-}
-
 export async function listOrderRequests(): Promise<ApiResult<{ requests: StaffOrderRequest[] }>> {
   return tryPaths<{ ok: true; requests: StaffOrderRequest[] }>(
     ["/staff/dashboard/order-requests"],
@@ -360,6 +347,13 @@ export async function connectOrderRequest(id: string): Promise<ApiResult<{ reque
     [`/staff/dashboard/order-requests/${id}/connect`],
     { method: "POST", body: JSON.stringify({}) }
   ).then((r) => (r.ok ? { ok: true, data: { request: r.data.request } } : r));
+}
+
+export async function dismissOrderRequest(id: string): Promise<ApiResult<{ ok: true }>> {
+  return tryPaths<{ ok: true }>([`/staff/dashboard/order-requests/${id}/done`], {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function createTableOrder(payload: {
@@ -382,7 +376,7 @@ export type StaffCall = {
   message: string | null;
   createdAt: string;
   table: { id: number; code: string; label: string | null };
-  session: { id: string; user: { id: string; name: string; phone: string } | null };
+  session: { id: string; user: { id: string; name: string; phone: string | null } | null };
 };
 
 export async function listCalls(status: CallStatus): Promise<ApiResult<{ calls: StaffCall[] }>> {
@@ -399,39 +393,12 @@ export async function updateCallStatus(id: string, status: CallStatus): Promise<
   );
 }
 
-export type StaffPayment = {
-  id: string;
-  status: PaymentStatus;
-  method: PaymentMethod;
-  createdAt: string;
-  billTotalCzk: number;
-  paidAmountCzk: number;
-  requestedAmountCzk: number;
-  useLoyalty: boolean;
-  loyaltyAppliedCzk: number;
-  table: { code: string; label: string | null };
-  session: {
-    id: string;
-    userId: string | null;
-    user: { id: string; name: string; phone: string } | null;
-  };
-  items: Array<{
-    orderItemId: string;
-    menuItemId: number;
-    name: string;
-    qty: number;
-    unitPriceCzk: number;
-    totalCzk: number;
-    comment?: string;
-  }>;
-};
-
 export type StaffActiveTable = {
   table: { id: number; code: string; label: string | null };
   session: {
     id: string;
     startedAt: string;
-    user: { id: string; name: string; phone: string } | null;
+    user: { id: string; name: string; phone: string | null } | null;
   };
   isActive: boolean;
   openItemsCount: number;
@@ -449,7 +416,7 @@ export type StaffActiveTableDetails = {
   session: {
     id: string;
     startedAt: string;
-    user: { id: string; name: string; phone: string } | null;
+    user: { id: string; name: string; phone: string | null } | null;
   };
   orders: Array<{
     id: string;
@@ -509,13 +476,6 @@ export type StaffActiveTableDetails = {
   };
 };
 
-export async function listPayments(status: PaymentStatus): Promise<ApiResult<{ payments: StaffPayment[] }>> {
-  return tryPaths<{ ok: true; payments: StaffPayment[] }>(
-    [`/staff/dashboard/payments?status=${status}`, `/staff/payments?status=${status}`],
-    { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { payments: r.data.payments } } : r));
-}
-
 export async function listActiveTables(): Promise<ApiResult<{ tables: StaffActiveTable[] }>> {
   return tryPaths<{ ok: true; tables: StaffActiveTable[] }>(["/staff/dashboard/tables"], {
     method: "GET",
@@ -559,28 +519,10 @@ export async function requestTablePayment(
   );
 }
 
-export async function disconnectActiveTable(
-  tableId: number
-): Promise<ApiResult<{ sessionId: string; endedAt: string }>> {
-  return tryPaths<{ ok: true; sessionId: string; endedAt: string }>(
-    [`/staff/dashboard/tables/${tableId}/disconnect`],
-    { method: "POST", body: JSON.stringify({}) }
-  ).then((r) =>
-    r.ok ? { ok: true, data: { sessionId: r.data.sessionId, endedAt: r.data.endedAt } } : r
-  );
-}
-
 export async function confirmPayment(id: string): Promise<ApiResult<any>> {
   return tryPaths<any>(
     [`/staff/dashboard/payments/${id}/confirm`, `/staff/payments/${id}/confirm`],
     { method: "POST", body: JSON.stringify({}) }
-  );
-}
-
-export async function changePaymentMethod(id: string, method: PaymentMethod): Promise<ApiResult<any>> {
-  return tryPaths<any>(
-    [`/staff/dashboard/payments/${id}/method`, `/staff/payments/${id}/method`],
-    { method: "POST", body: JSON.stringify({ method }) }
   );
 }
 
@@ -625,7 +567,7 @@ export type AdminSummary = {
 export type AdminUserItem = {
   id: string;
   name: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   role: string;
   privacyAcceptedAt: string | null;

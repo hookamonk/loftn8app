@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { listActiveTables, type StaffActiveTable } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
+import { useStaffEvents } from "@/lib/useStaffEvents";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 
 const card =
@@ -62,7 +63,6 @@ export default function StaffTablesPage() {
 
   useEffect(() => {
     void load({ silent: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useStaffPushEvents((payload) => {
@@ -75,6 +75,9 @@ export default function StaffTablesPage() {
       void tick();
     }
   });
+
+  // SSE keeps the board live the moment anything changes at any table.
+  useStaffEvents(() => void tick());
 
   useEffect(() => subscribeStaffLiveSync(() => void tick()), [tick]);
 

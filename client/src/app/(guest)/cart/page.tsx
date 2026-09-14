@@ -3,24 +3,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { storage } from "@/lib/storage";
 import { getVenueName } from "@/lib/venue";
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
 import { useAuth } from "@/providers/auth";
 import { PaymentSheet } from "@/components/PaymentSheet";
-import { useEscapeToClose } from "@/lib/useModalA11y";
 import { useI18n } from "@/providers/i18n";
 
+/**
+ * The guest never builds an order here — a waiter punches it in at the table.
+ * So this screen has exactly three states:
+ *
+ *   1. nothing yet   → the live status of the "waiter, please" request
+ *   2. order placed  → dishes + cooking status + total + "Pay"
+ *   3. paying        → what was selected, how, and by whom
+ */
+
 type OrderStatus = "NEW" | "ACCEPTED" | "IN_PROGRESS" | "DELIVERED" | "CANCELLED";
-type ItemVisualState = "preparing" | "ready";
-type PayableSource = { orderItemId: string; qty: number };
-type PendingPaymentMarker = {
-  method: "CARD" | "CASH";
-  selectedQtyByKey: Record<string, number>;
-  requestedAt: number;
-};
+type ItemState = "preparing" | "ready";
+
 type PayableItem = {
   key: string;
   name: string;
@@ -28,89 +30,69 @@ type PayableItem = {
   availableQty: number;
   unitPriceCzk: number;
   totalCzk: number;
-  sources: PayableSource[];
+  sources: Array<{ orderItemId: string; qty: number }>;
 };
 
-function stageClass(tone: "success" | "info" | "error") {
+type Stage = {
+  label: string;
+  tone: "info" | "success" | "error";
+  phase: "accepted" | "preparing" | "ready" | "cancelled";
+};
+
+function stageChipClass(tone: Stage["tone"]) {
   if (tone === "success") return "border-gold/20 bg-gold/10 text-gold";
   if (tone === "error") return "border-red-400/20 bg-red-500/10 text-red-200";
   return "border-white/10 bg-white/8 text-white/80";
 }
 
-function progressStepClass(
-  state: "idle" | "done" | "active" | "error",
-  variant: "accepted" | "preparing" | "ready"
-) {
-  if (state === "error") return "bg-red-400/85";
-  if (state === "done") return "bg-gold";
-  if (state === "active") {
-    return variant === "preparing"
-      ? "animate-pulse bg-gold shadow-[0_0_16px_rgba(74,222,128,0.45)]"
-      : "bg-gold";
-  }
-  return "bg-white/10";
-}
-
-function openTabStage(statuses: OrderStatus[], isCz: boolean) {
+function openTabStage(statuses: OrderStatus[], isCz: boolean): Stage {
   const active = statuses.filter((status) => status !== "CANCELLED");
-  const allReady = active.length > 0 && active.every((status) => status === "DELIVERED");
-  const hasPreparing = active.some((status) => status === "IN_PROGRESS");
-
-  if (!active.length) return { label: isCz ? "Zrušeno" : "Cancelled", tone: "error" as const, phase: "cancelled" as const };
-  if (allReady) return { label: isCz ? "Připraveno" : "Ready", tone: "success" as const, phase: "ready" as const };
-  if (hasPreparing) return { label: isCz ? "Příprava" : "Preparing", tone: "success" as const, phase: "preparing" as const };
-  return { label: isCz ? "Přijato" : "Accepted", tone: "success" as const, phase: "accepted" as const };
+  if (!active.length) return { label: isCz ? "Zrušeno" : "Cancelled", tone: "error", phase: "cancelled" };
+  if (active.every((status) => status === "DELIVERED"))
+    return { label: isCz ? "Připraveno" : "Ready", tone: "success", phase: "ready" };
+  if (active.some((status) => status === "IN_PROGRESS"))
+    return { label: isCz ? "Příprava" : "Preparing", tone: "success", phase: "preparing" };
+  return { label: isCz ? "Přijato" : "Accepted", tone: "success", phase: "accepted" };
 }
 
 function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"]>["orders"], isCz: boolean) {
-  const activeOrders = orders.filter((order) => order.status !== "CANCELLED");
-  if (!activeOrders.length) return null;
+  const active = orders.filter((order) => order.status !== "CANCELLED");
+  if (!active.length) return null;
 
-  const itemMap = new Map<
-    string,
-    {
-      key: string;
-      name: string;
-      qty: number;
-      totalCzk: number;
-      comment?: string;
-      state: ItemVisualState;
-    }
-  >();
+  const itemMap = new Map<string, { key: string; name: string; qty: number; totalCzk: number; comment?: string; state: ItemState }>();
   const payableMap = new Map<string, PayableItem>();
 
-  for (const order of activeOrders) {
+  for (const order of active) {
     for (const item of order.items) {
-      const itemState: ItemVisualState =
-        order.status === "DELIVERED" ? "ready" : "preparing";
-      const key = `${item.menuItem.id}:${item.comment ?? ""}:${itemState}`;
-      const existing = itemMap.get(key);
+      const name = isCz ? item.menuItem.nameCs || item.menuItem.name : item.menuItem.name;
+      const state: ItemState = order.status === "DELIVERED" ? "ready" : "preparing";
 
+      const displayKey = `${item.menuItem.id}:${item.comment ?? ""}:${state}`;
+      const existing = itemMap.get(displayKey);
       if (existing) {
         existing.qty += item.qty;
         existing.totalCzk += item.totalCzk;
-        continue;
+      } else {
+        itemMap.set(displayKey, {
+          key: displayKey,
+          name,
+          qty: item.qty,
+          totalCzk: item.totalCzk,
+          comment: item.comment ?? undefined,
+          state,
+        });
       }
 
-      itemMap.set(key, {
-        key,
-        name: isCz ? item.menuItem.nameCs || item.menuItem.name : item.menuItem.name,
-        qty: item.qty,
-        totalCzk: item.totalCzk,
-        comment: item.comment ?? undefined,
-        state: itemState,
-      });
-
-      const payableKey = `${item.menuItem.id}:${item.comment ?? ""}:${item.priceCzk}`;
-      const payableExisting = payableMap.get(payableKey);
-      if (payableExisting) {
-        payableExisting.availableQty += item.qty;
-        payableExisting.totalCzk += item.totalCzk;
-        payableExisting.sources.push({ orderItemId: item.id, qty: item.qty });
+      const payKey = `${item.menuItem.id}:${item.comment ?? ""}:${item.priceCzk}`;
+      const payable = payableMap.get(payKey);
+      if (payable) {
+        payable.availableQty += item.qty;
+        payable.totalCzk += item.totalCzk;
+        payable.sources.push({ orderItemId: item.id, qty: item.qty });
       } else {
-        payableMap.set(payableKey, {
-          key: payableKey,
-          name: isCz ? item.menuItem.nameCs || item.menuItem.name : item.menuItem.name,
+        payableMap.set(payKey, {
+          key: payKey,
+          name,
           comment: item.comment ?? undefined,
           availableQty: item.qty,
           unitPriceCzk: item.priceCzk,
@@ -121,216 +103,124 @@ function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"
     }
   }
 
-  const firstCreatedAt = Math.min(...activeOrders.map((order) => new Date(order.createdAt).getTime()));
-  const cancelledCount = orders.filter((order) => order.status === "CANCELLED").length;
-
   return {
-    firstCreatedAt,
-    stage: openTabStage(activeOrders.map((order) => order.status), isCz),
-    totalCzk: activeOrders.reduce((sum, order) => sum + order.totalCzk, 0),
-    items: Array.from(itemMap.values()).sort((a, b) => {
-      if (a.state === b.state) return a.name.localeCompare(b.name);
-      return a.state === "preparing" ? -1 : 1;
-    }),
+    stage: openTabStage(active.map((order) => order.status), isCz),
+    totalCzk: active.reduce((sum, order) => sum + order.totalCzk, 0),
+    items: Array.from(itemMap.values()).sort((a, b) =>
+      a.state === b.state ? a.name.localeCompare(b.name) : a.state === "preparing" ? -1 : 1
+    ),
     payableItems: Array.from(payableMap.values()).sort((a, b) => a.name.localeCompare(b.name)),
-    cancelledCount,
   };
 }
 
+const card =
+  "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]";
+
 export default function CartPage() {
-  const { isCz, locale, ready } = useI18n();
+  const { isCz, ready } = useI18n();
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const { feed, refresh } = useGuestFeed();
   const { me } = useAuth();
   const { push } = useToast();
 
   const [payOpen, setPayOpen] = useState(false);
-  // Shown when the guest tries to pay while the order is still being prepared.
-  const [showPreparingBlock, setShowPreparingBlock] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [changingMethod, setChangingMethod] = useState(false);
   const [useLoyalty, setUseLoyalty] = useState(false);
   const [selectedQtyByKey, setSelectedQtyByKey] = useState<Record<string, number>>({});
-  const [localPendingMarker, setLocalPendingMarker] = useState<PendingPaymentMarker | null>(null);
-  const latestPaymentSnapshotRef = useRef<{ id: string; status: "PENDING" | "CONFIRMED" | "CANCELLED" } | null>(null);
-  // The "order ready" note is a transient flash shown ONCE when an order truly
-  // becomes ready — never again on page refresh, and not while a follow-up
-  // order is still cooking. We key it on the set of delivered order ids and
-  // persist that we've shown it, so a reload with the same ready tab stays
-  // silent, while a freshly-delivered (dozakaz) order flashes once.
-  const [showReadyNote, setShowReadyNote] = useState(false);
 
   const openTab = useMemo(() => buildOpenTab(feed?.orders ?? [], isCz), [feed, isCz]);
-  const readyPhase = openTab?.stage.phase === "ready";
-  const readyNoteKey = feed?.currentSessionId ? `readyNoteShown:${feed.currentSessionId}` : null;
-  const deliveredSig = useMemo(
-    () =>
-      (feed?.orders ?? [])
-        .filter((o) => o.status === "DELIVERED")
-        .map((o) => o.id)
-        .sort()
-        .join(","),
-    [feed?.orders]
-  );
 
-  useEffect(() => {
-    if (!readyPhase || !readyNoteKey || !deliveredSig) {
-      setShowReadyNote(false);
-      return;
-    }
-    const storedSet = new Set((storage.get<string | null>(readyNoteKey, null) ?? "").split(",").filter(Boolean));
-    const currentIds = deliveredSig.split(",").filter(Boolean);
-    const hasNewlyReady = currentIds.some((id) => !storedSet.has(id));
-    // Only flash when a NEW order has just become ready — not on refresh, and
-    // not when the delivered set merely shrinks (e.g. a cancelled item).
-    storage.set(readyNoteKey, deliveredSig);
-    if (!hasNewlyReady) {
-      setShowReadyNote(false);
-      return;
-    }
-    setShowReadyNote(true);
-    const timer = window.setTimeout(() => setShowReadyNote(false), 5000);
-    return () => window.clearTimeout(timer);
-  }, [readyPhase, readyNoteKey, deliveredSig]);
-  const pendingMarkerStorageKey = useMemo(
-    () =>
-      feed?.table && feed?.currentSessionId
-        ? `pendingPaymentSelection:${feed.table.id}:${feed.currentSessionId}`
-        : null,
-    [feed?.currentSessionId, feed?.table]
-  );
-  const latestPendingPayment = useMemo(
-    () => (feed?.payments ?? []).find((payment) => payment.status === "PENDING") ?? null,
-    [feed]
+  const request = feed?.orderRequest ?? null;
+  const payments = useMemo(() => feed?.payments ?? [], [feed]);
+  const tablePendingPayment = useMemo(
+    () => payments.find((payment) => payment.status === "PENDING") ?? null,
+    [payments]
   );
   const myPendingPayment = useMemo(
-    () =>
-      (feed?.payments ?? []).find(
-        (payment) =>
-          payment.status === "PENDING" &&
-          payment.sessionId &&
-          payment.sessionId === feed?.currentSessionId
-      ) ?? null,
-    [feed]
+    () => payments.find((payment) => payment.status === "PENDING" && payment.isMine) ?? null,
+    [payments]
   );
-  const activeOrderRequest =
-    feed?.orderRequest && (feed.orderRequest.status === "NEW" || feed.orderRequest.status === "ACKED")
-      ? feed.orderRequest
-      : null;
   const availablePointsCzk = feed?.loyalty?.availableCzk ?? 0;
-  const showOpenTab = Boolean(openTab);
-  const serverPendingSelectionQtyByKey = useMemo(() => {
-    if (!myPendingPayment?.items?.length) return {};
-    return myPendingPayment.items.reduce<Record<string, number>>((acc, item) => {
-      const key = `${item.menuItemId}:${item.comment ?? ""}:${item.unitPriceCzk}`;
-      acc[key] = (acc[key] ?? 0) + item.qty;
-      return acc;
-    }, {});
-  }, [myPendingPayment]);
-  const effectivePendingPayment =
-    myPendingPayment ??
-    (latestPendingPayment && localPendingMarker
-      ? {
-          ...latestPendingPayment,
-          isMine: true,
-          method: localPendingMarker.method,
-          methodLabel: localPendingMarker.method === "CARD" ? "Card" : "Cash",
-        }
-      : null);
-  const pendingSelectionQtyByKey = myPendingPayment
-    ? serverPendingSelectionQtyByKey
-    : localPendingMarker?.selectedQtyByKey ?? {};
-  const activeSelectionQtyByKey = effectivePendingPayment ? pendingSelectionQtyByKey : selectedQtyByKey;
+  const cashbackPercent = feed?.loyalty?.cashbackPercent ?? 10;
+
+  // Tell the guest the moment staff act on their payment.
+  const lastPaymentRef = useRef<{ id: string; status: string } | null>(null);
+  useEffect(() => {
+    const mine = payments.find((payment) => payment.isMine) ?? null;
+    if (!mine) {
+      lastPaymentRef.current = null;
+      return;
+    }
+
+    const prev = lastPaymentRef.current;
+    if (prev && prev.id === mine.id && prev.status === "PENDING") {
+      if (mine.status === "CONFIRMED") {
+        push({
+          kind: "success",
+          title: isCz ? "Platba potvrzena" : "Payment confirmed",
+          message: isCz ? "Děkujeme! Účet je uhrazen." : "Thank you! Your bill is settled.",
+        });
+      }
+      if (mine.status === "CANCELLED") {
+        setUseLoyalty(false);
+        push({
+          kind: "info",
+          title: isCz ? "Žádost o platbu zrušena" : "Payment request cancelled",
+          message: isCz ? "Zvolte prosím způsob platby znovu." : "Please choose the payment method again.",
+        });
+      }
+    }
+
+    lastPaymentRef.current = { id: mine.id, status: mine.status };
+  }, [payments, push, isCz]);
+
+  useEffect(() => {
+    if (!availablePointsCzk && useLoyalty) setUseLoyalty(false);
+  }, [availablePointsCzk, useLoyalty]);
+
   const selectedTotalCzk = useMemo(() => {
     if (!openTab) return 0;
     return openTab.payableItems.reduce((sum, item) => {
-      const qty = Math.max(0, Math.min(activeSelectionQtyByKey[item.key] ?? 0, item.availableQty));
+      const qty = Math.max(0, Math.min(selectedQtyByKey[item.key] ?? 0, item.availableQty));
       return sum + qty * item.unitPriceCzk;
     }, 0);
-  }, [openTab, activeSelectionQtyByKey]);
+  }, [openTab, selectedQtyByKey]);
+
   const cashbackAppliedCzk = useLoyalty ? Math.min(availablePointsCzk, selectedTotalCzk) : 0;
   const finalPayableCzk = Math.max(selectedTotalCzk - cashbackAppliedCzk, 0);
-  const selectedPayableItems = useMemo(() => {
-    if (!openTab) return [];
-    return openTab.payableItems
-      .map((item) => {
-        const selectedQty = Math.max(0, Math.min(activeSelectionQtyByKey[item.key] ?? 0, item.availableQty));
-        return {
-          ...item,
-          selectedQty,
-          selectedTotalCzk: selectedQty * item.unitPriceCzk,
-        };
-      })
-      .filter((item) => item.selectedQty > 0);
-  }, [openTab, activeSelectionQtyByKey]);
-  const paymentSelectionActive = Boolean(effectivePendingPayment) || (payOpen && selectedPayableItems.length > 0);
-  useEffect(() => {
-    if (!pendingMarkerStorageKey) {
-      setLocalPendingMarker(null);
-      return;
-    }
-    setLocalPendingMarker(storage.get<PendingPaymentMarker | null>(pendingMarkerStorageKey, null));
-  }, [pendingMarkerStorageKey]);
 
-  useEffect(() => {
-    if (!pendingMarkerStorageKey) return;
-    if (localPendingMarker) storage.set(pendingMarkerStorageKey, localPendingMarker);
-    else storage.del(pendingMarkerStorageKey);
-  }, [localPendingMarker, pendingMarkerStorageKey]);
+  const pendingBillCzk = myPendingPayment?.billTotalCzk ?? 0;
+  const pendingCashbackCzk = myPendingPayment?.useLoyalty
+    ? Math.min(availablePointsCzk, pendingBillCzk)
+    : (myPendingPayment?.loyaltyAppliedCzk ?? 0);
+  const pendingDueCzk = Math.max(pendingBillCzk - pendingCashbackCzk, 0);
 
-  useEffect(() => {
-    if (!availablePointsCzk && useLoyalty) {
-      setUseLoyalty(false);
-    }
-  }, [availablePointsCzk, useLoyalty]);
+  const isReady = openTab?.stage.phase === "ready";
+  const dueCzk = feed?.totals.dueCzk ?? openTab?.totalCzk ?? 0;
+  const earnCzk = Math.floor((dueCzk * cashbackPercent) / 100);
 
-  useEffect(() => {
-    const latestPayment =
-      (feed?.payments ?? []).find(
-        (payment) => payment.sessionId && payment.sessionId === feed?.currentSessionId
-      ) ?? null;
-    if (!latestPayment) {
-      latestPaymentSnapshotRef.current = null;
-      return;
-    }
+  const openPaymentSheet = () => {
+    if (!openTab || tablePendingPayment || !isReady) return;
 
-    const prev = latestPaymentSnapshotRef.current;
-    if (prev && prev.id === latestPayment.id && prev.status === "PENDING" && latestPayment.status === "CANCELLED") {
+    if (!me?.authenticated) {
       push({
         kind: "info",
-        title: isCz ? "Žádost o platbu zrušena" : "Payment request cancelled",
-        message: isCz ? "Vyberte prosím znovu způsob platby a odešlete nový požadavek." : "Please choose the payment method again and send a new request.",
+        title: isCz ? "Vyžaduje registraci" : "Registration required",
+        message: isCz ? "Zaregistrujte se, abyste mohli zaplatit a získat cashback." : "Register to pay and earn cashback.",
+        action: { label: isCz ? "Zaregistrovat se" : "Register", href: "/auth" },
       });
-      setUseLoyalty(false);
-    }
-    if (prev && prev.id === latestPayment.id && prev.status === "PENDING" && latestPayment.status === "CONFIRMED") {
-      push({
-        kind: "success",
-        title: isCz ? "Platba potvrzena" : "Payment confirmed",
-        message: isCz ? "Vaše platba byla potvrzena." : "Your payment was confirmed.",
-      });
+      return;
     }
 
-    latestPaymentSnapshotRef.current = {
-      id: latestPayment.id,
-      status: latestPayment.status,
-    };
-  }, [feed?.payments, push]);
-
-  useEffect(() => {
-    if (!latestPendingPayment && localPendingMarker) {
-      setLocalPendingMarker(null);
-    }
-  }, [latestPendingPayment, localPendingMarker]);
-
-  // Live updates are driven centrally by GuestFeedProvider's polling (which
-  // already speeds up while there's an active order/payment). No local timer
-  // here — a second loop just doubled the requests.
+    setSelectedQtyByKey({});
+    setPayOpen(true);
+  };
 
   const requestPayment = async (method: "CARD" | "CASH") => {
-    if (latestPendingPayment || !showOpenTab || !openTab) return;
-    setPayOpen(false);
+    if (!openTab || tablePendingPayment || submitting) return;
 
-    const selectedItems = openTab.payableItems.flatMap((item) => {
+    const items = openTab.payableItems.flatMap((item) => {
       let remaining = Math.max(0, Math.min(selectedQtyByKey[item.key] ?? 0, item.availableQty));
       if (remaining <= 0) return [];
 
@@ -346,495 +236,293 @@ export default function CartPage() {
       return allocation;
     });
 
-    if (!selectedItems.length) {
+    if (!items.length) {
       push({
         kind: "info",
         title: isCz ? "Vyberte položky" : "Select items",
-        message: isCz ? "Pro tuto platbu vyberte alespoň jednu položku." : "Choose at least one position for this payment.",
+        message: isCz ? "Zvolte alespoň jednu položku." : "Choose at least one position.",
       });
       return;
     }
 
+    setPayOpen(false);
+    setSubmitting(true);
+
     try {
-      const marker: PendingPaymentMarker = {
-        method,
-        selectedQtyByKey: Object.fromEntries(
-          Object.entries(selectedQtyByKey).filter(([, qty]) => qty > 0)
-        ),
-        requestedAt: Date.now(),
-      };
-      setLocalPendingMarker(marker);
       await api("/payments/request", {
         method: "POST",
         body: JSON.stringify({
           method,
           useLoyalty: availablePointsCzk > 0 ? useLoyalty : false,
-          items: selectedItems,
+          items,
         }),
       });
-
       await refresh();
+
       setSelectedQtyByKey({});
       setUseLoyalty(false);
-
       push({
         kind: "success",
-        title: isCz ? "Žádost o platbu odeslána" : "Payment requested",
+        title: isCz ? "Žádost odeslána" : "Payment requested",
         message:
           method === "CARD"
             ? isCz
-              ? `Obsluha přijde s terminálem na ${finalPayableCzk} Kč.`
-              : `A staff member will come with the terminal for ${finalPayableCzk} Kč.`
+              ? "Obsluha přijde s terminálem."
+              : "A staff member will bring the terminal."
             : isCz
-            ? `Obsluha přijde pro hotovostní platbu ${finalPayableCzk} Kč.`
-            : `A staff member will come for cash payment of ${finalPayableCzk} Kč.`,
+              ? "Obsluha přijde pro hotovost."
+              : "A staff member will come for the cash.",
       });
-    } catch (e: any) {
-      setLocalPendingMarker(null);
+    } catch (e: unknown) {
       push({
         kind: "error",
         title: isCz ? "Chyba platby" : "Payment error",
-        message: e?.message ?? (isCz ? "Platbu se nepodařilo vyžádat" : "Failed"),
+        message: e instanceof Error ? e.message : isCz ? "Nepodařilo se odeslat" : "Failed",
       });
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const changeMyMethod = async (method: "CARD" | "CASH") => {
+  const changeMethod = async (method: "CARD" | "CASH") => {
     if (changingMethod) return;
     setChangingMethod(true);
     try {
-      // Reflect the new method immediately in the local fallback marker so the
-      // label doesn't lag while the feed catches up.
-      setLocalPendingMarker((m) => (m ? { ...m, method } : m));
       await api("/payments/method", { method: "POST", body: JSON.stringify({ method }) });
       await refresh();
+    } catch (e: unknown) {
       push({
-        kind: "success",
-        title: isCz ? "Způsob platby změněn" : "Payment method changed",
-        message:
-          method === "CARD"
-            ? isCz
-              ? "Kartou (terminál)."
-              : "Card (terminal)."
-            : isCz
-            ? "Hotově."
-            : "Cash.",
+        kind: "error",
+        title: isCz ? "Chyba" : "Error",
+        message: e instanceof Error ? e.message : "Failed",
       });
-    } catch (e: any) {
-      push({ kind: "error", title: isCz ? "Chyba" : "Error", message: e?.message ?? "Failed" });
     } finally {
       setChangingMethod(false);
     }
   };
 
-  const openPaymentSheet = () => {
-    if (!openTab || latestPendingPayment) return;
-    // Unregistered guests get the menu only — paying requires an account.
-    if (!me?.authenticated) {
-      push({
-        kind: "info",
-        title: isCz ? "Vyžaduje registraci" : "Registration required",
-        message: isCz
-          ? "Zaregistrujte se, abyste mohli zaplatit a získat cashback."
-          : "Register to pay and earn cashback.",
-        action: { label: isCz ? "Zaregistrovat se" : "Register", href: "/auth" },
-      });
-      return;
-    }
-    // Can't pay while anything is still cooking — the bill isn't final yet.
-    if (openTab.stage.phase !== "ready") {
-      setShowPreparingBlock(true);
-      return;
-    }
-    setSelectedQtyByKey({});
-    setPayOpen(true);
-  };
-  useEscapeToClose(showPreparingBlock, () => setShowPreparingBlock(false));
-
   return (
     <RequireTable>
       <main className="mx-auto max-w-md px-4 pb-28 pt-5">
-        {/* pr-24 — оставляем место справа под плавающий переключатель языка */}
         <div className="pr-24">
           <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">{venueName}</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Účet" : "Cart"}</h1>
-          <div className="mt-1 text-xs text-white/60">
-            {showOpenTab ? (isCz ? "Vaše aktuální objednávka" : "Your current order") : isCz ? "Momentálně nic není aktivní" : "Nothing active right now"}
-          </div>
+          <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Účet" : "Bill"}</h1>
         </div>
 
-        {/* Дозаказ: запрос ещё не подтверждён, но заказ уже идёт — показываем обе вещи. */}
-        {activeOrderRequest && showOpenTab ? (
-          <div className="mt-4 rounded-2xl border border-gold/20 bg-gold/10 p-4">
-            <div className="font-semibold text-amber-50">
-              {isCz ? "Nový výběr odeslán" : "New selection sent"}
-            </div>
-            <div className="mt-1 text-xs text-amber-50/80">
-              {isCz
-                ? "Obsluha vidí váš výběr a je na cestě domluvit detaily."
-                : "The waiter sees your selection and is on the way to discuss the details."}
-            </div>
-            {activeOrderRequest.items.length > 0 ? (
-              <div className="mt-3 space-y-1">
-                {activeOrderRequest.items.map((it) => (
-                  <div key={it.menuItemId} className="flex items-center justify-between text-sm text-white/85">
-                    <span className="min-w-0 truncate">
-                      {isCz ? it.nameCs || it.name : it.name} × {it.qty}
-                    </span>
-                    <span className="shrink-0 text-white/60">{it.qty * it.priceCzk} Kč</span>
-                  </div>
-                ))}
+        {/* 1 — nothing ordered yet */}
+        {!openTab ? (
+          <div className={`mt-4 ${card}`}>
+            {request ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`h-2 w-2 rounded-full ${request.status === "ACKED" ? "animate-pulse bg-emerald-400" : "bg-gold"}`}
+                  />
+                  <div className="text-sm font-semibold text-white">{request.statusTitle}</div>
+                </div>
+                <div className="mt-2 text-sm leading-6 text-white/65">{request.statusDescription}</div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-4 py-3 text-center">
+                <div className="text-sm text-white/65">
+                  {isCz ? "Vaše objednávka se zobrazí zde." : "Your order will appear here."}
+                </div>
+                <Link
+                  href="/menu"
+                  className="inline-flex h-11 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-black"
+                >
+                  {isCz ? "Přejít do menu" : "Go to menu"}
+                </Link>
               </div>
+            )}
+          </div>
+        ) : null}
+
+        {/* 2 — the order, with live cooking status */}
+        {openTab ? (
+          <div className={`mt-4 ${card}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="text-sm font-semibold text-white">
+                {isCz ? "Vaše objednávka" : "Your order"}
+              </div>
+              <div className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${stageChipClass(openTab.stage.tone)}`}>
+                {openTab.stage.label}
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {(["accepted", "preparing", "ready"] as const).map((phase, index) => {
+                const reached =
+                  openTab.stage.phase === "ready" ||
+                  (openTab.stage.phase === "preparing" && index <= 1) ||
+                  (openTab.stage.phase === "accepted" && index === 0);
+                const active = openTab.stage.phase === phase;
+                return (
+                  <div
+                    key={phase}
+                    className={[
+                      "h-1.5 rounded-full",
+                      openTab.stage.phase === "cancelled"
+                        ? "bg-red-400/85"
+                        : reached
+                          ? active && phase === "preparing"
+                            ? "animate-pulse bg-gold"
+                            : "bg-gold"
+                          : "bg-white/10",
+                    ].join(" ")}
+                  />
+                );
+              })}
+            </div>
+
+            <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/50">
+              <span>{isCz ? "Přijato" : "Accepted"}</span>
+              <span>{isCz ? "Příprava" : "Preparing"}</span>
+              <span>{isCz ? "Hotovo" : "Ready"}</span>
+            </div>
+
+            <div className="mt-4 space-y-1.5">
+              {openTab.items.map((item) => (
+                <div
+                  key={item.key}
+                  className="flex items-start justify-between gap-3 rounded-xl bg-gold/[0.06] px-3 py-2 text-sm text-amber-50/90"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate">
+                      {item.name} × {item.qty}
+                    </div>
+                    {item.comment ? (
+                      <div className="mt-0.5 text-[11px] text-white/50">{item.comment}</div>
+                    ) : null}
+                    <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-gold/75">
+                      {item.state === "preparing" ? (isCz ? "Připravuje se" : "Preparing") : isCz ? "Hotovo" : "Ready"}
+                    </div>
+                  </div>
+                  <div className="shrink-0">{item.totalCzk} Kč</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex items-end justify-between border-t border-white/8 pt-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.14em] text-white/55">
+                  {isCz ? "K úhradě" : "Due"}
+                </div>
+                {earnCzk > 0 ? (
+                  <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-gold/12 px-2 py-0.5 text-[11px] font-medium text-amber-200">
+                    ✦ {isCz ? `Cashback +${earnCzk} Kč` : `Cashback +${earnCzk} Kč`}
+                  </div>
+                ) : null}
+              </div>
+              <div className="text-2xl font-bold text-white">{dueCzk} Kč</div>
+            </div>
+
+            {!tablePendingPayment ? (
+              <>
+                <button
+                  type="button"
+                  disabled={!isReady || submitting}
+                  onClick={openPaymentSheet}
+                  className="mt-4 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-40"
+                >
+                  {submitting ? (isCz ? "Odesíláme…" : "Sending…") : isCz ? "Zaplatit" : "Pay"}
+                </button>
+                {!isReady ? (
+                  <div className="mt-2 text-center text-[11px] leading-5 text-white/45">
+                    {isCz
+                      ? "Zaplatit půjde, jakmile bude objednávka hotová."
+                      : "Payment unlocks once the order is ready."}
+                  </div>
+                ) : null}
+              </>
             ) : null}
           </div>
         ) : null}
 
-        <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-white">{isCz ? "Váš účet" : "Your bill"}</div>
-            </div>
-
-            <button
-              disabled={!showOpenTab || !!latestPendingPayment}
-              className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
-              onClick={openPaymentSheet}
-            >
-              {latestPendingPayment ? (isCz ? "Odesláno" : "Requested") : isCz ? "Zaplatit" : "Pay"}
-            </button>
-          </div>
-
-          {showOpenTab && openTab ? (
-            <div className="mt-4 rounded-2xl border border-white/8 bg-black/20 px-3 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-white">
-                    {paymentSelectionActive ? (isCz ? "Výběr k platbě" : "Payment selection") : isCz ? "Aktuální objednávka" : "Current order"}
-                  </div>
-                  <div className="mt-1 text-[11px] text-white/60">
-                    {new Date(openTab.firstCreatedAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
+        {/* 3 — a payment is in flight */}
+        {tablePendingPayment ? (
+          <div className="mt-4 rounded-[28px] border border-sky-400/25 bg-sky-500/10 p-4">
+            {myPendingPayment ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-sky-300" />
+                  <div className="text-sm font-semibold text-sky-50">
+                    {isCz ? "Obsluha je na cestě" : "A staff member is on the way"}
                   </div>
                 </div>
 
-                {paymentSelectionActive ? (
-                  <div className="rounded-full border border-sky-400/20 bg-sky-500/12 px-2.5 py-1 text-[11px] font-semibold text-sky-100">
-                    {isCz ? "Čeká na potvrzení" : "Awaiting confirmation"}
-                  </div>
-                ) : (
-                  <div className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${stageClass(openTab.stage.tone)}`}>
-                    {openTab.stage.label}
-                  </div>
-                )}
-              </div>
+                <div className="mt-1 text-sm text-sky-100/80">
+                  {myPendingPayment.method === "CARD"
+                    ? isCz
+                      ? "Přinese platební terminál."
+                      : "Bringing the card terminal."
+                    : isCz
+                      ? "Přijde pro hotovost."
+                      : "Coming for the cash."}
+                </div>
 
-              {paymentSelectionActive ? (
-                <>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div className="h-1.5 rounded-full bg-sky-400" />
-                    <div className="h-1.5 rounded-full animate-pulse bg-sky-300 shadow-[0_0_14px_rgba(56,189,248,0.45)]" />
-                    <div className={`h-1.5 rounded-full ${effectivePendingPayment ? "animate-pulse bg-sky-300 shadow-[0_0_14px_rgba(56,189,248,0.45)]" : "bg-white/10"}`} />
-                  </div>
-
-                  <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/60">
-                    <span className="text-sky-200">{isCz ? "Vybráno" : "Selected"}</span>
-                    <span className="animate-pulse text-sky-200">{effectivePendingPayment ? (isCz ? "Zpracování" : "Processing") : isCz ? "Čeká na způsob" : "Awaiting method"}</span>
-                    <span className={effectivePendingPayment ? "animate-pulse text-sky-200" : undefined}>{isCz ? "Potvrzení" : "Confirmation"}</span>
-                  </div>
-
-                  <div className="mt-3 space-y-1.5">
-                    {openTab.payableItems.map((item) => {
-                      const selected = Math.max(0, Math.min(activeSelectionQtyByKey[item.key] ?? 0, item.availableQty));
-                      const isSelected = selected > 0;
-                      return (
-                        <div
-                          key={item.key}
-                          className={[
-                            "flex items-start justify-between gap-3 rounded-xl px-2 py-1.5 text-sm transition",
-                            isSelected
-                              ? "border border-sky-400/20 bg-sky-500/10 text-sky-50"
-                              : "bg-white/[0.03] text-white/70",
-                          ].join(" ")}
-                        >
-                          <div className="min-w-0">
-                            {item.name} × {isSelected ? selected : item.availableQty}
-                            {item.comment ? <div className="mt-0.5 text-[11px] text-white/60">{item.comment}</div> : null}
-                            <div
-                              className={[
-                                "mt-1 text-[10px] uppercase tracking-[0.16em]",
-                                isSelected ? "text-sky-200/90" : "text-white/60",
-                              ].join(" ")}
-                            >
-                              {isSelected ? (isCz ? "Vybráno k platbě" : "Selected for payment") : isCz ? "Nevybráno" : "Not selected"}
-                            </div>
-                          </div>
-                          <div className="shrink-0">{(isSelected ? selected : item.availableQty) * item.unitPriceCzk} Kč</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {effectivePendingPayment ? (
-                    <>
-                      <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                        {isCz
-                          ? `Váš požadavek na platbu: ${effectivePendingPayment.methodLabel === "Card" ? "kartou" : "hotově"}, byl přijat. Číšník je na cestě.`
-                          : `Your payment request: ${effectivePendingPayment.methodLabel === "Card" ? "card" : "cash"}, has been accepted. The waiter is on the way.`}
-                      </div>
-                      {myPendingPayment ? (
-                        <div className="mt-2">
-                          <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-white/45">
-                            {isCz ? "Změnit způsob platby" : "Change payment method"}
-                          </div>
-                          <div className="inline-flex rounded-2xl border border-white/10 bg-black/30 p-1">
-                            {(["CARD", "CASH"] as const).map((m) => {
-                              const active = (myPendingPayment.method as string) === m;
-                              return (
-                                <button
-                                  key={m}
-                                  type="button"
-                                  disabled={active || changingMethod}
-                                  onClick={() => void changeMyMethod(m)}
-                                  className={[
-                                    "rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-default",
-                                    active ? "bg-white text-black" : "text-white/60 hover:text-white",
-                                  ].join(" ")}
-                                >
-                                  {m === "CARD" ? (isCz ? "Kartou" : "Card") : isCz ? "Hotově" : "Cash"}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <div className="mt-3 rounded-xl border border-sky-400/15 bg-sky-500/8 px-3 py-2 text-[11px] text-sky-100/90">
-                      {isCz ? "Vyberte položky, které chcete zaplatit, a zvolte způsob platby." : "Select the items you want to pay for and choose the payment method."}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div
-                      className={`h-1.5 rounded-full ${progressStepClass(
-                        openTab.stage.phase === "cancelled"
-                          ? "error"
-                          : openTab.stage.phase === "accepted" ||
-                            openTab.stage.phase === "preparing" ||
-                            openTab.stage.phase === "ready"
-                          ? openTab.stage.phase === "accepted"
-                            ? "active"
-                            : "done"
-                          : "idle",
-                        "accepted"
-                      )}`}
-                    />
-                    <div
-                      className={`h-1.5 rounded-full ${progressStepClass(
-                        openTab.stage.phase === "cancelled"
-                          ? "error"
-                          : openTab.stage.phase === "preparing"
-                          ? "active"
-                          : openTab.stage.phase === "ready"
-                          ? "done"
-                          : "idle",
-                        "preparing"
-                      )}`}
-                    />
-                    <div
-                      className={`h-1.5 rounded-full ${progressStepClass(
-                        openTab.stage.phase === "cancelled"
-                          ? "error"
-                          : openTab.stage.phase === "ready"
-                          ? "active"
-                          : "idle",
-                        "ready"
-                      )}`}
-                    />
-                  </div>
-
-                  <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-white/60">
-                    <span
-                      className={
-                        openTab.stage.phase === "accepted" ||
-                        openTab.stage.phase === "preparing" ||
-                        openTab.stage.phase === "ready"
-                          ? "text-gold"
-                          : undefined
-                      }
-                    >
-                      {isCz ? "Přijato" : "Accepted"}
-                    </span>
-                    <span
-                      className={
-                        openTab.stage.phase === "preparing"
-                          ? "animate-pulse text-gold"
-                          : openTab.stage.phase === "ready"
-                          ? "text-gold"
-                          : undefined
-                      }
-                    >
-                      {isCz ? "Příprava" : "Preparing"}
-                    </span>
-                    <span className={openTab.stage.phase === "ready" ? "text-gold" : undefined}>{isCz ? "Hotovo" : "Ready"}</span>
-                  </div>
-
-                  <div className="mt-3 space-y-1.5">
-                    {openTab.items.map((item) => (
+                {myPendingPayment.items.length ? (
+                  <div className="mt-3 space-y-1">
+                    {myPendingPayment.items.map((item) => (
                       <div
-                        key={item.key}
-                        className={[
-                          "flex items-start justify-between gap-3 rounded-xl px-2 py-1.5 text-sm transition",
-                          item.state === "preparing"
-                            ? "animate-pulse bg-gold/8 text-amber-50"
-                            : "bg-gold/5 text-amber-50/85",
-                        ].join(" ")}
+                        key={item.orderItemId}
+                        className="flex justify-between gap-3 text-sm text-sky-50/90"
                       >
-                        <div className="min-w-0">
+                        <span className="min-w-0 truncate">
                           {item.name} × {item.qty}
-                          {item.comment ? <div className="mt-0.5 text-[11px] text-white/60">{item.comment}</div> : null}
-                          <div
-                            className={[
-                              "mt-1 text-[10px] uppercase tracking-[0.16em]",
-                              item.state === "preparing" ? "text-gold/85" : "text-gold/65",
-                            ].join(" ")}
-                          >
-                            {item.state === "preparing" ? (isCz ? "Příprava" : "Preparing") : isCz ? "Hotovo" : "Ready"}
-                          </div>
-                        </div>
-                        <div className="shrink-0">{item.totalCzk} Kč</div>
+                        </span>
+                        <span className="shrink-0 text-sky-100/70">{item.totalCzk} Kč</span>
                       </div>
                     ))}
                   </div>
+                ) : null}
 
-                  <div
-                    className={[
-                      "overflow-hidden transition-all duration-500 ease-out",
-                      showReadyNote ? "mt-3 max-h-24 opacity-100" : "max-h-0 opacity-0",
-                    ].join(" ")}
-                  >
-                    <div className="rounded-xl border border-gold/15 bg-gold/10 px-3 py-2 text-[11px] text-amber-50/90">
-                      {isCz ? "Vaše objednávka je hotová. Číšník ji nese ke stolu." : "Your order is ready. The waiter is bringing it to your table."}
-                    </div>
+                {pendingCashbackCzk > 0 ? (
+                  <div className="mt-3 flex items-center justify-between gap-3 text-sm text-gold">
+                    <span>{isCz ? "Použitý cashback" : "Cashback used"}</span>
+                    <span className="font-semibold">−{pendingCashbackCzk} Kč</span>
                   </div>
-                </>
-              )}
+                ) : null}
 
-              <div className="mt-3 flex items-end justify-between border-t border-white/8 pt-3">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-white/60">{isCz ? "K úhradě nyní" : "Due now"}</div>
-                  {(() => {
-                    const due = feed?.totals.dueCzk ?? openTab.totalCzk;
-                    const pct = feed?.loyalty?.cashbackPercent ?? 10;
-                    const cb = Math.floor((due * pct) / 100);
-                    return cb > 0 ? (
-                      <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-gold/12 px-2 py-0.5 text-[11px] font-medium text-amber-200">
-                        ✦ {isCz ? `Cashback +${cb} Kč` : `Cashback +${cb} Kč`}
-                      </div>
-                    ) : null;
-                  })()}
-                </div>
-                <div className="text-2xl font-bold text-white">{feed?.totals.dueCzk ?? openTab.totalCzk} Kč</div>
-              </div>
-
-              {!effectivePendingPayment && latestPendingPayment ? (
-                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-white/65">
-                  {isCz ? "Jiný host u stolu právě řeší žádost o platbu." : "Another guest at the table is currently handling a payment request."}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div
-              className={[
-                "mt-4 rounded-2xl border p-3 text-sm",
-                activeOrderRequest
-                  ? "border-gold/15 bg-gold/8 text-amber-50/90"
-                  : "border-white/10 bg-black/20 text-white/60",
-              ].join(" ")}
-            >
-              {activeOrderRequest ? (
-                <>
-                  <div className="font-semibold">
-                    {activeOrderRequest.status === "ACKED"
-                      ? isCz
-                        ? "Číšník je na cestě"
-                        : "Waiter is on the way"
-                      : isCz
-                      ? "Požadavek odeslán"
-                      : "Request sent"}
+                <div className="mt-3 flex items-end justify-between border-t border-sky-400/15 pt-3">
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-sky-100/60">
+                    {isCz ? "K úhradě" : "To pay"}
                   </div>
-                  <div className="mt-1 text-xs text-amber-50/75">
-                    {activeOrderRequest.status === "ACKED"
-                      ? isCz
-                        ? "Obsluha vidí váš výběr a je na cestě domluvit detaily."
-                        : "The waiter sees your selection and is on the way to discuss the details."
-                      : isCz
-                      ? "Obsluha vidí váš výběr a brzy přijde domluvit detaily objednávky."
-                      : "The waiter sees your selection and will come shortly to discuss the order."}
-                  </div>
-
-                  {activeOrderRequest.items.length > 0 ? (
-                    <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3">
-                      <div className="text-[10px] uppercase tracking-[0.16em] text-white/60">
-                        {isCz ? "Vaše volba · obsluha potvrdí" : "Your selection · waiter will confirm"}
-                      </div>
-                      <div className="mt-2 space-y-1">
-                        {activeOrderRequest.items.map((it) => (
-                          <div key={it.menuItemId} className="flex items-center justify-between text-sm text-white/85">
-                            <span className="min-w-0 truncate">
-                              {isCz ? it.nameCs || it.name : it.name} × {it.qty}
-                            </span>
-                            <span className="shrink-0 text-white/60">{it.qty * it.priceCzk} Kč</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <div className="flex flex-col items-center gap-4 py-2 text-center">
-                  <div>{isCz ? "Vaše objednávka se zobrazí zde." : "Your order will appear here."}</div>
-                  <Link
-                    href="/menu"
-                    className="inline-flex h-11 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-black"
-                  >
-                    {isCz ? "Přejít do menu" : "Go to menu"}
-                  </Link>
+                  <div className="text-xl font-bold text-white">{pendingDueCzk} Kč</div>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
 
-        {showPreparingBlock ? (
-          <div
-            className="fixed inset-0 z-[96] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-            role="dialog"
-            aria-modal="true"
-            onClick={() => setShowPreparingBlock(false)}
-          >
-            <div
-              className="w-full max-w-sm rounded-[28px] border border-gold/25 bg-[#151515]/97 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-gold/15 text-xl text-amber-200">⏳</div>
-              <div className="mt-4 text-lg font-semibold text-white">
-                {isCz ? "Objednávka se připravuje" : "Your order is being prepared"}
-              </div>
-              <div className="mt-2 text-sm leading-6 text-white/70">
+                <div className="mt-3">
+                  <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-sky-100/55">
+                    {isCz ? "Způsob platby" : "Payment method"}
+                  </div>
+                  <div className="inline-flex rounded-2xl border border-white/10 bg-black/30 p-1">
+                    {(["CARD", "CASH"] as const).map((method) => {
+                      const active = myPendingPayment.method === method;
+                      return (
+                        <button
+                          key={method}
+                          type="button"
+                          disabled={active || changingMethod}
+                          onClick={() => void changeMethod(method)}
+                          className={[
+                            "rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-default",
+                            active ? "bg-white text-black" : "text-white/60 hover:text-white",
+                          ].join(" ")}
+                        >
+                          {method === "CARD" ? (isCz ? "Kartou" : "Card") : isCz ? "Hotově" : "Cash"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="text-sm leading-6 text-sky-50/90">
                 {isCz
-                  ? "Zaplatit půjde, jakmile bude celá objednávka hotová a obsluha ji přinese ke stolu."
-                  : "You can pay once the whole order is ready and the waiter brings it to your table."}
+                  ? "Jiný host u stolu právě platí. Počkejte prosím chvíli."
+                  : "Another guest at the table is paying right now. Please hold on."}
               </div>
-              <button
-                type="button"
-                onClick={() => setShowPreparingBlock(false)}
-                className="mt-5 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.98]"
-              >
-                {isCz ? "Rozumím" : "Got it"}
-              </button>
-            </div>
+            )}
           </div>
         ) : null}
 
@@ -855,9 +543,7 @@ export default function CartPage() {
           selectedTotalCzk={selectedTotalCzk}
           cashbackAppliedCzk={cashbackAppliedCzk}
           finalPayableCzk={finalPayableCzk}
-          onChangeSelectedQty={(key, qty) =>
-            setSelectedQtyByKey((current) => ({ ...current, [key]: qty }))
-          }
+          onChangeSelectedQty={(key, qty) => setSelectedQtyByKey((current) => ({ ...current, [key]: qty }))}
         />
       </main>
     </RequireTable>

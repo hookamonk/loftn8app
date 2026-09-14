@@ -103,7 +103,7 @@ export default function StaffAdminGuestsPage() {
     return users.filter(
       (u) =>
         u.name.toLowerCase().includes(q) ||
-        u.phone.toLowerCase().includes(q) ||
+        (u.phone ?? "").toLowerCase().includes(q) ||
         (u.email ?? "").toLowerCase().includes(q),
     );
   }, [users, q]);
@@ -183,7 +183,7 @@ export default function StaffAdminGuestsPage() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold text-white">{u.name}</div>
-                    <div className="truncate text-xs text-white/55">{u.phone}</div>
+                    <div className="truncate text-xs text-white/55">{u.phone || "—"}</div>
                     <div className="truncate text-xs text-white/40">{u.email || "без e-mail"}</div>
                   </div>
                   <div className="shrink-0 text-right">
@@ -221,7 +221,7 @@ export default function StaffAdminGuestsPage() {
                         <span className="font-semibold text-white">{u.name}</span>
                       </div>
                     </td>
-                    <td className="px-5 py-3.5">{u.phone}</td>
+                    <td className="px-5 py-3.5">{u.phone || "—"}</td>
                     <td className="px-5 py-3.5 text-white/60">{u.email || "—"}</td>
                     <td className="px-5 py-3.5 text-white/55">{formatDate(u.createdAt)}</td>
                     <td className="px-5 py-3.5 text-right">

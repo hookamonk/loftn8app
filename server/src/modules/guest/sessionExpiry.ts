@@ -1,7 +1,6 @@
 import { env } from "../../config/env";
 import { prisma } from "../../db/prisma";
 import { latestLegacyPaymentCutoff, paidQtyByOrderItemId } from "../payments/paymentAllocation";
-import { ORDER_REQUEST_MARKER } from "../orders/orderRequest";
 
 const SESSION_AUTO_END_AFTER_INACTIVITY_MS =
   env.GUEST_SESSION_AUTO_END_AFTER_PAYMENT_MINUTES * 60 * 1000;
@@ -71,57 +70,6 @@ function remainingUnpaidQty(params: {
         ),
       0
     );
-}
-
-/**
- * When a table's bill is fully settled (no pending payment requests and no
- * unpaid order items), end ALL active guest sessions at that table so it's
- * freed for the next guests and no one stays "connected" in the staff app.
- * Returns the number of sessions that were ended.
- */
-export async function endTableSessionsIfFullyPaid(tableId: number, shiftId: string) {
-  // Don't free the table while a fresh order request is still open (guest is
-  // mid "order more"): they'd be kicked before staff handles it.
-  const openRequests = await prisma.staffCall.count({
-    where: {
-      tableId,
-      type: "HELP",
-      message: ORDER_REQUEST_MARKER,
-      status: { in: ["NEW", "ACKED"] },
-      session: { shiftId },
-    },
-  });
-  if (openRequests > 0) return 0;
-
-  const [orders, confirmedPayments, pendingCount] = await Promise.all([
-    prisma.order.findMany({
-      where: { tableId, status: { not: "CANCELLED" }, session: { shiftId } },
-      select: { createdAt: true, status: true, items: { select: { id: true, qty: true } } },
-    }),
-    prisma.paymentRequest.findMany({
-      where: { tableId, status: "CONFIRMED", session: { shiftId } },
-      select: {
-        status: true,
-        createdAt: true,
-        confirmedAt: true,
-        itemsJson: true,
-        confirmation: { select: { itemsJson: true, createdAt: true } },
-      },
-    }),
-    prisma.paymentRequest.count({ where: { tableId, status: "PENDING", session: { shiftId } } }),
-  ]);
-
-  // Nothing ordered, still-pending payment, or unpaid items left → keep open.
-  if (orders.length === 0) return 0;
-  if (pendingCount > 0) return 0;
-  if (remainingUnpaidQty({ orders, payments: confirmedPayments as any }) > 0) return 0;
-
-  const result = await prisma.guestSession.updateMany({
-    where: { tableId, shiftId, endedAt: null },
-    data: { endedAt: new Date() },
-  });
-
-  return result.count;
 }
 
 export async function getGuestSessionClosureState(
@@ -251,22 +199,31 @@ export async function getGuestSessionClosureState(
   });
   const stayOptIn = Boolean(sessionRow?.stayOptIn);
   const billFullyPaid = pendingPaymentsCount === 0 && unpaidQty === 0;
-  // Once the bill is settled the session is eligible for auto-end. Choosing
-  // "stay" does NOT keep it open forever — it just grants a longer grace to
-  // place a new order. If they order, new unpaid items make billFullyPaid false
-  // (active tab again); if they don't, the table is freed after the grace.
+  // Nothing owed → staff may free the table by hand.
   const eligible = billFullyPaid;
+
+  // Auto-ending, however, is strictly a POST-PAYMENT courtesy (hence the env
+  // var name). It MUST additionally require a confirmed payment: to this
+  // function "the guest paid everything" and "the guest has not ordered yet"
+  // both look like an empty balance, so without this check a guest who is
+  // simply reading the menu would be thrown off the table after the grace
+  // period — before they ever got to call a waiter.
+  //
+  // Choosing "stay" does not keep the session open forever either; it only
+  // grants a longer grace to place the next order.
+  const autoEndEligible = hasConfirmedPayment && billFullyPaid;
   const graceMs = stayOptIn ? SESSION_AUTO_END_AFTER_STAY_MS : SESSION_AUTO_END_AFTER_INACTIVITY_MS;
 
   return {
     eligible,
+    autoEndEligible,
     hasConfirmedPayment,
     pendingPaymentsCount,
     unpaidQty,
     stayOptIn,
     billFullyPaid,
     lastActivityAt,
-    autoEndsAt: eligible
+    autoEndsAt: autoEndEligible
       ? new Date(lastActivityAt.getTime() + graceMs)
       : null,
   };
@@ -295,7 +252,7 @@ export async function expireGuestSessionIfInactiveAfterPayment(
     return { expired: true as const, reason: "ended" as const };
   }
 
-  if (!state.eligible || !state.autoEndsAt) {
+  if (!state.autoEndEligible || !state.autoEndsAt) {
     return { expired: false as const, autoEndsAt: null, waitingForClosedBill: true as const };
   }
 
