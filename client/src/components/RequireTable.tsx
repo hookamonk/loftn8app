@@ -17,7 +17,7 @@ export function RequireTable({ children }: { children: React.ReactNode }) {
   if (!tableCode && sessionError) {
     return (
       <div className="mx-auto max-w-md p-4">
-        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 text-center backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
+        <div className="rounded-3xl border border-white/10 bg-white/6 p-4 text-center backdrop-blur-xl shadow-[0_8px_28px_rgba(0,0,0,0.4)]">
           <div className="text-sm font-semibold text-white">
             {isCz ? "Naskenujte QR kód na stole" : "Scan the QR code on your table"}
           </div>

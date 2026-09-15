@@ -24,15 +24,15 @@ export default function ProfilePage() {
   );
 
   return (
-    <main className="mx-auto max-w-md px-4 pb-28 pt-5">
+    <main className="mx-auto max-w-md px-4 pb-28 pt-4">
       <div className="pr-24">
-        <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">{venueName}</div>
-        <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Profil" : "Profile"}</h1>
+        <h1 className="text-xl font-semibold text-white">{isCz ? "Profil" : "Profile"}</h1>
+        <div className="mt-0.5 text-[11px] tracking-[0.18em] text-white/35">{venueName}</div>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-3.5">
         {!loading && !me.authenticated ? (
-          <section className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
+          <section className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
             <div className="text-sm leading-6 text-white/70">
               {isCz
                 ? "V režimu hosta se nic neukládá. Přihlaste se, abyste sbírali cashback."
@@ -40,7 +40,7 @@ export default function ProfilePage() {
             </div>
             <button
               type="button"
-              className="mt-4 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99]"
+              className="mt-4 h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition active:scale-[0.99]"
               onClick={() => router.replace("/auth")}
             >
               {isCz ? "Přihlášení / Registrace" : "Sign in / Register"}

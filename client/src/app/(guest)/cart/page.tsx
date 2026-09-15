@@ -114,7 +114,7 @@ function buildOpenTab(orders: NonNullable<ReturnType<typeof useGuestFeed>["feed"
 }
 
 const card =
-  "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]";
+  "rounded-3xl border border-white/10 bg-white/6 p-3.5 backdrop-blur-xl shadow-[0_8px_28px_rgba(0,0,0,0.3)]";
 
 export default function CartPage() {
   const { isCz, ready } = useI18n();
@@ -303,15 +303,15 @@ export default function CartPage() {
 
   return (
     <RequireTable>
-      <main className="mx-auto max-w-md px-4 pb-28 pt-5">
+      <main className="mx-auto max-w-md px-4 pb-28 pt-4">
         <div className="pr-24">
-          <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">{venueName}</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Účet" : "Bill"}</h1>
+          <h1 className="text-xl font-semibold text-white">{isCz ? "Účet" : "Bill"}</h1>
+          <div className="mt-0.5 text-[11px] tracking-[0.18em] text-white/35">{venueName}</div>
         </div>
 
         {/* 1 — nothing ordered yet */}
         {!openTab ? (
-          <div className={`mt-4 ${card}`}>
+          <div className={`mt-3.5 ${card}`}>
             {request ? (
               <>
                 <div className="flex items-center gap-2">
@@ -329,7 +329,7 @@ export default function CartPage() {
                 </div>
                 <Link
                   href="/menu"
-                  className="inline-flex h-11 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-black"
+                  className="inline-flex h-11 items-center justify-center rounded-xl bg-white px-6 text-sm font-semibold text-black"
                 >
                   {isCz ? "Přejít do menu" : "Go to menu"}
                 </Link>
@@ -340,7 +340,7 @@ export default function CartPage() {
 
         {/* 2 — the order, with live cooking status */}
         {openTab ? (
-          <div className={`mt-4 ${card}`}>
+          <div className={`mt-3.5 ${card}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="text-sm font-semibold text-white">
                 {isCz ? "Vaše objednávka" : "Your order"}
@@ -423,7 +423,7 @@ export default function CartPage() {
                   type="button"
                   disabled={!isReady || submitting}
                   onClick={openPaymentSheet}
-                  className="mt-4 h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-40"
+                  className="mt-3.5 h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-40"
                 >
                   {submitting ? (isCz ? "Odesíláme…" : "Sending…") : isCz ? "Zaplatit" : "Pay"}
                 </button>
@@ -441,7 +441,7 @@ export default function CartPage() {
 
         {/* 3 — a payment is in flight */}
         {tablePendingPayment ? (
-          <div className="mt-4 rounded-[28px] border border-sky-400/25 bg-sky-500/10 p-4">
+          <div className="mt-2.5 rounded-3xl border border-sky-400/25 bg-sky-500/10 p-3.5">
             {myPendingPayment ? (
               <>
                 <div className="flex items-center gap-2">

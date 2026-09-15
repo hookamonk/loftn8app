@@ -70,7 +70,7 @@ function ActionCard({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="w-full rounded-[28px] border border-white/10 bg-white/6 p-4 text-left backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)] transition active:scale-[0.99] disabled:opacity-70"
+      className="w-full rounded-3xl border border-white/10 bg-white/6 p-3.5 text-left backdrop-blur-xl shadow-[0_8px_28px_rgba(0,0,0,0.3)] transition active:scale-[0.99] disabled:opacity-70"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -83,7 +83,7 @@ function ActionCard({
             </div>
           ) : null}
         </div>
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/10 bg-black/30">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/10 bg-black/30">
           {icon}
         </div>
       </div>
@@ -151,10 +151,10 @@ export default function CallPage() {
 
   return (
     <RequireTable>
-      <main className="mx-auto max-w-md px-4 pb-28 pt-5">
-        <div className="mb-4 pr-24">
-          <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">{venueName}</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">{isCz ? "Obsluha" : "Staff"}</h1>
+      <main className="mx-auto max-w-md px-4 pb-28 pt-4">
+        <div className="mb-3.5 pr-24">
+          <h1 className="text-xl font-semibold text-white">{isCz ? "Obsluha" : "Staff"}</h1>
+          <div className="mt-0.5 text-[11px] tracking-[0.18em] text-white/35">{venueName}</div>
 
           {!loading && !isRegistered ? (
             <div className="mt-2 text-xs leading-5 text-white/60">
@@ -165,7 +165,7 @@ export default function CallPage() {
           ) : null}
         </div>
 
-        <div className="grid gap-3">
+        <div className="grid gap-2.5">
           <ActionCard
             disabled={busy || Boolean(waiter)}
             title={isCz ? "Zavolat číšníka" : "Call the waiter"}
@@ -185,7 +185,7 @@ export default function CallPage() {
           />
         </div>
 
-        <div className="mt-4 rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
+        <div className="mt-2.5 rounded-3xl border border-white/10 bg-white/6 p-3.5 backdrop-blur-xl shadow-[0_8px_28px_rgba(0,0,0,0.3)]">
           <div className="text-sm font-semibold text-white">
             {isCz ? "Zpráva pro obsluhu" : "Message to the staff"}
           </div>
@@ -205,14 +205,14 @@ export default function CallPage() {
           <button
             type="button"
             disabled={busy || !msg.trim()}
-            className="mt-3 h-12 w-full rounded-2xl border border-white/10 bg-white/10 text-sm font-semibold text-white transition active:scale-[0.99] disabled:opacity-40"
+            className="mt-3 h-11 w-full rounded-xl border border-white/10 bg-white/10 text-sm font-semibold text-white transition active:scale-[0.99] disabled:opacity-40"
             onClick={() => void send("HELP", msg.trim())}
           >
             {isCz ? "Odeslat" : "Send"}
           </button>
 
           {message && message.status !== "DONE" ? (
-            <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-xs leading-5 text-white/70">
+            <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-xs leading-5 text-white/70">
               <div className="font-medium text-white">{message.statusTitle}</div>
               <div className="mt-1">{message.statusDescription}</div>
             </div>

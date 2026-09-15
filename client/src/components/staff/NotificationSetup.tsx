@@ -1,79 +1,94 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  enablePush,
-  getPushState,
-  sendTestPush,
-  type PushState,
-} from "@/lib/staffPush";
+import { enablePush, getPushState, sendTestPush, type PushState } from "@/lib/staffPush";
 import { armAudio } from "@/lib/staffAlerts";
 import { useToast } from "@/providers/toast";
 
 /**
- * Single place where a staff member gets notifications working on their phone.
+ * Одна строка: статус уведомлений плюс одно действие.
  *
- * Web push support is genuinely different per platform and no library changes
- * that, so instead of a button that silently fails we show the real state and
- * the exact next step:
- *   • Android browsers  → one tap, done.
- *   • iOS / iPadOS      → must be added to the Home Screen first (Apple rule).
- *   • Blocked / unsupported → explain how to undo it.
+ * В обычную смену push уже включён, поэтому строка и остаётся строкой. Разбор
+ * «почему не работает» (установка на iOS, снятие блокировки) нужен редко — он
+ * свёрнут под кнопку и разворачивается только тогда, когда что-то сломано.
  */
 
 type Tone = "ok" | "warn" | "bad" | "info";
 
-const TONE: Record<Tone, { pill: string; dot: string }> = {
-  ok: { pill: "border-emerald-400/30 bg-emerald-500/12 text-emerald-200", dot: "bg-emerald-400" },
-  warn: { pill: "border-amber-400/30 bg-amber-400/10 text-amber-200", dot: "bg-amber-400" },
-  bad: { pill: "border-red-400/30 bg-red-500/12 text-red-200", dot: "bg-red-400" },
-  info: { pill: "border-sky-400/30 bg-sky-500/12 text-sky-200", dot: "bg-sky-400" },
+const DOT: Record<Tone, string> = {
+  ok: "bg-emerald-400",
+  warn: "bg-amber-400",
+  bad: "bg-red-400",
+  info: "bg-sky-400",
+};
+
+const LABEL_COLOR: Record<Tone, string> = {
+  ok: "text-emerald-200/90",
+  warn: "text-amber-200/90",
+  bad: "text-red-200/90",
+  info: "text-sky-200/90",
 };
 
 function statusView(state: PushState | null): { tone: Tone; label: string } {
-  if (!state) return { tone: "info", label: "Проверяем…" };
+  if (!state) return { tone: "info", label: "проверяем…" };
 
   switch (state.status) {
     case "on":
-      return { tone: "ok", label: "Уведомления включены" };
+      return { tone: "ok", label: "включены" };
     case "off":
-      return { tone: "warn", label: "Уведомления выключены" };
+      return { tone: "warn", label: "выключены" };
     case "denied":
-      return { tone: "bad", label: "Уведомления заблокированы" };
+      return { tone: "bad", label: "заблокированы" };
     case "ios-needs-install":
-      return { tone: "info", label: "Нужно добавить на экран «Домой»" };
+      return { tone: "info", label: "нужна установка" };
     case "server-not-configured":
-      return { tone: "bad", label: "Push не настроен на сервере" };
+      return { tone: "bad", label: "не настроены на сервере" };
     default:
-      return { tone: "bad", label: "Браузер не поддерживает уведомления" };
+      return { tone: "bad", label: "браузер не поддерживает" };
   }
 }
 
-const btnPrimary =
-  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.99] disabled:opacity-50";
-const btnGhost =
-  "h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50";
-
-function Steps({ items }: { items: string[] }) {
-  return (
-    <ol className="mt-3 space-y-2">
-      {items.map((text, index) => (
-        <li key={text} className="flex gap-3 text-sm leading-6 text-white/75">
-          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-white/15 bg-white/8 text-[11px] font-bold text-white">
-            {index + 1}
-          </span>
-          <span>{text}</span>
-        </li>
-      ))}
-    </ol>
-  );
+function installSteps(inSafari: boolean) {
+  return inSafari
+    ? [
+        "Нажмите «Поделиться» — квадрат со стрелкой внизу экрана.",
+        "Выберите «На экран «Домой»» → «Добавить».",
+        "Откройте LOFT№8 Staff с экрана «Домой» и войдите.",
+        "Вернитесь сюда и включите уведомления.",
+      ]
+    : [
+        "Откройте этот адрес в Safari — в других браузерах на iPhone установка недоступна.",
+        "«Поделиться» → «На экран «Домой»» → «Добавить».",
+        "Откройте LOFT№8 Staff с экрана «Домой» и войдите.",
+        "Вернитесь сюда и включите уведомления.",
+      ];
 }
+
+function deniedSteps(isIos: boolean) {
+  return isIos
+    ? [
+        "«Настройки» телефона → «Уведомления».",
+        "Найдите LOFT№8 Staff и включите «Допуск уведомлений».",
+        "Вернитесь и нажмите «Проверить ещё раз».",
+      ]
+    : [
+        "Нажмите на замок слева от адреса в адресной строке.",
+        "«Настройки сайта» → «Уведомления» → «Разрешить».",
+        "Обновите страницу.",
+      ];
+}
+
+const btnGhostSm =
+  "shrink-0 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-semibold text-white/85 transition hover:bg-white/10 disabled:opacity-50";
+const btnPrimarySm =
+  "shrink-0 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black transition hover:bg-white/90 disabled:opacity-50";
 
 export function NotificationSetup() {
   const { push } = useToast();
   const [state, setState] = useState<PushState | null>(null);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [open, setOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     setState(await getPushState());
@@ -83,8 +98,8 @@ export function NotificationSetup() {
     void refresh();
   }, [refresh]);
 
-  // Re-check when the app comes back to the foreground: the user may have just
-  // installed it to the Home Screen or changed the permission in settings.
+  // Перепроверяем при возврате в приложение: пользователь мог только что
+  // установить его на «Домой» или поменять разрешение в настройках.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === "visible") void refresh();
@@ -101,13 +116,16 @@ export function NotificationSetup() {
 
     if (result.ok) {
       await armAudio();
-      push({ kind: "success", title: "Готово", message: "Уведомления включены. Проверьте их кнопкой ниже." });
+      push({ kind: "success", title: "Уведомления включены" });
       return;
     }
 
     if ("error" in result) {
       push({ kind: "error", title: "Не получилось", message: result.error });
+      return;
     }
+
+    setOpen(true);
   };
 
   const onTest = async () => {
@@ -121,141 +139,100 @@ export function NotificationSetup() {
     }
 
     if (result.data.sent > 0) {
-      push({
-        kind: "success",
-        title: "Отправлено",
-        message: "Уведомление уже в пути. Заблокируйте экран — оно должно прийти со звуком.",
-      });
+      push({ kind: "success", title: "Отправлено", message: "Заблокируйте экран — уведомление придёт со звуком." });
       return;
     }
 
-    push({
-      kind: "error",
-      title: "Устройств не найдено",
-      message: "Похоже, подписка слетела. Нажмите «Включить уведомления» ещё раз.",
-    });
+    push({ kind: "error", title: "Устройств не найдено", message: "Включите уведомления заново." });
     await refresh();
   };
 
   const view = statusView(state);
+  const status = state?.status;
+  const hasDetails =
+    status === "ios-needs-install" ||
+    status === "denied" ||
+    status === "unsupported" ||
+    status === "server-not-configured";
 
   return (
-    <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-3">
-        <div className="text-sm font-semibold text-white">Уведомления</div>
-        <span
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold ${TONE[view.tone].pill}`}
-        >
-          <span className={`h-2 w-2 rounded-full ${TONE[view.tone].dot}`} />
-          {view.label}
-        </span>
+    <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${DOT[view.tone]}`} />
+          <span className="text-sm font-semibold text-white">Уведомления</span>
+          <span className={`truncate text-xs ${LABEL_COLOR[view.tone]}`}>{view.label}</span>
+        </div>
+
+        {status === "on" ? (
+          <button className={btnGhostSm} disabled={testing} onClick={() => void onTest()}>
+            {testing ? "Шлём…" : "Проверить"}
+          </button>
+        ) : status === "off" ? (
+          <button className={btnPrimarySm} disabled={busy} onClick={() => void onEnable()}>
+            {busy ? "Включаем…" : "Включить"}
+          </button>
+        ) : hasDetails ? (
+          <button className={btnGhostSm} onClick={() => setOpen((current) => !current)}>
+            {open ? "Скрыть" : "Что делать"}
+          </button>
+        ) : null}
       </div>
 
-      {state?.status === "on" ? (
-        <>
-          <div className="mt-2 text-xs leading-5 text-white/55">
-            Новые заказы и вызовы приходят на телефон со звуком и вибрацией — даже когда приложение закрыто.
-          </div>
-          <div className="mt-4">
-            <button className={btnGhost} disabled={testing} onClick={() => void onTest()}>
-              {testing ? "Отправляем…" : "Проверить уведомление"}
-            </button>
-          </div>
-        </>
+      {open && state?.status === "ios-needs-install" ? (
+        <Details
+          steps={installSteps(state.inSafari)}
+          action={{ label: "Я установил — проверить", onClick: () => void refresh() }}
+        />
       ) : null}
 
-      {state?.status === "off" ? (
-        <>
-          <div className="mt-2 text-xs leading-5 text-white/55">
-            Включите один раз — дальше телефон сам звякнет и завибрирует, когда гость позовёт.
-          </div>
-          <div className="mt-4">
-            <button className={btnPrimary} disabled={busy} onClick={() => void onEnable()}>
-              {busy ? "Включаем…" : "Включить уведомления"}
-            </button>
-          </div>
-        </>
+      {open && state?.status === "denied" ? (
+        <Details
+          steps={deniedSteps(state.platform === "ios")}
+          action={{ label: "Проверить ещё раз", onClick: () => void refresh() }}
+        />
       ) : null}
 
-      {state?.status === "ios-needs-install" ? (
-        <>
-          <div className="mt-2 text-xs leading-5 text-white/55">
-            На iPhone и iPad уведомления работают только из приложения на экране «Домой» — это ограничение Apple,
-            в обычной вкладке браузера они невозможны. Установка занимает 15 секунд.
-          </div>
-          <Steps
-            items={
-              state.inSafari
-                ? [
-                    "Нажмите «Поделиться» — квадрат со стрелкой вверх внизу экрана.",
-                    "Пролистайте и выберите «На экран «Домой»».",
-                    "Нажмите «Добавить».",
-                    "Откройте LOFT№8 Staff с экрана «Домой» и войдите.",
-                    "Нажмите «Включить уведомления» на этом экране.",
-                  ]
-                : [
-                    "Откройте этот адрес в Safari — в других браузерах на iPhone установка недоступна.",
-                    "Нажмите «Поделиться» — квадрат со стрелкой вверх.",
-                    "Выберите «На экран «Домой»» и нажмите «Добавить».",
-                    "Откройте LOFT№8 Staff с экрана «Домой» и войдите.",
-                    "Нажмите «Включить уведомления» на этом экране.",
-                  ]
-            }
-          />
-          <div className="mt-4">
-            <button className={btnGhost} onClick={() => void refresh()}>
-              Я установил — проверить
-            </button>
-          </div>
-        </>
+      {open && state?.status === "server-not-configured" ? (
+        <Details note="На сервере не заданы VAPID-ключи — push отключён для всех. Сообщите администратору." />
       ) : null}
 
-      {state?.status === "denied" ? (
-        <>
-          <div className="mt-2 text-xs leading-5 text-white/55">
-            Уведомления запрещены в настройках. Браузер больше не спросит — разрешение нужно вернуть вручную.
-          </div>
-          <Steps
-            items={
-              state.platform === "ios"
-                ? [
-                    "Откройте «Настройки» телефона → «Уведомления».",
-                    "Найдите LOFT№8 Staff и включите «Допуск уведомлений».",
-                    "Вернитесь сюда и нажмите «Проверить ещё раз».",
-                  ]
-                : [
-                    "Нажмите на замок (или иконку слева от адреса) в адресной строке.",
-                    "Откройте «Настройки сайта» → «Уведомления».",
-                    "Выберите «Разрешить» и обновите страницу.",
-                  ]
-            }
-          />
-          <div className="mt-4">
-            <button className={btnGhost} onClick={() => void refresh()}>
-              Проверить ещё раз
-            </button>
-          </div>
-        </>
+      {open && state?.status === "unsupported" ? (
+        <Details note="Этот браузер не умеет получать уведомления. Откройте панель в Chrome на Android или добавьте её на экран «Домой» на iPhone." />
+      ) : null}
+    </div>
+  );
+}
+
+function Details({
+  steps,
+  note,
+  action,
+}: {
+  steps?: string[];
+  note?: string;
+  action?: { label: string; onClick: () => void };
+}) {
+  return (
+    <div className="mt-3 border-t border-white/8 pt-3">
+      {note ? <div className="text-xs leading-5 text-white/60">{note}</div> : null}
+
+      {steps ? (
+        <ol className="space-y-1.5">
+          {steps.map((text, index) => (
+            <li key={text} className="flex gap-2 text-xs leading-5 text-white/65">
+              <span className="shrink-0 text-white/30">{index + 1}.</span>
+              <span>{text}</span>
+            </li>
+          ))}
+        </ol>
       ) : null}
 
-      {state?.status === "server-not-configured" ? (
-        <div className="mt-2 text-xs leading-5 text-white/55">
-          На сервере не заданы VAPID-ключи, поэтому push отключён для всех. Сообщите администратору — нужно
-          заполнить VAPID_SUBJECT, VAPID_PUBLIC_KEY и VAPID_PRIVATE_KEY и перезапустить сервер.
-        </div>
+      {action ? (
+        <button className={`${btnGhostSm} mt-3 w-full`} onClick={action.onClick}>
+          {action.label}
+        </button>
       ) : null}
-
-      {state?.status === "unsupported" ? (
-        <div className="mt-2 text-xs leading-5 text-white/55">
-          Этот браузер не умеет получать уведомления. Откройте панель в Chrome (Android) или в Safari на iPhone,
-          добавив её на экран «Домой». Пока звук будет работать только при открытой панели.
-        </div>
-      ) : null}
-
-      <div className="mt-3 border-t border-white/8 pt-3 text-[11px] leading-5 text-white/40">
-        Пока панель открыта, новые заказы и вызовы звучат и без уведомлений — звук включается после первого касания
-        экрана.
-      </div>
     </div>
   );
 }

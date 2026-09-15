@@ -81,29 +81,29 @@ export function PostPaymentPrompt() {
 
   return (
     <div className="fixed inset-0 z-[65] flex items-end justify-center bg-black/60 p-4 backdrop-blur-sm sm:items-center">
-      <div className="w-full max-w-md rounded-[28px] border border-gold/25 bg-[#151515]/97 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.5)]">
-        <div className="grid h-12 w-12 place-items-center rounded-2xl bg-gold/15 text-xl text-amber-200">✦</div>
-        <div className="mt-4 text-lg font-semibold text-white">
+      <div className="w-full max-w-md rounded-3xl border border-gold/25 bg-[#151515]/97 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.5)]">
+        <div className="grid h-10 w-10 place-items-center rounded-xl bg-gold/15 text-lg text-amber-200">✦</div>
+        <div className="mt-3 text-base font-semibold text-white">
           {isCz ? "Účet je uhrazen — díky!" : "Your bill is paid — thank you!"}
         </div>
-        <div className="mt-2 text-sm leading-6 text-white/70">
+        <div className="mt-1.5 text-sm leading-6 text-white/65">
           {isCz
             ? "Chcete si ještě něco objednat a zůstat u nás? Pokud ne, stůl uvolníme."
             : "Would you like to order more and stay with us? If not, we'll free up your table."}
         </div>
 
-        <div className="mt-5 grid gap-2">
+        <div className="mt-4 grid gap-2">
           <button
             type="button"
             onClick={stay}
-            className="h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.98]"
+            className="h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.98]"
           >
             {isCz ? "Ano, zůstáváme" : "Yes, we're staying"}
           </button>
           <button
             type="button"
             onClick={leave}
-            className="h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/85 transition hover:text-white"
+            className="h-11 w-full rounded-xl border border-white/10 bg-transparent text-sm font-semibold text-white/85 transition hover:text-white"
           >
             {isCz ? "Ne, odcházíme" : "No, we're leaving"}
           </button>

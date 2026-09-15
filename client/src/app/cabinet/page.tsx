@@ -12,14 +12,15 @@ export default function CabinetPage() {
   const { isCz } = useI18n();
 
   return (
-    <main className="mx-auto max-w-md px-4 pb-10 pt-5">
+    <main className="mx-auto max-w-md px-4 pb-10 pt-4">
       <div className="pr-24">
-        <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">
+        <h1 className="text-xl font-semibold text-white">
           {isCz ? "Osobní účet" : "Personal account"}
-        </div>
+        </h1>
+        <div className="mt-0.5 text-[11px] tracking-[0.18em] text-white/35">LOFT№8</div>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-3.5">
         <GuestAccount />
       </div>
     </main>

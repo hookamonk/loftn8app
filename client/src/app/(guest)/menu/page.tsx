@@ -340,13 +340,13 @@ function MenuPage() {
 
   return (
     <RequireTable>
-      <main className="mx-auto max-w-md px-4 pb-40 pt-5">
-        <div className="mb-4">
-          <div className="text-[11px] font-medium uppercase tracking-[0.3em] text-white/45">{venueName}</div>
-          <h1 className="mt-1 text-2xl font-bold text-white">Menu</h1>
+      <main className="mx-auto max-w-md px-4 pb-40 pt-4">
+        <div className="mb-3.5 pr-24">
+          <h1 className="text-xl font-semibold text-white">Menu</h1>
+          <div className="mt-0.5 text-[11px] tracking-[0.18em] text-white/35">{venueName}</div>
         </div>
 
-        <div className="sticky top-0 z-30 -mx-1 rounded-3xl border border-white/10 bg-[#0c0c11]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+        <div className="sticky top-0 z-30 -mx-1 rounded-2xl border border-white/10 bg-[#0c0c11]/95 p-2.5 shadow-[0_10px_32px_rgba(0,0,0,0.45)] backdrop-blur-xl">
           <div className="relative">
             <svg
               className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40"
@@ -359,7 +359,7 @@ function MenuPage() {
               <path d="m20 20-3-3" strokeLinecap="round" />
             </svg>
             <input
-              className="w-full rounded-2xl border border-white/10 bg-black/30 py-3 pl-10 pr-4 text-sm text-white placeholder:text-white/40 outline-none focus:border-white/25"
+              className="w-full rounded-xl border border-white/10 bg-black/30 py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-white/40 outline-none focus:border-white/25"
               placeholder={isCz ? "Hledat v menu…" : "Search the menu…"}
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -437,7 +437,7 @@ function MenuPage() {
           ) : null}
         </div>
 
-        <div className="mt-4 space-y-3">
+        <div className="mt-3.5 space-y-2.5">
           {isSearching ? (
             <div className="px-1 text-xs text-white/55">{isCz ? `Nalezeno: ${filteredItems.length}` : `Found: ${filteredItems.length}`}</div>
           ) : null}
@@ -446,10 +446,10 @@ function MenuPage() {
             return (
               <div
                 key={i.id}
-                className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_10px_40px_rgba(0,0,0,0.35)]"
+                className="rounded-3xl border border-white/10 bg-white/6 p-3 backdrop-blur-xl shadow-[0_8px_28px_rgba(0,0,0,0.3)]"
               >
-                <div className="flex gap-4">
-                  <div className="relative h-[104px] w-[104px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+                <div className="flex gap-3">
+                  <div className="relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black/30">
                     {i.imageUrl ? (
                       <img
                         src={i.imageUrl}
@@ -470,17 +470,17 @@ function MenuPage() {
                   </div>
 
                   <div className="flex min-w-0 flex-1 flex-col">
-                    <div className="line-clamp-2 text-[16px] font-semibold leading-5 text-white">
+                    <div className="line-clamp-2 text-[15px] font-semibold leading-5 text-white">
                       {tName(i)}
                     </div>
 
                     {tDesc(i) ? (
-                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-white/60">
+                      <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-white/55">
                         {tDesc(i)}
                       </div>
                     ) : null}
 
-                    <div className="mt-auto pt-3 text-lg font-bold text-white">{i.priceCzk} Kč</div>
+                    <div className="mt-auto pt-2 text-base font-bold text-white">{i.priceCzk} Kč</div>
                   </div>
                 </div>
               </div>
@@ -488,7 +488,7 @@ function MenuPage() {
           })}
 
           {filteredItems.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
               {isCz ? "Nic nenalezeno." : "Nothing found."}
             </div>
           ) : null}

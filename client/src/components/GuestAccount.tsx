@@ -8,22 +8,25 @@ import { useAuth } from "@/providers/auth";
 import { useI18n } from "@/providers/i18n";
 import { useToast } from "@/providers/toast";
 import { useSession } from "@/providers/session";
+import { useEscapeToClose } from "@/lib/useModalA11y";
 import type { AccountOverviewResponse } from "@/types";
 
 /**
- * The guest's whole account on one screen: their card, the profile editor and
- * sign out. Shared by the "Profile" tab (guest sitting at a table) and by
- * /cabinet (guest without a table), so there is exactly one implementation.
+ * Весь аккаунт гостя на одном коротком экране: карта, три строки и выход.
+ * Всё, что длиннее строки — профиль, пароль, чеки — открывается шторкой поверх
+ * текущего экрана, поэтому сам кабинет никогда не разрастается.
+ *
+ * Общий для вкладки «Профиль» (гость за столом) и /cabinet (гость без стола).
  */
 
-const card = "rounded-[28px] border border-white/10 bg-white/[0.04] p-5";
+type SheetMode = "profile" | "password" | "receipts";
 
 function initials(name: string) {
   const words = name.trim().split(/\s+/).filter(Boolean);
   return ((words[0]?.[0] ?? "") + (words[1]?.[0] ?? "")).toUpperCase() || "—";
 }
 
-/** Group the membership number so it reads like a real loyalty card. */
+/** Группируем номер, чтобы он читался как настоящая карта лояльности. */
 function formatCardNumber(value: string) {
   return (value.match(/.{1,3}/g) ?? [value]).join(" ");
 }
@@ -60,18 +63,95 @@ function Field({
   autoComplete?: string;
 }) {
   return (
-    <label className="block rounded-2xl border border-white/10 bg-black/25 px-4 py-2.5 focus-within:border-white/25">
-      <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">{label}</div>
+    <label className="block rounded-xl border border-white/10 bg-black/25 px-3.5 py-2 focus-within:border-white/25">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-white/35">{label}</div>
       <input
         value={value}
         type={type}
         autoComplete={autoComplete}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 h-7 w-full bg-transparent text-sm text-white outline-none"
+        className="mt-0.5 h-6 w-full bg-transparent text-sm text-white outline-none"
       />
     </label>
   );
 }
+
+function Sheet({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEscapeToClose(open, onClose);
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[95] flex items-end justify-center bg-black/70 px-4 pb-4 backdrop-blur-sm sm:items-center"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0d0d0d] p-4 shadow-[0_30px_120px_rgba(0,0,0,0.7)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-semibold text-white">{title}</div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/[0.06] text-sm text-white/60 transition hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="mt-3 max-h-[68vh] overflow-y-auto pr-0.5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Row({
+  label,
+  value,
+  onClick,
+  disabled,
+  muted,
+}: {
+  label: string;
+  value?: string;
+  onClick: () => void;
+  disabled?: boolean;
+  muted?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition hover:bg-white/[0.03] disabled:opacity-40"
+    >
+      <span className={`text-sm font-medium ${muted ? "text-white/60" : "text-white"}`}>{label}</span>
+      <span className="flex shrink-0 items-center gap-2 text-xs text-white/40">
+        {value}
+        <span className="text-base leading-none text-white/25">›</span>
+      </span>
+    </button>
+  );
+}
+
+const btnPrimary =
+  "h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-40";
+const btnGhost =
+  "h-11 w-full rounded-xl border border-white/10 bg-white/[0.06] text-sm font-semibold text-white transition active:scale-[0.99] disabled:opacity-40";
 
 export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boolean; reason: string } }) {
   const router = useRouter();
@@ -82,8 +162,7 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
 
   const [overview, setOverview] = useState<AccountOverviewResponse | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
-  const [editOpen, setEditOpen] = useState(false);
-  const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const [sheet, setSheet] = useState<SheetMode | null>(null);
   const [openReceiptId, setOpenReceiptId] = useState<string | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
@@ -136,8 +215,8 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
     });
   }, [overview]);
 
-  // Cashback is earned and spent PER VENUE, so the card shows the balance for
-  // the branch the guest is actually in.
+  // Кэшбэк копится и тратится ПО ТОЧКАМ, поэтому карта показывает баланс того
+  // филиала, в котором гость сейчас находится.
   const venue = useMemo(() => {
     const slug = getVenueSlug();
     const history = overview?.loyalty.history ?? [];
@@ -171,6 +250,7 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
       });
       setOverview((current) => (current ? { ...current, user: result.user } : current));
       await refresh();
+      setSheet(null);
       push({
         kind: "success",
         title: isCz ? "Uloženo" : "Saved",
@@ -196,6 +276,7 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
         body: JSON.stringify({ currentPassword: passwordForm.current, newPassword: passwordForm.next }),
       });
       setPasswordForm({ current: "", next: "", repeat: "" });
+      setSheet(null);
       push({
         kind: "success",
         title: isCz ? "Heslo změněno" : "Password updated",
@@ -215,8 +296,8 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
   const signOut = async () => {
     if (signingOut) return;
 
-    // Never detach the account in the middle of an order or a payment — the
-    // guest would lose the bill and the cashback for it.
+    // Никогда не отвязываем аккаунт посреди заказа или оплаты — гость потерял бы
+    // и счёт, и кэшбэк за него.
     if (blockSignOut?.blocked) {
       push({ kind: "error", title: isCz ? "Zatím se nelze odhlásit" : "Can't sign out yet", message: blockSignOut.reason });
       return;
@@ -236,197 +317,191 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
 
   if (loading || pageLoading || !overview) {
     return (
-      <div className="animate-pulse space-y-3">
-        <div className="h-52 rounded-[28px] border border-white/10 bg-white/[0.04]" />
-        <div className="h-14 rounded-2xl border border-white/10 bg-white/[0.04]" />
-        <div className="h-12 rounded-2xl border border-white/10 bg-white/[0.04]" />
+      <div className="animate-pulse space-y-2.5">
+        <div className="h-40 rounded-3xl border border-white/10 bg-white/[0.04]" />
+        <div className="h-36 rounded-2xl border border-white/10 bg-white/[0.04]" />
       </div>
     );
   }
 
   const percent = overview.loyalty.cashbackPercent;
+  const receipts = overview.receipts;
 
   return (
-    <div className="space-y-3">
-      {/* ===== Guest card ===== */}
-      <div className="relative overflow-hidden rounded-[28px] border border-gold/20 bg-[linear-gradient(145deg,#1b160d_0%,#120f0a_55%,#0c0a07_100%)] p-5 shadow-[0_18px_50px_rgba(0,0,0,0.5)]">
-        <div className="pointer-events-none absolute -right-10 -top-12 h-36 w-36 rounded-full bg-gold/12 blur-3xl" />
+    <div className="space-y-2.5">
+      {/* ===== Карта гостя ===== */}
+      <div className="relative overflow-hidden rounded-3xl border border-gold/20 bg-[linear-gradient(145deg,#1b160d_0%,#120f0a_55%,#0c0a07_100%)] p-4 shadow-[0_14px_40px_rgba(0,0,0,0.45)]">
+        <div className="pointer-events-none absolute -right-8 -top-10 h-28 w-28 rounded-full bg-gold/12 blur-3xl" />
 
-        <div className="relative flex items-start justify-between gap-3">
-          <div className="text-[11px] font-semibold tracking-[0.28em] text-gold/80">LOFT№8</div>
+        <div className="relative flex items-center justify-between gap-3">
+          <div className="text-[10px] font-semibold tracking-[0.26em] text-gold/80">LOFT№8</div>
           {percent > 0 ? (
-            <div className="rounded-full border border-gold/25 bg-gold/10 px-2.5 py-0.5 text-[11px] font-semibold text-gold">
+            <div className="rounded-full border border-gold/25 bg-gold/10 px-2 py-0.5 text-[10px] font-semibold text-gold">
               {percent}%
             </div>
           ) : null}
         </div>
 
-        <div className="relative mt-5">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">
-            {isCz ? "Cashback na pobočce" : "Cashback at this branch"}
-          </div>
-          <div className="mt-1 flex items-end gap-2">
-            <div className="text-[40px] font-bold leading-none text-gold">{venue.availableCzk}</div>
-            <div className="pb-1.5 text-sm font-medium text-gold/70">Kč</div>
-          </div>
-          <div className="mt-1 text-xs text-white/50">{venue.name}</div>
+        <div className="relative mt-3 text-[10px] uppercase tracking-[0.16em] text-white/35">
+          Cashback · {venue.name}
+        </div>
 
+        <div className="relative mt-1 flex items-end gap-1.5">
+          <div className="text-[32px] font-bold leading-none text-gold">{venue.availableCzk}</div>
+          <div className="pb-0.5 text-sm font-medium text-gold/70">Kč</div>
           {venue.pendingCzk > 0 ? (
-            <div className="mt-2 text-[11px] text-amber-50/55">
-              {isCz ? "Odemkne se" : "Unlocks"} {venue.pendingCzk} Kč ·{" "}
-              {isCz ? "po půlnoci" : "after midnight"}
+            <div className="ml-auto pb-1 text-[10px] text-amber-50/50">
+              +{venue.pendingCzk} Kč · {isCz ? "po půlnoci" : "after midnight"}
             </div>
           ) : null}
         </div>
 
-        <div className="relative mt-6 flex items-end justify-between gap-3 border-t border-white/8 pt-4">
+        <div className="relative mt-3.5 flex items-center justify-between gap-3 border-t border-white/8 pt-3">
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold uppercase tracking-wide text-white">
+            <div className="truncate text-xs font-semibold uppercase tracking-wide text-white">
               {overview.user.name}
             </div>
-            <div className="mt-1 font-mono text-[11px] tracking-[0.18em] text-white/40">
+            <div className="mt-0.5 font-mono text-[10px] tracking-[0.16em] text-white/35">
               {formatCardNumber(overview.user.cardNumber)}
             </div>
           </div>
-          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-gold/25 bg-gold/10 text-sm font-semibold text-gold">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-gold/25 bg-gold/10 text-xs font-semibold text-gold">
             {initials(overview.user.name)}
           </div>
         </div>
 
-        <div className="relative mt-4 text-[10px] leading-4 text-white/30">
+        <div className="relative mt-2.5 text-[10px] leading-4 text-white/25">
           {isCz ? "Apple Wallet a Google Wallet — již brzy" : "Apple Wallet and Google Wallet — coming soon"}
         </div>
       </div>
 
-      {/* ===== Edit profile ===== */}
-      <div className={`${card} p-0`}>
-        <button
-          type="button"
-          onClick={() => setEditOpen((open) => !open)}
-          className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
-        >
-          <div className="text-sm font-semibold text-white">
-            {isCz ? "Upravit profil" : "Edit profile"}
-          </div>
-          <span className="text-lg leading-none text-white/35">{editOpen ? "−" : "+"}</span>
-        </button>
-
-        {editOpen ? (
-          <div className="space-y-2.5 border-t border-white/8 px-5 py-4">
-            <Field
-              label={isCz ? "Jméno" : "Name"}
-              value={profileForm.name}
-              autoComplete="name"
-              onChange={(value) => setProfileForm((current) => ({ ...current, name: value }))}
-            />
-            <Field
-              label={isCz ? "Telefon (nepovinné)" : "Phone (optional)"}
-              value={profileForm.phone}
-              autoComplete="tel"
-              onChange={(value) => setProfileForm((current) => ({ ...current, phone: value }))}
-            />
-            <Field
-              label="Email"
-              value={profileForm.email}
-              type="email"
-              autoComplete="email"
-              onChange={(value) => setProfileForm((current) => ({ ...current, email: value }))}
-            />
-            <button
-              type="button"
-              disabled={!canSaveProfile}
-              onClick={() => void saveProfile()}
-              className="h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-40"
-            >
-              {savingProfile ? (isCz ? "Ukládám…" : "Saving…") : isCz ? "Uložit" : "Save"}
-            </button>
-
-            <div className="border-t border-white/8 pt-3">
-              <div className="mb-2.5 text-[10px] uppercase tracking-[0.16em] text-white/40">
-                {isCz ? "Změna hesla" : "Change password"}
-              </div>
-              <div className="space-y-2.5">
-                <Field
-                  label={isCz ? "Aktuální heslo" : "Current password"}
-                  value={passwordForm.current}
-                  type="password"
-                  autoComplete="current-password"
-                  onChange={(value) => setPasswordForm((current) => ({ ...current, current: value }))}
-                />
-                <Field
-                  label={isCz ? "Nové heslo" : "New password"}
-                  value={passwordForm.next}
-                  type="password"
-                  autoComplete="new-password"
-                  onChange={(value) => setPasswordForm((current) => ({ ...current, next: value }))}
-                />
-                <Field
-                  label={isCz ? "Zopakujte heslo" : "Repeat password"}
-                  value={passwordForm.repeat}
-                  type="password"
-                  autoComplete="new-password"
-                  onChange={(value) => setPasswordForm((current) => ({ ...current, repeat: value }))}
-                />
-                {!passwordsMatch && passwordForm.repeat ? (
-                  <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-2.5 text-xs text-red-200">
-                    {isCz ? "Hesla se neshodují." : "Passwords do not match."}
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={!canSavePassword}
-                  onClick={() => void savePassword()}
-                  className="h-12 w-full rounded-2xl border border-white/10 bg-white/[0.06] text-sm font-semibold text-white transition active:scale-[0.99] disabled:opacity-40"
-                >
-                  {savingPassword ? (isCz ? "Měním…" : "Updating…") : isCz ? "Změnit heslo" : "Change password"}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
+      {/* ===== Действия ===== */}
+      <div className="divide-y divide-white/[0.06] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]">
+        <Row label={isCz ? "Profil" : "Profile"} onClick={() => setSheet("profile")} />
+        <Row
+          label={isCz ? "Moje účtenky" : "My receipts"}
+          value={receipts.length ? String(receipts.length) : undefined}
+          onClick={() => setSheet("receipts")}
+        />
+        <Row
+          label={signingOut ? (isCz ? "Odhlašuji…" : "Signing out…") : isCz ? "Odhlásit se" : "Sign out"}
+          onClick={() => void signOut()}
+          disabled={signingOut || blockSignOut?.blocked}
+          muted
+        />
       </div>
-
-      {/* ===== Sign out ===== */}
-      <button
-        type="button"
-        onClick={() => void signOut()}
-        disabled={signingOut || blockSignOut?.blocked}
-        className="h-12 w-full rounded-2xl border border-white/10 bg-white/[0.03] text-sm font-semibold text-white/65 transition hover:bg-white/[0.06] disabled:opacity-40"
-      >
-        {signingOut ? (isCz ? "Odhlašuji…" : "Signing out…") : isCz ? "Odhlásit se" : "Sign out"}
-      </button>
 
       {blockSignOut?.blocked ? (
-        <div className="px-1 text-center text-[11px] leading-5 text-white/40">{blockSignOut.reason}</div>
+        <div className="px-1 text-center text-[11px] leading-5 text-white/35">{blockSignOut.reason}</div>
       ) : null}
 
-      {/* ===== Receipts — quiet, but there when the guest needs to check a charge ===== */}
-      <div className="pt-1 text-center">
-        <button
-          type="button"
-          onClick={() => setReceiptsOpen((open) => !open)}
-          className="text-xs text-white/40 underline underline-offset-4 transition hover:text-white/70"
-        >
-          {isCz ? "Moje účtenky" : "My receipts"}
-          {overview.receipts.length ? ` (${overview.receipts.length})` : ""}
-        </button>
-      </div>
-
-      {receiptsOpen ? (
+      {/* ===== Шторка: профиль ===== */}
+      <Sheet
+        open={sheet === "profile"}
+        title={isCz ? "Profil" : "Profile"}
+        onClose={() => setSheet(null)}
+      >
         <div className="space-y-2">
-          {overview.receipts.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-6 text-center text-xs text-white/45">
-              {isCz ? "Zatím žádné účtenky." : "No receipts yet."}
+          <Field
+            label={isCz ? "Jméno" : "Name"}
+            value={profileForm.name}
+            autoComplete="name"
+            onChange={(value) => setProfileForm((current) => ({ ...current, name: value }))}
+          />
+          <Field
+            label={isCz ? "Telefon (nepovinné)" : "Phone (optional)"}
+            value={profileForm.phone}
+            autoComplete="tel"
+            onChange={(value) => setProfileForm((current) => ({ ...current, phone: value }))}
+          />
+          <Field
+            label="Email"
+            value={profileForm.email}
+            type="email"
+            autoComplete="email"
+            onChange={(value) => setProfileForm((current) => ({ ...current, email: value }))}
+          />
+
+          <button type="button" disabled={!canSaveProfile} onClick={() => void saveProfile()} className={btnPrimary}>
+            {savingProfile ? (isCz ? "Ukládám…" : "Saving…") : isCz ? "Uložit" : "Save"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSheet("password")}
+            className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-transparent px-3.5 py-3 text-left text-sm font-medium text-white/70 transition hover:text-white"
+          >
+            {isCz ? "Změnit heslo" : "Change password"}
+            <span className="text-base leading-none text-white/25">›</span>
+          </button>
+        </div>
+      </Sheet>
+
+      {/* ===== Шторка: пароль ===== */}
+      <Sheet
+        open={sheet === "password"}
+        title={isCz ? "Změnit heslo" : "Change password"}
+        onClose={() => setSheet(null)}
+      >
+        <div className="space-y-2">
+          <Field
+            label={isCz ? "Aktuální heslo" : "Current password"}
+            value={passwordForm.current}
+            type="password"
+            autoComplete="current-password"
+            onChange={(value) => setPasswordForm((current) => ({ ...current, current: value }))}
+          />
+          <Field
+            label={isCz ? "Nové heslo" : "New password"}
+            value={passwordForm.next}
+            type="password"
+            autoComplete="new-password"
+            onChange={(value) => setPasswordForm((current) => ({ ...current, next: value }))}
+          />
+          <Field
+            label={isCz ? "Zopakujte heslo" : "Repeat password"}
+            value={passwordForm.repeat}
+            type="password"
+            autoComplete="new-password"
+            onChange={(value) => setPasswordForm((current) => ({ ...current, repeat: value }))}
+          />
+
+          {!passwordsMatch && passwordForm.repeat ? (
+            <div className="rounded-xl border border-red-400/20 bg-red-500/10 px-3.5 py-2.5 text-xs text-red-200">
+              {isCz ? "Hesla se neshodují." : "Passwords do not match."}
             </div>
-          ) : (
-            overview.receipts.map((receipt) => {
+          ) : null}
+
+          <button type="button" disabled={!canSavePassword} onClick={() => void savePassword()} className={btnPrimary}>
+            {savingPassword ? (isCz ? "Měním…" : "Updating…") : isCz ? "Změnit heslo" : "Change password"}
+          </button>
+
+          <button type="button" onClick={() => setSheet("profile")} className={btnGhost}>
+            {isCz ? "Zpět" : "Back"}
+          </button>
+        </div>
+      </Sheet>
+
+      {/* ===== Шторка: чеки ===== */}
+      <Sheet
+        open={sheet === "receipts"}
+        title={isCz ? "Moje účtenky" : "My receipts"}
+        onClose={() => setSheet(null)}
+      >
+        {receipts.length === 0 ? (
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-6 text-center text-xs text-white/45">
+            {isCz ? "Zatím žádné účtenky." : "No receipts yet."}
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {receipts.map((receipt) => {
               const open = openReceiptId === receipt.id;
               return (
-                <div key={receipt.id} className="rounded-2xl border border-white/10 bg-white/[0.03]">
+                <div key={receipt.id} className="rounded-xl border border-white/10 bg-white/[0.03]">
                   <button
                     type="button"
                     onClick={() => setOpenReceiptId(open ? null : receipt.id)}
-                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                    className="flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left"
                   >
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium text-white">
@@ -436,7 +511,7 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
                           year: "numeric",
                         })}
                       </div>
-                      <div className="mt-0.5 truncate text-[11px] text-white/45">
+                      <div className="mt-0.5 truncate text-[11px] text-white/40">
                         {receipt.venue.name} · {receipt.methodLabel}
                       </div>
                     </div>
@@ -444,9 +519,9 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
                   </button>
 
                   {open ? (
-                    <div className="space-y-1 border-t border-white/8 px-4 py-3">
+                    <div className="space-y-1 border-t border-white/8 px-3.5 py-2.5">
                       {receipt.items.map((item) => (
-                        <div key={item.key} className="flex justify-between gap-3 text-xs text-white/70">
+                        <div key={item.key} className="flex justify-between gap-3 text-xs text-white/65">
                           <span className="min-w-0 truncate">
                             {item.name} × {item.qty}
                           </span>
@@ -454,7 +529,7 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
                         </div>
                       ))}
                       {receipt.cashbackEarnedCzk > 0 ? (
-                        <div className="mt-2 border-t border-white/8 pt-2 text-xs text-gold">
+                        <div className="mt-1.5 border-t border-white/8 pt-1.5 text-xs text-gold">
                           {isCz ? "Získaný cashback" : "Cashback earned"}: +{receipt.cashbackEarnedCzk} Kč
                         </div>
                       ) : null}
@@ -462,10 +537,10 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
                   ) : null}
                 </div>
               );
-            })
-          )}
-        </div>
-      ) : null}
+            })}
+          </div>
+        )}
+      </Sheet>
     </div>
   );
 }
