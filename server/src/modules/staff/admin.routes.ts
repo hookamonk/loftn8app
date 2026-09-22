@@ -144,7 +144,7 @@ staffAdminRouter.get(
       }),
       prisma.paymentConfirmation.aggregate({
         where: { ...dateWhere("createdAt", from), venueId: { in: venueIds } },
-        _sum: { amountCzk: true },
+        _sum: { amountCzk: true, tipCzk: true },
       }),
       prisma.rating.aggregate({
         where: { ...dateWhere("createdAt", from), table: { venueId: { in: venueIds } } },
@@ -200,6 +200,8 @@ staffAdminRouter.get(
         ratingsCount,
         paymentsCount,
         totalRevenueCzk: revenueAgg._sum.amountCzk ?? 0,
+        // Tips are reported separately and never mixed into revenue.
+        totalTipsCzk: revenueAgg._sum.tipCzk ?? 0,
         avgOverall: avgRatings._avg.overall ?? null,
         avgFood: avgRatings._avg.food ?? null,
         avgDrinks: avgRatings._avg.drinks ?? null,

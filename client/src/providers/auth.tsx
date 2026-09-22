@@ -3,6 +3,8 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { api } from "@/lib/api";
+import { rebindGuestPush } from "@/lib/guestPush";
+import { useI18n } from "@/providers/i18n";
 import type { AuthMeResponse } from "@/types";
 
 type AuthState = {
@@ -17,6 +19,7 @@ const Ctx = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isStaffSurface = pathname.startsWith("/staff");
+  const { lang } = useI18n();
   const [loading, setLoading] = useState(true);
   const [me, setMe] = useState<AuthMeResponse>({ authenticated: false });
   const inFlightRef = useRef<Promise<void> | null>(null);
@@ -57,6 +60,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     void refresh();
   }, [isStaffSurface]);
+
+  // Signed-in guest who already allowed notifications: keep this device bound
+  // to the account (and to the current language) on every app open. Silent.
+  useEffect(() => {
+    if (isStaffSurface || !me.authenticated) return;
+    void rebindGuestPush(lang);
+  }, [isStaffSurface, me.authenticated, lang]);
 
   const setAuthenticated = (next: AuthMeResponse) => {
     setMe(next);

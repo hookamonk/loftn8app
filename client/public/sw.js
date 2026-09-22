@@ -1,7 +1,11 @@
 /**
- * LOFT№8 staff service worker.
+ * LOFT№8 service worker (staff dashboard AND guest app — one origin, one SW).
  *
- * Handles web push for the staff dashboard on every platform that supports it:
+ * Every push payload carries `audience`: "staff" (default when missing, so
+ * older payloads render exactly as before) or "guest". The audience picks the
+ * landing URL, the button label and the message type posted to open pages.
+ *
+ * Handles web push on every platform that supports it:
  *   • Android: Chrome, Edge, Samsung Internet, Brave, Opera, Firefox — works in
  *     a normal browser tab, no install needed.
  *   • iOS / iPadOS 16.4+: works ONLY when the app was added to the Home Screen
@@ -11,6 +15,27 @@
 
 const VAPID_ENDPOINT = "/api/staff/push/vapid-public-key";
 const SUBSCRIBE_ENDPOINT = "/api/staff/push/subscribe";
+const GUEST_SUBSCRIBE_ENDPOINT = "/api/guest/push/subscribe";
+
+const STAFF_DEFAULT_URL = "/staff/summary";
+const GUEST_DEFAULT_URL = "/cart";
+
+function audienceOf(value) {
+  return value === "guest" ? "guest" : "staff";
+}
+
+function defaultUrlFor(audience) {
+  return audience === "guest" ? GUEST_DEFAULT_URL : STAFF_DEFAULT_URL;
+}
+
+function openLabelFor(audience, lang) {
+  if (audience === "guest") return lang === "en" ? "Open" : "Otevřít";
+  return "Открыть";
+}
+
+function messageTypeFor(audience) {
+  return audience === "guest" ? "GUEST_PUSH" : "STAFF_PUSH";
+}
 
 // Notification icons MUST be PNG — Chrome on Android silently ignores SVG and
 // falls back to the generic browser logo.
@@ -59,15 +84,19 @@ function readPayload(event) {
 
 self.addEventListener("push", (event) => {
   const payload = readPayload(event);
+  const audience = audienceOf(payload.audience);
+  const lang = payload.lang === "en" ? "en" : "cs";
 
   const title = payload.title || "LOFT№8";
   const tag = payload.tag || `evt:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
   const ts = payload.ts || Date.now();
-  const url = payload.url || "/staff/summary";
+  const url = payload.url || defaultUrlFor(audience);
   const vibrate =
     Array.isArray(payload.vibrate) && payload.vibrate.length > 0 ? payload.vibrate : DEFAULT_VIBRATE;
 
   const data = {
+    audience,
+    lang,
     url,
     tag,
     ts,
@@ -86,13 +115,16 @@ self.addEventListener("push", (event) => {
     // renotify + a stable tag: the same event never double-alerts, but a NEW
     // event with a different tag always beeps again.
     renotify: payload.renotify !== false,
-    requireInteraction: payload.requireInteraction !== false,
+    // Staff alerts stay on screen until dismissed (unchanged); guest updates
+    // behave like a normal notification and go away on their own.
+    requireInteraction:
+      audience === "guest" ? payload.requireInteraction === true : payload.requireInteraction !== false,
     vibrate,
     silent: false,
     timestamp: ts,
     badge: BADGE,
     icon: ICON,
-    actions: [{ action: "open", title: "Открыть" }],
+    actions: [{ action: "open", title: openLabelFor(audience, lang) }],
   };
 
   event.waitUntil(
@@ -104,7 +136,10 @@ self.addEventListener("push", (event) => {
 
       const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of clients) {
-        client.postMessage({ type: "STAFF_PUSH", payload: { ...data, title: payload.title, body: payload.body } });
+        client.postMessage({
+          type: messageTypeFor(audience),
+          payload: { ...data, title: payload.title, body: payload.body },
+        });
       }
     })()
   );
@@ -114,7 +149,8 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
   const data = event.notification.data || {};
-  const url = data.url || "/staff/summary";
+  const audience = audienceOf(data.audience);
+  const url = data.url || defaultUrlFor(audience);
 
   event.waitUntil(
     (async () => {
@@ -123,7 +159,7 @@ self.addEventListener("notificationclick", (event) => {
       for (const client of clients) {
         if ("focus" in client) {
           await client.focus();
-          client.postMessage({ type: "STAFF_PUSH", payload: { ...data, ts: Date.now() } });
+          client.postMessage({ type: messageTypeFor(audience), payload: { ...data, ts: Date.now() } });
           if ("navigate" in client && url) {
             try {
               await client.navigate(url);
@@ -165,12 +201,18 @@ self.addEventListener("pushsubscriptionchange", (event) => {
         }
 
         const json = subscription.toJSON();
-        await fetch(SUBSCRIBE_ENDPOINT, {
+        const body = JSON.stringify({ endpoint: json.endpoint, keys: json.keys });
+        const init = {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
-        });
+          body,
+        };
+
+        // The worker cannot tell whether this device belongs to a staff member
+        // or a guest, so it offers the new subscription to both endpoints; the
+        // one without a matching session cookie simply answers 401.
+        await Promise.allSettled([fetch(SUBSCRIBE_ENDPOINT, init), fetch(GUEST_SUBSCRIBE_ENDPOINT, init)]);
       } catch {
         // Best effort — the app re-validates the subscription on every launch.
       }

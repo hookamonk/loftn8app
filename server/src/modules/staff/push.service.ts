@@ -1,10 +1,9 @@
-import webpush from "web-push";
 import { prisma } from "../../db/prisma";
 import type { StaffRole, MenuSection } from "@prisma/client";
-import { env } from "../../config/env";
 import { isOrderRequestMessage } from "../orders/orderRequest";
 import { publicTableCode, publicVenueSlug } from "../../config/venues";
 import { emitStaffEvent } from "./staffEvents";
+import { sendWebPush, type WebPushSubscriptionRow } from "../push/webPushSender";
 
 type PushPayload = {
   title: string;
@@ -25,27 +24,6 @@ type PushPayload = {
   requireInteraction?: boolean;
   renotify?: boolean;
 };
-
-let configured = false;
-
-function ensureConfiguredOrThrow() {
-  if (configured) return;
-
-  const subject = env.VAPID_SUBJECT;
-  const pub = env.VAPID_PUBLIC_KEY;
-  const priv = env.VAPID_PRIVATE_KEY;
-
-  if (!subject || !pub || !priv) {
-    throw new Error("WebPush not configured: set VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY");
-  }
-
-  webpush.setVapidDetails(subject, pub, priv);
-  configured = true;
-}
-
-function uniq(base: string) {
-  return `${base}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
-}
 
 function trimMessage(message?: string | null, max = 120) {
   const normalized = String(message ?? "")
@@ -70,104 +48,18 @@ function normalizeCallMessage(type: "WAITER" | "HOOKAH" | "BILL" | "HELP", messa
   return trimmed;
 }
 
-const SEND_TIMEOUT_MS = 10_000;
-// Push providers occasionally return transient errors; one quick retry covers
-// the common case without blocking the request.
-const RETRYABLE_PUSH_STATUS = new Set([429, 500, 502, 503, 504]);
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-async function sendOnce(
-  s: { endpoint: string; p256dh: string; auth: string },
-  json: string
-) {
-  await Promise.race([
-    webpush.sendNotification(
-      { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-      json,
-      {
-        TTL: 60 * 60 * 4,
-        urgency: "high" as any,
-      }
-    ),
-    sleep(SEND_TIMEOUT_MS).then(() => {
-      throw new Error("PUSH_TIMEOUT");
-    }),
-  ]);
-}
-
-async function sendToSubscriptions(
-  subs: Array<{ id: string; endpoint: string; p256dh: string; auth: string }>,
-  payload: PushPayload
-) {
-  ensureConfiguredOrThrow();
-
-  const safePayload: PushPayload = {
-    ...payload,
-    ts: payload.ts ?? Date.now(),
-    tag: payload.tag ?? uniq("evt"),
-    renotify: payload.renotify ?? true,
-    requireInteraction: payload.requireInteraction ?? true,
-    vibrate: payload.vibrate ?? [320, 140, 320, 140, 420],
-  };
-
-  const json = JSON.stringify(safePayload);
-
-  let ok = 0;
-  let failed = 0;
-  let removed = 0;
-
-  await Promise.all(
-    subs.map(async (s) => {
-      try {
-        await sendOnce(s, json);
-        ok += 1;
-      } catch (e: any) {
-        const status = e?.statusCode;
-
-        // Endpoint gone — drop it and don't retry.
-        if (status === 404 || status === 410) {
-          failed += 1;
-          removed += 1;
-          await prisma.staffPushSubscription.delete({ where: { id: s.id } }).catch(() => {});
-          console.warn("webpush dropped expired subscription", {
-            status,
-            endpoint: `${s.endpoint?.slice(0, 60)}...`,
-          });
-          return;
-        }
-
-        // Transient error or timeout — retry once after a short delay.
-        if (status === undefined || RETRYABLE_PUSH_STATUS.has(status)) {
-          try {
-            await sleep(800);
-            await sendOnce(s, json);
-            ok += 1;
-            return;
-          } catch (e2: any) {
-            failed += 1;
-            console.warn("webpush failed after retry", {
-              status: e2?.statusCode,
-              endpoint: `${s.endpoint?.slice(0, 60)}...`,
-              msg: e2?.message,
-            });
-            return;
-          }
-        }
-
-        failed += 1;
-        console.warn("webpush failed", {
-          status,
-          endpoint: `${s.endpoint?.slice(0, 60)}...`,
-          msg: e?.message,
-        });
-      }
-    })
+// Staff payloads are explicitly tagged so the shared service worker (which
+// also serves guests) keeps rendering them exactly as before.
+async function sendToSubscriptions(subs: WebPushSubscriptionRow[], payload: PushPayload) {
+  return sendWebPush(
+    subs,
+    { ...payload, audience: "staff" },
+    {
+      onGone: async (s) => {
+        await prisma.staffPushSubscription.delete({ where: { id: s.id } }).catch(() => {});
+      },
+    }
   );
-
-  return { ok, failed, removed };
 }
 
 export async function pushToStaff(staffId: string, payload: PushPayload) {

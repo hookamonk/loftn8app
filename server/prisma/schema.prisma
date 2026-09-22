@@ -132,6 +132,7 @@ model User {
   loyaltyTransactions  LoyaltyTransaction[]
   orders               Order[]
   paymentConfirmations PaymentConfirmation[]
+  pushSubscriptions    GuestPushSubscription[]
 }
 
 model OtpCode {
@@ -244,6 +245,9 @@ model PaymentRequest {
   billTotalCzk       Int                  @default(0)
   useLoyalty         Boolean              @default(false)
   loyaltyAppliedCzk  Int                  @default(0)
+  // Optional tip the guest adds on top of the bill. Never part of the cashback
+  // base and never counted as venue revenue.
+  tipCzk             Int                  @default(0)
   itemsJson          Json?
   status             PaymentStatus        @default(PENDING)
   createdAt          DateTime             @default(now())
@@ -307,6 +311,7 @@ model PaymentConfirmation {
   billTotalCzk     Int                 @default(0)
   amountCzk        Int
   loyaltyAppliedCzk Int                @default(0)
+  tipCzk           Int                 @default(0)
   itemsJson        Json?
   createdAt        DateTime            @default(now())
   loyaltyTxn       LoyaltyTransaction?
@@ -355,6 +360,23 @@ model StaffPushSubscription {
   @@index([staffId])
   // pushToVenueRoles filters by (venueId, staffId in [...]).
   @@index([venueId, staffId])
+}
+
+// Web-push subscription of a registered guest's browser. One row per device
+// endpoint; `lang` picks the language of the notification text.
+model GuestPushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  lang      String   @default("cs")
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 enum UserRole {

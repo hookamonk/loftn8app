@@ -37,6 +37,8 @@
 html,
 body {
   height: 100%;
+  /* Kill double-tap-to-zoom everywhere; scrolling and taps are unaffected. */
+  touch-action: manipulation;
 }
 
 body {

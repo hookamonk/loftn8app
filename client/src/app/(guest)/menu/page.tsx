@@ -9,6 +9,7 @@ import { RequireTable } from "@/components/RequireTable";
 import { useAuth } from "@/providers/auth";
 import { useGuestFeed } from "@/providers/guestFeed";
 import { getVenueName } from "@/lib/venue";
+import { beginGuestPushOptIn, completeGuestPushOptIn } from "@/lib/guestPush";
 import { useI18n } from "@/providers/i18n";
 
 function Pill({
@@ -133,7 +134,7 @@ export default function Page() {
 }
 
 function MenuPage() {
-  const { isCz, ready } = useI18n();
+  const { isCz, ready, lang } = useI18n();
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
 
   // Show Czech content when CZ is selected, fall back to the base (English) text.
@@ -308,6 +309,11 @@ function MenuPage() {
       return;
     }
 
+    // First relevant tap for a signed-in guest: the browser asks for
+    // notification permission once, so "waiter on the way" and "order ready"
+    // reach the lock screen. Armed before the first await (Safari rule).
+    const pushOptIn = beginGuestPushOptIn();
+
     setCalling(true);
     try {
       await api("/calls", { method: "POST", body: JSON.stringify({ type: "WAITER" }) });
@@ -317,6 +323,7 @@ function MenuPage() {
         title: isCz ? "Obsluha přivolána" : "Waiter called",
         message: isCz ? "Číšník je na cestě k vašemu stolu." : "A waiter is on the way to your table.",
       });
+      void completeGuestPushOptIn(pushOptIn, lang);
     } catch (e: unknown) {
       push({
         kind: "error",

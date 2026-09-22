@@ -18,6 +18,14 @@ import { getOpenShiftOrThrow } from "./shiftCache";
 import { addStaffClient, emitStaffEvent } from "./staffEvents";
 import { emitGuestEvent } from "../guest/guestEvents";
 import {
+  notifyGuestCallUpdated,
+  notifyGuestPayment,
+  notifyGuestsBillIssued,
+  notifyGuestsOrderCreated,
+  notifyGuestsOrderItemCancelled,
+  notifyGuestsOrderStatus,
+} from "../guest/guestPush.service";
+import {
   expireGuestSessionIfInactiveAfterPayment,
   getGuestSessionClosureState,
 } from "../guest/sessionExpiry";
@@ -508,6 +516,7 @@ staffDashboardRouter.patch(
       select: {
         id: true,
         tableId: true,
+        status: true,
         table: { select: { venueId: true } },
         session: { select: { shiftId: true } },
         items: {
@@ -533,6 +542,13 @@ staffDashboardRouter.patch(
 
     emitGuestEvent(order.tableId, "order-status");
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    // Lock-screen notification for the guests at the table (only on a real change).
+    if (order.status !== status) {
+      void notifyGuestsOrderStatus(order.id, status).catch((e) => {
+        console.warn("guest push notifyGuestsOrderStatus failed", e);
+      });
+    }
 
     res.json({ ok: true });
   })
@@ -601,6 +617,10 @@ staffDashboardRouter.post(
 
     emitGuestEvent(order.tableId, "order-item-cancelled");
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    void notifyGuestsOrderItemCancelled(order.id, lastItem).catch((e) => {
+      console.warn("guest push notifyGuestsOrderItemCancelled failed", e);
+    });
 
     res.json({ ok: true, orderCancelled: lastItem });
   })
@@ -704,6 +724,10 @@ staffDashboardRouter.post(
     });
 
     emitGuestEvent(body.tableId, "order-created");
+
+    void notifyGuestsOrderCreated(order.id).catch((e) => {
+      console.warn("guest push notifyGuestsOrderCreated failed", e);
+    });
 
     res.json({ ok: true, order });
   })
@@ -1002,6 +1026,7 @@ staffDashboardRouter.get(
           billTotalCzk: true,
           useLoyalty: true,
           loyaltyAppliedCzk: true,
+          tipCzk: true,
           confirmation: {
             select: {
               amountCzk: true,
@@ -1011,6 +1036,29 @@ staffDashboardRouter.get(
         },
       }),
     ]);
+
+    // What the waiter must actually collect. `loyaltyAppliedCzk` is written
+    // only at confirmation, so for a PENDING request it is always 0 in the row —
+    // compute the cashback the guest asked to use the same way /confirm will,
+    // otherwise staff would charge the full bill.
+    let pendingLoyaltyAppliedCzk = 0;
+    if (pendingPayment?.useLoyalty && session.userId) {
+      const loyaltyTxns = await prisma.loyaltyTransaction.findMany({
+        where: { userId: session.userId, venueId },
+        select: {
+          cashbackCzk: true,
+          redeemedAmountCzk: true,
+          availableAt: true,
+          createdAt: true,
+        },
+      });
+      const loyalty = summarizeLoyalty(loyaltyTxns);
+      pendingLoyaltyAppliedCzk = Math.min(loyalty.availableCzk, Math.max(pendingPayment.billTotalCzk ?? 0, 0));
+    }
+    const pendingTipCzk = pendingPayment?.tipCzk ?? 0;
+    const pendingDueCzk = pendingPayment
+      ? Math.max((pendingPayment.billTotalCzk ?? 0) - pendingLoyaltyAppliedCzk, 0) + pendingTipCzk
+      : 0;
 
     const confirmedPayments = await (prisma as any).paymentRequest.findMany({
       where: {
@@ -1069,6 +1117,9 @@ staffDashboardRouter.get(
       pendingPayment: pendingPayment
         ? {
             ...pendingPayment,
+            loyaltyAppliedCzk: pendingLoyaltyAppliedCzk,
+            tipCzk: pendingTipCzk,
+            dueCzk: pendingDueCzk,
             selectedItems: parsePaymentItemsJson(pendingPayment.itemsJson),
           }
         : null,
@@ -1229,6 +1280,14 @@ staffDashboardRouter.post(
 
     emitGuestEvent(tableId, "payment-requested");
 
+    // A brand-new bill from the waiter's side — tell the guests it's ready.
+    // A re-issue of an existing request is already known to them.
+    if (!existing) {
+      void notifyGuestsBillIssued(payment.id).catch((e: unknown) => {
+        console.warn("guest push notifyGuestsBillIssued failed", e);
+      });
+    }
+
     res.json({ ok: true, payment });
   })
 );
@@ -1374,6 +1433,12 @@ staffDashboardRouter.post(
     emitGuestEvent(request.tableId, "order-request-acked");
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
+    if (request.status === "NEW") {
+      void notifyGuestCallUpdated(request.id).catch((e) => {
+        console.warn("guest push notifyGuestCallUpdated failed", e);
+      });
+    }
+
     res.json({
       ok: true,
       request: {
@@ -1447,6 +1512,7 @@ staffDashboardRouter.patch(
       select: {
         id: true,
         type: true,
+        status: true,
         tableId: true,
         session: { select: { shiftId: true } },
         table: { select: { venueId: true } },
@@ -1464,6 +1530,14 @@ staffDashboardRouter.patch(
 
     emitGuestEvent(call.tableId, "call-status");
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    // Staff took the request (NEW → ACKED / DONE): the guest sees "on the way"
+    // or "being handled" on the lock screen. Exactly once per call.
+    if (call.status === "NEW" && status !== "NEW") {
+      void notifyGuestCallUpdated(call.id).catch((e) => {
+        console.warn("guest push notifyGuestCallUpdated failed", e);
+      });
+    }
 
     res.json({ ok: true });
   })
@@ -1626,6 +1700,7 @@ staffDashboardRouter.post(
           tableId: true,
           method: true,
           billTotalCzk: true,
+          tipCzk: true,
           itemsJson: true,
           useLoyalty: true,
           table: {
@@ -1651,6 +1726,9 @@ staffDashboardRouter.post(
 
       const selectedItems = parsePaymentItemsJson(pr.itemsJson);
       const billTotalCzk = pr.billTotalCzk || selectedItems.reduce((sum, item) => sum + item.totalCzk, 0);
+      // Tip rides along untouched: not part of amountCzk (cashback base and
+      // venue revenue), stored on the confirmation for receipts and reports.
+      const tipCzk = Math.max(Number(pr.tipCzk ?? 0), 0);
       const userId = pr.session?.userId ?? null;
 
       // CORRECTNESS: lock this user's loyalty rows for the rest of the
@@ -1711,7 +1789,7 @@ staffDashboardRouter.post(
 
       const confirmation = await (tx as any).paymentConfirmation.upsert({
         where: { paymentRequestId: pr.id },
-        update: { billTotalCzk, amountCzk, loyaltyAppliedCzk, itemsJson: selectedItems },
+        update: { billTotalCzk, amountCzk, loyaltyAppliedCzk, tipCzk, itemsJson: selectedItems },
         create: {
           paymentRequestId: pr.id,
           venueId,
@@ -1721,6 +1799,7 @@ staffDashboardRouter.post(
           billTotalCzk,
           amountCzk,
           loyaltyAppliedCzk,
+          tipCzk,
           itemsJson: selectedItems,
         },
       });
@@ -1784,6 +1863,10 @@ staffDashboardRouter.post(
 
     emitGuestEvent(result.updated?.tableId, "payment-confirmed");
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    void notifyGuestPayment(id, "confirmed").catch((e) => {
+      console.warn("guest push notifyGuestPayment(confirmed) failed", e);
+    });
 
     // Re-arm the post-payment "stay or leave?" prompt for everyone at the table
     // (clear any previous "stay" choice). The table is NOT force-freed here:
@@ -1860,6 +1943,10 @@ staffDashboardRouter.post(
 
     emitGuestEvent(updated?.tableId, "payment-cancelled");
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
+
+    void notifyGuestPayment(payment.id, "cancelled").catch((e) => {
+      console.warn("guest push notifyGuestPayment(cancelled) failed", e);
+    });
 
     res.json({ ok: true, paymentRequest: updated });
   })

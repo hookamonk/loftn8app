@@ -9,6 +9,8 @@ import { RequireTable } from "@/components/RequireTable";
 import { useGuestFeed } from "@/providers/guestFeed";
 import { useAuth } from "@/providers/auth";
 import { PaymentSheet } from "@/components/PaymentSheet";
+import { NO_TIP, TipPicker, choiceFromTip, tipCzkFromChoice, type TipChoice } from "@/components/TipPicker";
+import { noteOwnPaymentRequest } from "@/lib/guestNotifications";
 import { useI18n } from "@/providers/i18n";
 
 /**
@@ -128,6 +130,12 @@ export default function CartPage() {
   const [changingMethod, setChangingMethod] = useState(false);
   const [useLoyalty, setUseLoyalty] = useState(false);
   const [selectedQtyByKey, setSelectedQtyByKey] = useState<Record<string, number>>({});
+  const [tip, setTip] = useState<TipChoice>(NO_TIP);
+
+  // Tip on an in-flight payment: local choice first (instant UI), server after.
+  const [pendingTip, setPendingTip] = useState<TipChoice | null>(null);
+  const [changingTip, setChangingTip] = useState(false);
+  const tipTimerRef = useRef<number | null>(null);
 
   const openTab = useMemo(() => buildOpenTab(feed?.orders ?? [], isCz), [feed, isCz]);
 
@@ -144,40 +152,20 @@ export default function CartPage() {
   const availablePointsCzk = feed?.loyalty?.availableCzk ?? 0;
   const cashbackPercent = feed?.loyalty?.cashbackPercent ?? 10;
 
-  // Tell the guest the moment staff act on their payment.
-  const lastPaymentRef = useRef<{ id: string; status: string } | null>(null);
-  useEffect(() => {
-    const mine = payments.find((payment) => payment.isMine) ?? null;
-    if (!mine) {
-      lastPaymentRef.current = null;
-      return;
-    }
-
-    const prev = lastPaymentRef.current;
-    if (prev && prev.id === mine.id && prev.status === "PENDING") {
-      if (mine.status === "CONFIRMED") {
-        push({
-          kind: "success",
-          title: isCz ? "Platba potvrzena" : "Payment confirmed",
-          message: isCz ? "Děkujeme! Účet je uhrazen." : "Thank you! Your bill is settled.",
-        });
-      }
-      if (mine.status === "CANCELLED") {
-        setUseLoyalty(false);
-        push({
-          kind: "info",
-          title: isCz ? "Žádost o platbu zrušena" : "Payment request cancelled",
-          message: isCz ? "Zvolte prosím způsob platby znovu." : "Please choose the payment method again.",
-        });
-      }
-    }
-
-    lastPaymentRef.current = { id: mine.id, status: mine.status };
-  }, [payments, push, isCz]);
-
+  // Confirmation / cancellation notices come from the shared guest
+  // notifications hook (GuestFeedProvider); here only the local state resets.
   useEffect(() => {
     if (!availablePointsCzk && useLoyalty) setUseLoyalty(false);
   }, [availablePointsCzk, useLoyalty]);
+
+  // A different (or no) pending payment → forget the local tip choice.
+  useEffect(() => {
+    setPendingTip(null);
+    if (tipTimerRef.current !== null) {
+      window.clearTimeout(tipTimerRef.current);
+      tipTimerRef.current = null;
+    }
+  }, [myPendingPayment?.id]);
 
   const selectedTotalCzk = useMemo(() => {
     if (!openTab) return 0;
@@ -188,13 +176,18 @@ export default function CartPage() {
   }, [openTab, selectedQtyByKey]);
 
   const cashbackAppliedCzk = useLoyalty ? Math.min(availablePointsCzk, selectedTotalCzk) : 0;
-  const finalPayableCzk = Math.max(selectedTotalCzk - cashbackAppliedCzk, 0);
+  const tipCzk = tipCzkFromChoice(tip, selectedTotalCzk);
+  const finalPayableCzk = Math.max(selectedTotalCzk - cashbackAppliedCzk, 0) + tipCzk;
 
   const pendingBillCzk = myPendingPayment?.billTotalCzk ?? 0;
   const pendingCashbackCzk = myPendingPayment?.useLoyalty
     ? Math.min(availablePointsCzk, pendingBillCzk)
     : (myPendingPayment?.loyaltyAppliedCzk ?? 0);
-  const pendingDueCzk = Math.max(pendingBillCzk - pendingCashbackCzk, 0);
+  const pendingTipChoice = pendingTip ?? choiceFromTip(myPendingPayment?.tipCzk ?? 0, pendingBillCzk);
+  const pendingTipCzk = pendingTip
+    ? tipCzkFromChoice(pendingTip, pendingBillCzk)
+    : (myPendingPayment?.tipCzk ?? 0);
+  const pendingDueCzk = Math.max(pendingBillCzk - pendingCashbackCzk, 0) + pendingTipCzk;
 
   const isReady = openTab?.stage.phase === "ready";
   const dueCzk = feed?.totals.dueCzk ?? openTab?.totalCzk ?? 0;
@@ -214,6 +207,8 @@ export default function CartPage() {
     }
 
     setSelectedQtyByKey({});
+    setUseLoyalty(false);
+    setTip(NO_TIP);
     setPayOpen(true);
   };
 
@@ -249,11 +244,14 @@ export default function CartPage() {
     setSubmitting(true);
 
     try {
+      // Our own request — the "bill is ready" notice is for waiter-issued bills.
+      noteOwnPaymentRequest();
       await api("/payments/request", {
         method: "POST",
         body: JSON.stringify({
           method,
           useLoyalty: availablePointsCzk > 0 ? useLoyalty : false,
+          tipCzk,
           items,
         }),
       });
@@ -261,6 +259,7 @@ export default function CartPage() {
 
       setSelectedQtyByKey({});
       setUseLoyalty(false);
+      setTip(NO_TIP);
       push({
         kind: "success",
         title: isCz ? "Žádost odeslána" : "Payment requested",
@@ -299,6 +298,37 @@ export default function CartPage() {
     } finally {
       setChangingMethod(false);
     }
+  };
+
+  const sendTip = async (czk: number) => {
+    setChangingTip(true);
+    try {
+      await api("/payments/tip", { method: "POST", body: JSON.stringify({ tipCzk: czk }) });
+      await refresh();
+    } catch (e: unknown) {
+      setPendingTip(null);
+      push({
+        kind: "error",
+        title: isCz ? "Chyba" : "Error",
+        message: e instanceof Error ? e.message : "Failed",
+      });
+    } finally {
+      setChangingTip(false);
+    }
+  };
+
+  // Segments save at once; a custom amount waits until the guest stops typing.
+  const changePendingTip = (choice: TipChoice) => {
+    setPendingTip(choice);
+    const czk = tipCzkFromChoice(choice, pendingBillCzk);
+    if (tipTimerRef.current !== null) window.clearTimeout(tipTimerRef.current);
+    tipTimerRef.current = window.setTimeout(
+      () => {
+        tipTimerRef.current = null;
+        void sendTip(czk);
+      },
+      choice.mode === "custom" ? 700 : 0
+    );
   };
 
   return (
@@ -484,6 +514,15 @@ export default function CartPage() {
                   </div>
                 ) : null}
 
+                <div className="mt-3 border-t border-sky-400/15 pt-3">
+                  <TipPicker
+                    billCzk={pendingBillCzk}
+                    value={pendingTipChoice}
+                    onChange={changePendingTip}
+                    disabled={changingTip}
+                  />
+                </div>
+
                 <div className="mt-3 flex items-end justify-between border-t border-sky-400/15 pt-3">
                   <div className="text-[11px] uppercase tracking-[0.14em] text-sky-100/60">
                     {isCz ? "K úhradě" : "To pay"}
@@ -542,6 +581,8 @@ export default function CartPage() {
           selectedQtyByKey={selectedQtyByKey}
           selectedTotalCzk={selectedTotalCzk}
           cashbackAppliedCzk={cashbackAppliedCzk}
+          tip={tip}
+          onChangeTip={setTip}
           finalPayableCzk={finalPayableCzk}
           onChangeSelectedQty={(key, qty) => setSelectedQtyByKey((current) => ({ ...current, [key]: qty }))}
         />

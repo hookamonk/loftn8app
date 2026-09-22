@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
 import { markAnonBypassAuthOnce } from "@/lib/guestFlow";
+import { beginGuestPushOptIn, completeGuestPushOptIn } from "@/lib/guestPush";
 import { getVenueName } from "@/lib/venue";
 import { useToast } from "@/providers/toast";
 import { useAuth } from "@/providers/auth";
@@ -118,7 +119,7 @@ const btnGhost =
 
 export default function AuthPage() {
   const router = useRouter();
-  const { isCz, ready } = useI18n();
+  const { isCz, ready, lang } = useI18n();
   const { push } = useToast();
   const { me, loading, setAuthenticated } = useAuth();
   const { restoreSession } = useSession();
@@ -234,6 +235,11 @@ export default function AuthPage() {
     resetErrors();
     setBusy(true);
 
+    // Sign-in completes right here, so the browser's notification prompt is
+    // armed inside this very tap (must precede the first await). Registration
+    // and reset only send a code now; they ask in submitCode instead.
+    const pushOptIn = mode === "login" ? beginGuestPushOptIn() : null;
+
     try {
       if (mode === "login") {
         const result = await api<{ ok: true; user: GuestUser }>("/auth/guest/login-password", {
@@ -241,6 +247,7 @@ export default function AuthPage() {
           body: JSON.stringify({ email: email.trim(), password }),
         });
         await signedIn(result.user, isCz ? "Přihlášeno" : "Signed in");
+        if (pushOptIn) void completeGuestPushOptIn(pushOptIn, lang);
         return;
       }
 
@@ -271,6 +278,9 @@ export default function AuthPage() {
     resetErrors();
     setBusy(true);
 
+    // This tap finishes registration / reset and signs the guest in.
+    const pushOptIn = beginGuestPushOptIn();
+
     try {
       if (mode === "forgot") {
         const result = await api<{ ok: true; user: GuestUser }>("/auth/guest/reset-password", {
@@ -278,6 +288,7 @@ export default function AuthPage() {
           body: JSON.stringify({ email: email.trim(), code: code.trim(), password }),
         });
         await signedIn(result.user, isCz ? "Heslo změněno" : "Password updated");
+        void completeGuestPushOptIn(pushOptIn, lang);
         return;
       }
 
@@ -292,6 +303,7 @@ export default function AuthPage() {
         }),
       });
       await signedIn(result.user, isCz ? "Registrace hotová" : "You're registered");
+      void completeGuestPushOptIn(pushOptIn, lang);
     } catch (error) {
       fail(error);
     } finally {

@@ -174,6 +174,7 @@ accountRouter.get(
           amountCzk: confirmation.amountCzk,
           billTotalCzk: confirmation.billTotalCzk,
           loyaltyAppliedCzk: confirmation.loyaltyAppliedCzk,
+          tipCzk: confirmation.tipCzk,
           cashbackEarnedCzk: confirmation.loyaltyTxn?.cashbackCzk ?? 0,
           closedAt: confirmation.createdAt,
           itemCount,

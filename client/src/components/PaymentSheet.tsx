@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/providers/i18n";
 import { useEscapeToClose } from "@/lib/useModalA11y";
+import { TipPicker, type TipChoice } from "@/components/TipPicker";
 
 function QtyInline({
   qty,
@@ -48,6 +49,8 @@ export function PaymentSheet({
   selectedQtyByKey = {},
   selectedTotalCzk = 0,
   cashbackAppliedCzk = 0,
+  tip,
+  onChangeTip,
   finalPayableCzk = 0,
   onChangeSelectedQty,
 }: {
@@ -69,6 +72,8 @@ export function PaymentSheet({
   selectedQtyByKey?: Record<string, number>;
   selectedTotalCzk?: number;
   cashbackAppliedCzk?: number;
+  tip: TipChoice;
+  onChangeTip: (choice: TipChoice) => void;
   finalPayableCzk?: number;
   onChangeSelectedQty?: (key: string, qty: number) => void;
 }) {
@@ -233,12 +238,17 @@ export function PaymentSheet({
               {useLoyalty && cashbackAppliedCzk > 0 ? (
                 <div className="mt-2 flex items-center justify-between gap-3 text-sm text-gold/90">
                   <span>{isCz ? "Použitý cashback" : "Cashback used"}</span>
-                  <span className="font-semibold">{cashbackAppliedCzk} Kč</span>
+                  <span className="font-semibold">−{cashbackAppliedCzk} Kč</span>
                 </div>
               ) : null}
-              <div className="mt-2 flex items-center justify-between gap-3 text-sm text-white/70">
+
+              <div className="mt-2 border-t border-white/8 pt-2">
+                <TipPicker billCzk={selectedTotalCzk} value={tip} onChange={onChangeTip} />
+              </div>
+
+              <div className="mt-2 flex items-center justify-between gap-3 border-t border-white/8 pt-2 text-sm text-white/70">
                 <span>{isCz ? "K úhradě" : "To pay"}</span>
-                <span className="font-semibold text-white">{finalPayableCzk} Kč</span>
+                <span className="text-base font-semibold text-white">{finalPayableCzk} Kč</span>
               </div>
             </div>
 

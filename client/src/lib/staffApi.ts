@@ -458,6 +458,10 @@ export type StaffActiveTableDetails = {
     billTotalCzk: number;
     useLoyalty: boolean;
     loyaltyAppliedCzk: number;
+    /** Guest's tip on top of the bill. */
+    tipCzk: number;
+    /** What to collect: bill − cashback + tip. */
+    dueCzk: number;
     selectedItems: Array<{
       orderItemId: string;
       menuItemId: number;
@@ -557,6 +561,7 @@ export type AdminSummary = {
   ratingsCount: number;
   paymentsCount: number;
   totalRevenueCzk: number;
+  totalTipsCzk: number;
   avgOverall: number | null;
   avgFood: number | null;
   avgDrinks: number | null;

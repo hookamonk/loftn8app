@@ -69,6 +69,7 @@ async function main() {
     prisma.shift.deleteMany({}),
     prisma.otpCode.deleteMany({}),
     prisma.staffPushSubscription.deleteMany({}),
+    prisma.guestPushSubscription.deleteMany({}),
     prisma.user.deleteMany({}),
   ]);
 

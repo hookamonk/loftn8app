@@ -53,6 +53,7 @@ export type AccountReceipt = {
   amountCzk: number;
   billTotalCzk: number;
   loyaltyAppliedCzk: number;
+  tipCzk: number;
   cashbackEarnedCzk: number;
   closedAt: string;
   itemCount: number;

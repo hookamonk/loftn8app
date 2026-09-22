@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { disableGuestPushOnLogout } from "@/lib/guestPush";
 import { getVenueName, getVenueSlug, resolveVenueSlug, setVenueSlug } from "@/lib/venue";
 import { useAuth } from "@/providers/auth";
 import { useI18n } from "@/providers/i18n";
@@ -305,6 +306,8 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
 
     setSigningOut(true);
     try {
+      // Detach this phone from the account first (needs the account cookie).
+      await disableGuestPushOnLogout();
       await api("/auth/guest/logout", { method: "POST" }).catch(() => {});
       clearSession();
       setVenueSlug(null);
@@ -528,6 +531,12 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
                           <span className="shrink-0">{item.totalCzk} Kč</span>
                         </div>
                       ))}
+                      {receipt.tipCzk > 0 ? (
+                        <div className="flex justify-between gap-3 text-xs text-white/65">
+                          <span>{isCz ? "Spropitné" : "Tip"}</span>
+                          <span className="shrink-0">+{receipt.tipCzk} Kč</span>
+                        </div>
+                      ) : null}
                       {receipt.cashbackEarnedCzk > 0 ? (
                         <div className="mt-1.5 border-t border-white/8 pt-1.5 text-xs text-gold">
                           {isCz ? "Získaný cashback" : "Cashback earned"}: +{receipt.cashbackEarnedCzk} Kč

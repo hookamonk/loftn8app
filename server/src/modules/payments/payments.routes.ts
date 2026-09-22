@@ -11,12 +11,19 @@ import { HttpError } from "../../utils/httpError";
 import { summarizeLoyalty } from "../../utils/loyalty";
 import { latestLegacyPaymentCutoff, paidQtyByOrderItemId } from "./paymentAllocation";
 import { attachSessionToActiveShiftIfNeeded } from "../staff/shiftCache";
+import { emitStaffEvent } from "../staff/staffEvents";
 
 export const paymentsRouter = Router();
+
+// Tip is an absolute amount in CZK chosen by the guest (5 %, 10 % or custom).
+// Upper bound is a sanity cap, not a business rule.
+const TIP_MAX_CZK = 100_000;
+const TipSchema = z.number().int().min(0).max(TIP_MAX_CZK);
 
 const RequestPaymentSchema = z.object({
   method: z.enum(["CARD", "CASH"]),
   useLoyalty: z.boolean().optional(),
+  tipCzk: TipSchema.optional(),
   items: z
     .array(
       z.object({
@@ -198,6 +205,8 @@ paymentsRouter.post(
       throw new HttpError(400, "EMPTY_PAYMENT_SELECTION", "Select at least one item to pay");
     }
 
+    const tipCzk = body.tipCzk ?? 0;
+
     const existing = await prisma.paymentRequest.findFirst({
       where: {
         tableId: session.tableId,
@@ -220,6 +229,7 @@ paymentsRouter.post(
           method: body.method,
           billTotalCzk,
           useLoyalty: canUseLoyalty,
+          tipCzk,
           itemsJson: selection,
         },
       });
@@ -240,6 +250,7 @@ paymentsRouter.post(
         method: body.method,
         billTotalCzk,
         useLoyalty: canUseLoyalty,
+        tipCzk,
         itemsJson: selection,
       },
     });
@@ -292,6 +303,48 @@ paymentsRouter.post(
     void notifyPaymentMethodChanged(updated.id).catch((e) => {
       console.warn("push notifyPaymentMethodChanged failed", e);
     });
+
+    res.json({ ok: true, payment: updated });
+  })
+);
+
+// Guest changes the tip on their own PENDING payment (e.g. the bill was issued
+// by the waiter, or they changed their mind). Staff see the new total at once.
+const ChangeTipSchema = z.object({ tipCzk: TipSchema });
+
+paymentsRouter.post(
+  "/tip",
+  guestSessionAuth,
+  requireUser,
+  validate(ChangeTipSchema),
+  asyncHandler(async (req, res) => {
+    const session = req.guestSession!;
+    const { tipCzk } = req.body as z.infer<typeof ChangeTipSchema>;
+    const attachedSession = await attachSessionToActiveShiftIfNeeded(session.id);
+
+    const existing = await prisma.paymentRequest.findFirst({
+      where: {
+        sessionId: session.id,
+        tableId: session.tableId,
+        table: { venueId: session.table.venueId },
+        status: "PENDING",
+        ...(attachedSession.shiftId ? { session: { shiftId: attachedSession.shiftId } } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!existing) {
+      throw new HttpError(404, "NO_PENDING_PAYMENT", "No pending payment to update");
+    }
+
+    const updated = await prisma.paymentRequest.update({
+      where: { id: existing.id },
+      data: { tipCzk },
+    });
+
+    emitGuestEvent(session.tableId, "payment-tip-changed");
+    // Silent refresh for the staff table screen — no push, no beep.
+    emitStaffEvent(session.table.venueId, { kind: "DATA_CHANGED" });
 
     res.json({ ok: true, payment: updated });
   })

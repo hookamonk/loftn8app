@@ -6,7 +6,9 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { useGuestEvents } from "@/lib/useGuestEvents";
 import { useSession } from "@/providers/session";
-import type { ToastKind } from "@/providers/toast";
+import { useToast, type ToastKind } from "@/providers/toast";
+import { useI18n } from "@/providers/i18n";
+import { useGuestNotifications } from "@/lib/guestNotifications";
 
 type FeedTone = ToastKind;
 
@@ -57,6 +59,7 @@ export type GuestFeedPayment = {
   billTotalCzk: number | null;
   amountCzk: number | null;
   loyaltyAppliedCzk: number;
+  tipCzk: number;
   items: Array<{
     orderItemId: string;
     menuItemId: number;
@@ -87,6 +90,7 @@ export type GuestFeedHistory = {
   method: "CARD" | "CASH";
   methodLabel: string;
   amountCzk: number;
+  tipCzk: number;
   closedAt: string;
   orderCount: number;
   itemCount: number;
@@ -147,6 +151,8 @@ function isGuestSurface(pathname: string) {
 export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { sessionReady, clearSession } = useSession();
+  const { push } = useToast();
+  const { isCz } = useI18n();
   const [feed, setFeed] = useState<GuestFeed | null>(null);
   const [loading, setLoading] = useState(false);
   const inFlightRef = useRef<Promise<void> | null>(null);
@@ -266,6 +272,12 @@ export function GuestFeedProvider({ children }: { children: React.ReactNode }) {
 
     void refresh();
   }, [enabled]);
+
+  // In-app notices the moment staff act: waiter on the way, order ready,
+  // payment confirmed… Shown a bit longer than a regular toast.
+  useGuestNotifications(feed, isCz, (notice) => {
+    push({ kind: notice.kind, title: notice.title, message: notice.message }, 5000);
+  });
 
   const value = useMemo(() => ({ feed, loading, refresh }), [feed, loading]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

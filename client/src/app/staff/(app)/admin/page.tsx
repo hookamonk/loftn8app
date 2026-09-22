@@ -145,7 +145,15 @@ export default function StaffAdminStatsPage() {
               value={String(data.usersCount)}
               hint="зарегистрированных гостей"
             />
-            <StatCard title="Выручка" value={money(data.totalRevenueCzk)} hint={`оплат: ${data.paymentsCount}`} />
+            <StatCard
+              title="Выручка"
+              value={money(data.totalRevenueCzk)}
+              hint={
+                data.totalTipsCzk > 0
+                  ? `оплат: ${data.paymentsCount} · чаевые: ${money(data.totalTipsCzk)}`
+                  : `оплат: ${data.paymentsCount}`
+              }
+            />
             <StatCard
               title="Средняя оценка"
               value={rating(data.avgOverall)}

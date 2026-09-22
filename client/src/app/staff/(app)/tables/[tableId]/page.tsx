@@ -206,12 +206,30 @@ export default function StaffTableDetailsPage() {
           <div className="text-sm font-semibold text-sky-100">
             Гость ждёт оплату · {pending.method === "CARD" ? "Карта" : "Наличные"}
           </div>
-          <div className="mt-1 text-2xl font-bold text-white">{pending.billTotalCzk} Kč</div>
-          {pending.loyaltyAppliedCzk > 0 ? (
-            <div className="mt-1 text-xs text-sky-100/80">
-              Списывается кэшбэк: {pending.loyaltyAppliedCzk} Kč
+
+          <div className="mt-2 space-y-1 text-sm text-sky-100/80">
+            <div className="flex justify-between gap-3">
+              <span>Счёт</span>
+              <span>{pending.billTotalCzk} Kč</span>
             </div>
-          ) : null}
+            {pending.loyaltyAppliedCzk > 0 ? (
+              <div className="flex justify-between gap-3">
+                <span>Кэшбэк</span>
+                <span>−{pending.loyaltyAppliedCzk} Kč</span>
+              </div>
+            ) : null}
+            {pending.tipCzk > 0 ? (
+              <div className="flex justify-between gap-3">
+                <span>Чаевые</span>
+                <span>+{pending.tipCzk} Kč</span>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-2 flex items-end justify-between gap-3 border-t border-sky-400/15 pt-2">
+            <span className="text-[11px] uppercase tracking-[0.14em] text-sky-100/60">К получению</span>
+            <span className="text-2xl font-bold text-white">{pending.dueCzk} Kč</span>
+          </div>
 
           <button className={`${btnAccent} mt-4`} disabled={busy} onClick={() => void confirm()}>
             {busy ? "Сохраняем…" : "Подтвердить оплату"}

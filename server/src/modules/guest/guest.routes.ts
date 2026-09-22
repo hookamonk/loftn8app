@@ -25,8 +25,12 @@ import {
 } from "../../config/venues";
 import { branchTables, normalizeTableSlugInput } from "../../config/tables";
 import { addGuestClient } from "./guestEvents";
+import { guestPushRouter } from "./guestPush.routes";
 
 export const guestRouter = Router();
+
+// Web-push subscriptions of registered guests (order / call / payment updates).
+guestRouter.use("/push", guestPushRouter);
 
 // Realtime channel (Server-Sent Events) for the guest. While the cart/call
 // screen is open it keeps this connection and gets "refresh now" pings the
@@ -760,6 +764,7 @@ guestRouter.get(
           confirmedAt: true,
           billTotalCzk: true,
           loyaltyAppliedCzk: true,
+          tipCzk: true,
           itemsJson: true,
           session: {
             select: {
@@ -768,7 +773,7 @@ guestRouter.get(
             },
           },
           confirmation: {
-            select: { amountCzk: true, billTotalCzk: true, loyaltyAppliedCzk: true, itemsJson: true, createdAt: true },
+            select: { amountCzk: true, billTotalCzk: true, loyaltyAppliedCzk: true, tipCzk: true, itemsJson: true, createdAt: true },
           },
         },
       }),
@@ -910,6 +915,7 @@ guestRouter.get(
           method: payment.method,
           methodLabel: paymentMethodLabel(payment.method),
           amountCzk: payment.confirmation?.amountCzk ?? payment.billTotalCzk ?? 0,
+          tipCzk: payment.confirmation?.tipCzk ?? payment.tipCzk ?? 0,
           closedAt,
           orderCount: 1,
           itemCount: Array.from(itemMap.values()).reduce((sum, item) => sum + item.qty, 0),
@@ -967,6 +973,7 @@ guestRouter.get(
           billTotalCzk: null,
           amountCzk: null,
           loyaltyAppliedCzk: 0,
+          tipCzk: 0,
           items: [],
           statusTitle: view.title,
           statusDescription: view.description,
@@ -987,6 +994,7 @@ guestRouter.get(
         billTotalCzk: payment.confirmation?.billTotalCzk ?? payment.billTotalCzk ?? null,
         amountCzk,
         loyaltyAppliedCzk: payment.confirmation?.loyaltyAppliedCzk ?? (payment as any).loyaltyAppliedCzk ?? 0,
+        tipCzk: payment.confirmation?.tipCzk ?? (payment as any).tipCzk ?? 0,
         items: parsePaymentItemsJson(payment.confirmation?.itemsJson ?? payment.itemsJson),
         statusTitle: view.title,
         statusDescription: view.description,

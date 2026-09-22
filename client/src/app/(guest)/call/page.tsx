@@ -1,26 +1,50 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { getVenueName } from "@/lib/venue";
+import { beginGuestPushOptIn, completeGuestPushOptIn } from "@/lib/guestPush";
 import { useToast } from "@/providers/toast";
 import { RequireTable } from "@/components/RequireTable";
 import { useAuth } from "@/providers/auth";
-import { useGuestFeed } from "@/providers/guestFeed";
+import { useGuestFeed, type GuestFeedCall } from "@/providers/guestFeed";
 import { useI18n } from "@/providers/i18n";
 
 /**
  * Two taps, two outcomes: get a waiter, or get the hookah master. Plus a free
  * text message when neither fits. Every card shows the live state of its own
  * request, so the guest never wonders whether it went through.
+ *
+ * Staff handle hookah calls and messages in ONE tap («Принять» → DONE), so for
+ * the guest "accepted" means "being handled right now". That state is shown
+ * for a while after acceptance and then quietly disappears.
  */
 
-type CallStatus = "NEW" | "ACKED" | "DONE";
+type ServiceKind = "waiter" | "hookah" | "message";
 
-function statusText(status: CallStatus | undefined, isCz: boolean) {
-  if (status === "NEW") return isCz ? "Odesláno" : "Sent";
-  if (status === "ACKED") return isCz ? "Na cestě" : "On the way";
-  return undefined;
+// How long "accepted / on the way" stays visible after staff took the request.
+const ACCEPTED_VISIBLE_MS = 15 * 60 * 1000;
+
+function isAcceptedRecently(call: GuestFeedCall, now: number) {
+  if (call.status === "ACKED") return true;
+  if (call.status !== "DONE") return false;
+  return now - new Date(call.updatedAt).getTime() < ACCEPTED_VISIBLE_MS;
+}
+
+function serviceStatus(
+  call: GuestFeedCall | undefined,
+  kind: ServiceKind,
+  now: number,
+  isCz: boolean
+): string | undefined {
+  if (!call) return undefined;
+
+  if (call.status === "NEW") return isCz ? "Odesláno" : "Sent";
+
+  if (!isAcceptedRecently(call, now)) return undefined;
+
+  if (kind === "message") return isCz ? "Váš požadavek se zpracovává" : "Your request is being handled";
+  return isCz ? "Na cestě" : "On the way";
 }
 
 function Icon({ name }: { name: "user" | "zap" }) {
@@ -47,6 +71,15 @@ function Icon({ name }: { name: "user" | "zap" }) {
     <svg {...common} viewBox="0 0 24 24" aria-hidden="true">
       <path d="M13 2 3 14h8l-1 8 11-14h-8l0-6Z" />
     </svg>
+  );
+}
+
+function StatusLine({ status }: { status: string }) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs font-medium text-gold">
+      <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-gold" />
+      <span className="truncate">{status}</span>
+    </div>
   );
 }
 
@@ -77,9 +110,8 @@ function ActionCard({
           <div className="text-sm font-semibold text-white">{title}</div>
           <div className="mt-1 text-xs text-white/60">{subtitle}</div>
           {status ? (
-            <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-gold">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-gold" />
-              {status}
+            <div className="mt-2">
+              <StatusLine status={status} />
             </div>
           ) : null}
         </div>
@@ -92,7 +124,7 @@ function ActionCard({
 }
 
 export default function CallPage() {
-  const { isCz, ready } = useI18n();
+  const { isCz, ready, lang } = useI18n();
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const { me, loading } = useAuth();
   const { feed, refresh } = useGuestFeed();
@@ -101,10 +133,28 @@ export default function CallPage() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Ticks so "accepted" states expire on time even between feed refreshes.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const calls = feed?.calls ?? [];
+
+  // The waiter request is closed by staff only when the order is punched in,
+  // so its card stays locked until then.
   const waiter = calls.find((call) => call.type === "WAITER" && call.status !== "DONE");
-  const hookah = calls.find((call) => call.type === "HOOKAH" && call.status !== "DONE");
-  const message = calls.find((call) => call.type === "HELP");
+
+  // Hookah / message: the button is locked only while the request is still
+  // open; the status keeps showing for a while after staff accepted it.
+  const hookahOpen = calls.find((call) => call.type === "HOOKAH" && call.status !== "DONE");
+  const hookahLatest = calls.find((call) => call.type === "HOOKAH");
+  const messageLatest = calls.find((call) => call.type === "HELP");
+
+  const waiterStatus = serviceStatus(waiter, "waiter", now, isCz);
+  const hookahStatus = serviceStatus(hookahLatest, "hookah", now, isCz);
+  const messageStatus = serviceStatus(messageLatest, "message", now, isCz);
 
   const isRegistered = Boolean(me?.authenticated);
 
@@ -123,6 +173,10 @@ export default function CallPage() {
       return;
     }
 
+    // First relevant tap: let the browser ask for notification permission so
+    // "on the way" / "order ready" reach the lock screen. Asked once per device.
+    const pushOptIn = beginGuestPushOptIn();
+
     setBusy(true);
     try {
       await api("/calls", {
@@ -138,6 +192,7 @@ export default function CallPage() {
       });
 
       if (type === "HELP") setMsg("");
+      void completeGuestPushOptIn(pushOptIn, lang);
     } catch (e: unknown) {
       push({
         kind: "error",
@@ -170,16 +225,16 @@ export default function CallPage() {
             disabled={busy || Boolean(waiter)}
             title={isCz ? "Zavolat číšníka" : "Call the waiter"}
             subtitle={isCz ? "Přijde přijmout objednávku" : "They'll come to take your order"}
-            status={statusText(waiter?.status, isCz)}
+            status={waiterStatus}
             icon={<Icon name="user" />}
             onClick={() => void send("WAITER")}
           />
 
           <ActionCard
-            disabled={busy || Boolean(hookah)}
+            disabled={busy || Boolean(hookahOpen)}
             title={isCz ? "Servis vodní dýmky" : "Hookah service"}
             subtitle={isCz ? "Přijde kalianér" : "The hookah master will come"}
-            status={statusText(hookah?.status, isCz)}
+            status={hookahStatus}
             icon={<Icon name="zap" />}
             onClick={() => void send("HOOKAH")}
           />
@@ -211,10 +266,12 @@ export default function CallPage() {
             {isCz ? "Odeslat" : "Send"}
           </button>
 
-          {message && message.status !== "DONE" ? (
-            <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-xs leading-5 text-white/70">
-              <div className="font-medium text-white">{message.statusTitle}</div>
-              <div className="mt-1">{message.statusDescription}</div>
+          {messageLatest && messageStatus ? (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+              <div className="min-w-0 truncate text-xs text-white/60">{messageLatest.message}</div>
+              <div className="shrink-0">
+                <StatusLine status={messageStatus} />
+              </div>
             </div>
           ) : null}
         </div>

@@ -1,16 +1,24 @@
 import type { ApiResult } from "@/lib/staffApi";
 import { primeAlerts } from "@/lib/staffAlerts";
 import { getStaffVenueSlug } from "@/lib/venue";
+import {
+  SW_URL,
+  detectPlatform,
+  ensureServiceWorker,
+  hasPushApi,
+  isAppleMobile,
+  isIosThirdPartyBrowser,
+  isStandaloneMode,
+  urlBase64ToUint8Array,
+  type PushPlatform,
+} from "@/lib/pushPlatform";
+
+// Platform helpers live in pushPlatform.ts (shared with the guest flow); they
+// are re-exported here so existing staff imports keep working unchanged.
+export type { PushPlatform };
+export { detectPlatform, ensureServiceWorker, isAppleMobile, isIosThirdPartyBrowser, isStandaloneMode };
 
 const API_BASE = "/api";
-const SW_URL = "/sw.js";
-
-/**
- * Where the staff member is running the dashboard. Web push support differs a
- * lot per platform, and the difference is NOT something a library can paper
- * over — so we detect it explicitly and guide the user instead of failing.
- */
-export type PushPlatform = "android" | "ios" | "desktop" | "unknown";
 
 export type PushState =
   /** Browser has no Push API at all (very old browser, or iOS < 16.4). */
@@ -25,44 +33,6 @@ export type PushState =
   | { status: "off"; platform: PushPlatform }
   /** Fully working. */
   | { status: "on"; platform: PushPlatform };
-
-function ua() {
-  return typeof navigator === "undefined" ? "" : navigator.userAgent || "";
-}
-
-export function isAppleMobile() {
-  if (typeof navigator === "undefined") return false;
-
-  const agent = ua();
-  // iPadOS 13+ reports itself as a Mac — the touch-point count gives it away.
-  const touchMac = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
-  return /iPhone|iPad|iPod/i.test(agent) || touchMac;
-}
-
-/**
- * On iOS every browser (Chrome, Firefox, Edge, Opera…) is Safari underneath,
- * but only real Safari can "Add to Home Screen". Detect the third-party skins
- * so we can tell the user to reopen the page in Safari.
- */
-export function isIosThirdPartyBrowser() {
-  if (!isAppleMobile()) return false;
-  return /CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|DuckDuckGo/i.test(ua());
-}
-
-export function isStandaloneMode() {
-  if (typeof window === "undefined") return false;
-  return (
-    window.matchMedia?.("(display-mode: standalone)")?.matches === true ||
-    (window.navigator as Navigator & { standalone?: boolean }).standalone === true
-  );
-}
-
-export function detectPlatform(): PushPlatform {
-  if (isAppleMobile()) return "ios";
-  if (/Android/i.test(ua())) return "android";
-  if (typeof window !== "undefined" && window.matchMedia?.("(pointer: fine)")?.matches) return "desktop";
-  return "unknown";
-}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   const venueSlug = typeof window !== "undefined" ? getStaffVenueSlug() : undefined;
@@ -97,15 +67,6 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiResult<
   }
 }
 
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(base64);
-  const output = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
-  return output;
-}
-
 let cachedVapidKey: string | null = null;
 
 export async function getVapidKey(): Promise<ApiResult<{ publicKey: string }>> {
@@ -123,30 +84,6 @@ export async function subscribePush(sub: PushSubscription): Promise<ApiResult<{ 
     method: "POST",
     body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
   });
-}
-
-function hasPushApi() {
-  return (
-    typeof window !== "undefined" &&
-    "Notification" in window &&
-    "serviceWorker" in navigator &&
-    "PushManager" in window
-  );
-}
-
-/** Register (or reuse) the service worker. Safe to call repeatedly. */
-export async function ensureServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return null;
-
-  try {
-    const existing = await navigator.serviceWorker.getRegistration(SW_URL);
-    const reg = existing ?? (await navigator.serviceWorker.register(SW_URL, { scope: "/" }));
-    await reg.update().catch(() => {});
-    await navigator.serviceWorker.ready;
-    return reg;
-  } catch {
-    return null;
-  }
 }
 
 /**
