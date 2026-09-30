@@ -18,13 +18,6 @@ function numericTables(from: number, to: number): BranchTable[] {
 	return items;
 }
 
-function composite(displayName: string): BranchTable {
-	return {
-		displayName,
-		slug: displayName.replace(/\./g, "-").toLowerCase(),
-	};
-}
-
 function vip(index: number, legacy = false): BranchTable {
 	return {
 		displayName: `VIP ${index}`,
@@ -43,36 +36,7 @@ function bar(index: number): BranchTable {
 const BRANCH_TABLES: Record<string, BranchTable[]> = {
 	zizkov: [...numericTables(1, 17), vip(1, true)],
 	nekazanka: [...numericTables(1, 24), bar(1), bar(2), bar(3)],
-	garden: [
-		...numericTables(1, 25),
-		composite("2.1"),
-		composite("2.2"),
-		composite("4.1"),
-		composite("4.2"),
-		composite("6.1"),
-		composite("6.2"),
-		composite("7.1"),
-		composite("7.2"),
-		composite("9.1"),
-		composite("9.2"),
-		composite("11.1"),
-		composite("11.2"),
-		composite("12.1"),
-		composite("12.2"),
-		composite("14.1"),
-		composite("14.2"),
-		composite("14.3"),
-		composite("15.1"),
-		composite("15.2"),
-		composite("16.1"),
-		composite("16.2"),
-		composite("17.1"),
-		composite("17.2"),
-		vip(1),
-		vip(2),
-		vip(3),
-		vip(4),
-	],
+	garden: [...numericTables(1, 35), vip(1), vip(2), vip(3), vip(4)],
 };
 
 export function branchTables(rawVenueSlug?: string | null): BranchTable[] {
