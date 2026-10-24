@@ -57,6 +57,35 @@ export function StaffSessionProvider({ children }: { children: React.ReactNode }
     setStaff(null);
   }, [setStaff]);
 
+  // One browser holds one staff login (the session cookie is shared by every
+  // tab). When another tab signs in to a different account or signs out, this
+  // tab reloads, so a screen titled «Кухня» can never show another account's
+  // orders.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== KEY) return;
+      let nextId: string | null = null;
+      try {
+        nextId = event.newValue ? (JSON.parse(event.newValue) as StaffSession).id : null;
+      } catch {
+        nextId = null;
+      }
+      let currentId: string | null = null;
+      try {
+        const raw = event.oldValue;
+        currentId = raw ? (JSON.parse(raw) as StaffSession).id : null;
+      } catch {
+        currentId = null;
+      }
+      if (nextId !== currentId) window.location.reload();
+    };
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 

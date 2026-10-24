@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import { disableGuestPushOnLogout } from "@/lib/guestPush";
 import { getVenueName, getVenueSlug, resolveVenueSlug, setVenueSlug } from "@/lib/venue";
 import { useAuth } from "@/providers/auth";
@@ -192,7 +192,7 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
           push({
             kind: "error",
             title: isCz ? "Chyba" : "Error",
-            message: humanError(error instanceof Error ? error.message : "", isCz),
+            message: humanError(errorText(error), isCz),
           });
         }
       } finally {
@@ -261,7 +261,7 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
       push({
         kind: "error",
         title: isCz ? "Chyba" : "Error",
-        message: humanError(error instanceof Error ? error.message : "", isCz),
+        message: humanError(errorText(error), isCz),
       });
     } finally {
       setSavingProfile(false);
@@ -287,7 +287,7 @@ export function GuestAccount({ blockSignOut }: { blockSignOut?: { blocked: boole
       push({
         kind: "error",
         title: isCz ? "Chyba" : "Error",
-        message: humanError(error instanceof Error ? error.message : "", isCz),
+        message: humanError(errorText(error), isCz),
       });
     } finally {
       setSavingPassword(false);

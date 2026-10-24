@@ -13,12 +13,13 @@ import { rateLimit } from "../../middleware/rateLimit";
 
 export const staffAuthRouter = Router();
 
-// Everyone at a venue shares its Wi-Fi address, and a shift starts with a
-// dozen logins at once — so the address gets a generous ceiling, while
-// password guessing is stopped per account (failed attempts only, below).
+// Everyone at a venue shares its Wi-Fi address (and every request reaches us
+// through the site's proxy), and a shift starts with a dozen logins at once —
+// so the address gets a generous ceiling, while password guessing is stopped
+// per account (failed attempts only, below).
 const staffLoginLimiter = rateLimit({
   windowMs: 15 * 60_000,
-  max: 120,
+  max: 600,
   keyPrefix: "staff-login",
   message: "Слишком много попыток входа. Подождите 15 минут.",
 });

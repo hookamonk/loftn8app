@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  joinShift,
   listCalls,
   listTickets,
   moveTicket,
@@ -110,6 +111,9 @@ export default function StaffStationPage() {
     // Any tap re-arms sound (iOS suspends it after the app was in background).
     const prime = () => void armAudio().then(() => setSoundOn(isAudioArmed()));
     window.addEventListener("pointerdown", prime);
+    // Try right away too: where the browser allows sound without a tap (an
+    // installed app, a site used every day) the banner never shows up.
+    prime();
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("pointerdown", prime);
@@ -117,6 +121,9 @@ export default function StaffStationPage() {
   }, []);
 
   const answersCalls = staff?.role === "HOOKAH_ZONE";
+  // The station joins the open shift by itself, so the manager sees the
+  // kitchen / bar / hookah-zone iPads in «В смене».
+  const joinedRef = useRef(false);
 
   const load = useCallback(async () => {
     const [result, callsResult] = await Promise.all([
@@ -128,6 +135,7 @@ export default function StaffStationPage() {
 
     if (!result.ok) {
       if (result.status === 409) {
+        joinedRef.current = false;
         setNoShift(true);
         setTickets([]);
         setErr(null);
@@ -141,6 +149,13 @@ export default function StaffStationPage() {
     setNoShift(false);
     setErr(null);
     setTickets(result.data.tickets);
+
+    if (!joinedRef.current) {
+      joinedRef.current = true;
+      void joinShift().then((r) => {
+        if (!r.ok) joinedRef.current = false;
+      });
+    }
   }, [answersCalls]);
 
   const { tick } = usePolling(() => load(), {
@@ -226,7 +241,7 @@ export default function StaffStationPage() {
             onClick={() => void armAudio().then(() => setSoundOn(isAudioArmed()))}
             className="mt-3 h-12 w-full rounded-xl bg-amber-400 text-base font-semibold text-black"
           >
-            Звук выключен — нажмите, чтобы включить
+            Коснитесь экрана, чтобы включить звук
           </button>
         ) : null}
 

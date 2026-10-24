@@ -50,6 +50,15 @@ const EnvSchema = z.object({
 	// manager) every this many minutes until someone taps «Принять».
 	TICKET_REMINDER_MINUTES: z.coerce.number().positive().default(2),
 
+	// "Sign in with Google": the OAuth Web client ID from Google Cloud Console.
+	// "Sign in with Apple": the Services ID from the Apple Developer account.
+	// Each button appears in the guest app only when its ID is set.
+	GOOGLE_CLIENT_ID: z.string().trim().optional().or(z.literal("")),
+	APPLE_CLIENT_ID: z.string().trim().optional().or(z.literal("")),
+	// Key sets the sign-in tokens are checked against. Only overridden in tests.
+	GOOGLE_JWKS_URL: z.string().url().default("https://www.googleapis.com/oauth2/v3/certs"),
+	APPLE_JWKS_URL: z.string().url().default("https://appleid.apple.com/auth/keys"),
+
 	//Web Push
 	VAPID_SUBJECT: z.string().optional(),
 	VAPID_PUBLIC_KEY: z.string().optional(),

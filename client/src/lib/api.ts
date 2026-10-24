@@ -8,6 +8,30 @@ type FetchOptions = Omit<RequestInit, "headers"> & {
 };
 
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
+/**
+ * A failed API call. `message` is the server's text (screens that only show it
+ * keep working); `code` is the stable error code ("PASSWORD_INVALID", …) that
+ * screens translate into the guest's language.
+ */
+export class ApiError extends Error {
+  code: string | null;
+  status: number;
+
+  constructor(message: string, code: string | null, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/** "CODE message" — what the screens' error translators look the code up in. */
+export function errorText(error: unknown) {
+  if (error instanceof ApiError) return `${error.code ?? ""} ${error.message}`.trim();
+  return error instanceof Error ? error.message : "";
+}
+
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
 function retryDelay(attempt: number) {
@@ -99,17 +123,16 @@ async function performRequest<T>(
       const data = contentType.includes("application/json") ? await res.json() : await res.text();
 
       if (!res.ok) {
-        const msg =
-          typeof data === "object" && data && "message" in data
-            ? String((data as any).message)
-            : `HTTP ${res.status}`;
+        const body = typeof data === "object" && data ? (data as { message?: unknown; error?: unknown }) : null;
+        const msg = body && "message" in body ? String(body.message) : `HTTP ${res.status}`;
+        const code = body && typeof body.error === "string" ? body.error : null;
 
         if (attempt < maxAttempts && RETRYABLE_STATUS.has(res.status)) {
           await sleep(retryDelay(attempt));
           continue;
         }
 
-        throw new Error(msg);
+        throw new ApiError(msg, code, res.status);
       }
 
       return data as T;

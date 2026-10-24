@@ -60,7 +60,7 @@ type VenueScope = {
  * Unlike the role dashboards, admin reads are NOT locked to the staff member's
  * own venue — the picker drives the scope.
  */
-async function resolveVenueScope(raw: unknown): Promise<VenueScope> {
+export async function resolveVenueScope(raw: unknown): Promise<VenueScope> {
   const value = String(raw ?? "all").trim().toLowerCase();
 
   if (!value || value === "all") {

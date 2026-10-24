@@ -104,6 +104,9 @@ const testSendLimiter = rateLimit({
   max: 5,
   keyPrefix: "push-test",
   message: "Слишком часто. Подождите минуту и попробуйте снова.",
+  // Per staff account — by address, all phones behind the site's proxy would
+  // share five tests a minute.
+  key: (req) => req.staff?.staffId ?? "",
 });
 
 const testSendHandler = asyncHandler(async (req, res) => {

@@ -580,6 +580,93 @@ export async function cancelPayment(id: string): Promise<ApiResult<any>> {
   );
 }
 
+// SHIFT REPORTS (manager: own venue, admin: all)
+type MethodTotals = { count: number; amountCzk: number; tipCzk: number; totalCzk: number };
+
+export type ShiftReport = {
+  shift: {
+    id: string;
+    status: "OPEN" | "CLOSED";
+    venueSlug: string;
+    venueName: string;
+    venueShortName: string;
+    openedAt: string;
+    closedAt: string | null;
+    openedBy: string | null;
+    closedBy: string | null;
+  };
+  money: {
+    payments: number;
+    card: MethodTotals;
+    cash: MethodTotals;
+    revenueCzk: number;
+    tipsCzk: number;
+    totalCollectedCzk: number;
+    billTotalCzk: number;
+    cashbackCzk: number;
+  };
+  orders: {
+    count: number;
+    tickets: number;
+    itemsQty: number;
+    orderedCzk: number;
+    unpaidCzk: number;
+    unpaidTables: Array<{ table: string; totalCzk: number }>;
+    stations: Array<{
+      station: MenuSection;
+      itemsQty: number;
+      totalCzk: number;
+      tickets: number;
+      avgAcceptSec: number | null;
+      avgReadySec: number | null;
+      avgServedSec: number | null;
+      notFinished: number;
+    }>;
+  };
+  items: Array<{ menuItemId: number; name: string; station: MenuSection; qty: number; totalCzk: number }>;
+  cancellations: {
+    count: number;
+    totalCzk: number;
+    list: Array<{ id: string; at: string; table: string; name: string; qty: number; totalCzk: number; reason: string | null; by: string }>;
+  };
+  payments: Array<{
+    id: string;
+    at: string;
+    table: string | null;
+    method: PaymentMethod;
+    billTotalCzk: number;
+    cashbackCzk: number;
+    amountCzk: number;
+    tipCzk: number;
+    by: string;
+    guest: string | null;
+  }>;
+};
+
+export type ShiftSummaryRow = {
+  id: string;
+  status: "OPEN" | "CLOSED";
+  venueShortName: string;
+  openedAt: string;
+  closedAt: string | null;
+  cardCzk: number;
+  cashCzk: number;
+  totalCzk: number;
+};
+
+export async function listShiftReports(venue?: AdminVenueScope): Promise<ApiResult<{ shifts: ShiftSummaryRow[] }>> {
+  return tryPaths<{ ok: true; shifts: ShiftSummaryRow[] }>(
+    [withQuery("/staff/reports/shifts", { venue: venue && venue !== "all" ? venue : undefined })],
+    { method: "GET" }
+  ).then((r) => (r.ok ? { ok: true, data: { shifts: r.data.shifts } } : r));
+}
+
+export async function getShiftReport(id: string): Promise<ApiResult<{ report: ShiftReport }>> {
+  return tryPaths<{ ok: true; report: ShiftReport }>([`/staff/reports/shifts/${id}`], { method: "GET" }).then((r) =>
+    r.ok ? { ok: true, data: { report: r.data.report } } : r
+  );
+}
+
 // ADMIN
 export type AdminVenueStat = {
   venueId: number;

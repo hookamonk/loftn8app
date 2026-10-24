@@ -1,19 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   getCurrentShift,
+  getShiftReport,
+  listShiftReports,
   openShift,
   joinShift,
   closeShift,
   type ActiveShift,
+  type ShiftSummaryRow,
 } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffSession } from "@/providers/staffSession";
 import { useToast } from "@/providers/toast";
 import { NotificationSetup } from "@/components/staff/NotificationSetup";
 import { roleLabel } from "@/lib/staffRoles";
+import { money } from "@/lib/shiftReportFormat";
+import { ShiftReportList } from "@/components/staff/ShiftReportList";
 
 const card =
   "rounded-3xl border border-white/10 bg-white/[0.05] p-3.5";
@@ -23,8 +29,10 @@ const btnGhost =
   "h-11 w-full rounded-xl border border-white/10 bg-transparent text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50";
 
 export default function StaffShiftPage() {
+  const router = useRouter();
   const { staff } = useStaffSession();
   const { push } = useToast();
+  const [reports, setReports] = useState<ShiftSummaryRow[] | null>(null);
 
   const [shift, setShift] = useState<ActiveShift | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -52,6 +60,48 @@ export default function StaffShiftPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  // The manager's shift reports (the open shift on top, live).
+  const loadReports = useCallback(async () => {
+    const r = await listShiftReports();
+    if (r.ok) setReports(r.data.shifts.slice(0, 10));
+  }, []);
+
+  useEffect(() => {
+    if (isManager) void loadReports();
+  }, [isManager, loadReports, shift?.id]);
+
+  // Closing: show what the app collected and what is still unpaid in it, then
+  // close and go straight to the report for the Septim reconciliation.
+  const closeWithReport = async () => {
+    if (!shift) return;
+    setBusy(true);
+    setErr(null);
+    const preview = await getShiftReport(shift.id);
+    setBusy(false);
+
+    const lines = ["Закрыть смену? Все столы будут отключены."];
+    if (preview.ok) {
+      const { money: m, orders } = preview.data.report;
+      lines.push(
+        "",
+        `Карта: ${money(m.card.totalCzk)}`,
+        `Наличные: ${money(m.cash.totalCzk)}`,
+        `Не оплачено в приложении: ${money(orders.unpaidCzk)}${orders.unpaidTables.length ? ` (столов: ${orders.unpaidTables.length})` : ""}`
+      );
+    }
+    if (!window.confirm(lines.join("\n"))) return;
+
+    setBusy(true);
+    const r = await closeShift();
+    setBusy(false);
+    if (!r.ok) {
+      setErr(r.error || "Не удалось закрыть смену");
+      return;
+    }
+    push({ kind: "success", title: "Смена закрыта" });
+    router.push(`/staff/reports/${r.data.shiftId}`);
+  };
 
   type ShiftAction = () => Promise<{ ok: true } | { ok: false; error: string }>;
 
@@ -132,14 +182,7 @@ export default function StaffShiftPage() {
           ) : null}
 
           {shift && isManager ? (
-            <button
-              className={btnGhost}
-              disabled={busy}
-              onClick={() => {
-                if (!confirm("Закрыть смену? Все столы будут отключены.")) return;
-                void run(closeShift, "Смена закрыта");
-              }}
-            >
+            <button className={btnGhost} disabled={busy} onClick={() => void closeWithReport()}>
               Закрыть смену
             </button>
           ) : null}
@@ -167,6 +210,15 @@ export default function StaffShiftPage() {
           </div>
         ) : null}
       </div>
+
+      {isManager ? (
+        <div className={card}>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">Статистика смен</div>
+          <div className="mt-1">
+            {reports ? <ShiftReportList shifts={reports} /> : <div className="text-sm text-white/50">Загрузка…</div>}
+          </div>
+        </div>
+      ) : null}
 
       <NotificationSetup />
     </div>

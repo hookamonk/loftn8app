@@ -69,6 +69,8 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   const isAdmin = staff?.role === "ADMIN";
   const isManager = staff?.role === "MANAGER";
   const isAdminPage = pathname.startsWith("/staff/admin");
+  // A shift report opened from the manager's or the admin's list.
+  const isReportPage = pathname.startsWith("/staff/reports");
   // Poll the summary on every non-admin screen so the nav badges are always
   // live — SSE ticks are no-ops when polling is disabled.
   const shouldPollSummary = !isAdmin;
@@ -135,6 +137,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   const nav: NavItem[] = isAdmin
     ? [
         { href: "/staff/admin", label: "Статистика", exact: true },
+        { href: "/staff/admin/shifts", label: "Смены" },
         { href: "/staff/admin/menu", label: "Меню" },
         { href: "/staff/admin/guests", label: "Гости" },
       ]
@@ -147,7 +150,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-dvh bg-[#07070a] text-white">
-      <div className={`mx-auto p-4 pb-10 ${isAdminPage ? "max-w-7xl" : "max-w-md"}`}>
+      <div className={`mx-auto p-4 pb-10 ${isAdminPage ? "max-w-7xl" : isReportPage ? "max-w-xl" : "max-w-md"}`}>
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-[11px] tracking-[0.18em] text-white/40">

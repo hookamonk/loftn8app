@@ -123,6 +123,10 @@ model User {
   phone              String?   @unique
   email              String?   @unique
   passwordHash       String?
+  // "Sign in with Google / Apple": the provider's stable account id. A guest
+  // may have a password, a social login, or both on the same account.
+  googleSub          String?   @unique
+  appleSub           String?   @unique
   name               String
   // Loyalty card number shown on the guest card and, later, in Apple/Google
   // Wallet. Assigned by a Postgres sequence, so it is unique by construction
@@ -286,6 +290,9 @@ model OrderItemCancellation {
   menuItemId    Int
   name          String
   qty           Int
+  // Unit price of the line when it was cancelled (0 for rows from before the
+  // field existed) — the shift report sums what was taken off.
+  priceCzk      Int            @default(0)
   comment       String?
   reason        String?
   cancelledById String

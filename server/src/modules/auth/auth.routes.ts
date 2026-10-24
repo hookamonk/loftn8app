@@ -11,16 +11,21 @@ import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
 import { sendGuestOtpEmail, isEmailConfigured, missingEmailSettings } from "../../utils/mailer";
 import { rateLimit } from "../../middleware/rateLimit";
+import { socialProvidersConfig, verifyAppleIdToken, verifyGoogleCredential, type SocialIdentity } from "./socialAuth";
 
 /**
- * Guest identity is an e-mail address and a password. Registration confirms the
- * address with a one-time code; signing in needs nothing else.
+ * Guest identity is an e-mail address and a password, or a Google / Apple
+ * account. Registration with e-mail confirms the address with a one-time code;
+ * signing in needs nothing else.
  */
 export const authRouter = Router();
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
-const USER_TOKEN_TTL_SEC = 60 * 60 * 24 * 30;
+// Guests come back every few weeks; the session slides forward on every
+// visit (see /guest/me), so a regular is practically never signed out.
+const USER_TOKEN_TTL_SEC = 60 * 60 * 24 * 180;
+const USER_TOKEN_REFRESH_AFTER_SEC = 60 * 60 * 24;
 
 // SECURITY: the raw code may only ever be handed back to the caller outside
 // production. In production a missing SMTP config must NEVER leak codes in the
@@ -63,7 +68,9 @@ function assertEmailDeliverable() {
 // Counted per E-MAIL, not per IP: every guest in the venue shares one Wi-Fi
 // address, so an IP budget would lock the whole room out after a few sign-ups.
 // The address is also the thing worth protecting — one inbox, one account. A
-// separate, far higher IP ceiling still catches genuine abuse.
+// separate, far higher IP ceiling still catches genuine abuse. It must stay
+// high: requests arrive through the site's proxy, so many guests (every venue)
+// can share one address.
 // ---------------------------------------------------------------------------
 const emailKey = (req: Request) => normalizeEmail((req.body as { email?: unknown } | undefined)?.email) ?? "";
 
@@ -79,7 +86,7 @@ const otpRequestByEmail = rateLimit({
 });
 const otpRequestByIp = rateLimit({
   windowMs: 15 * 60_000,
-  max: 60,
+  max: 600,
   keyPrefix: "otp-req-ip",
   message: TOO_MANY_CODES,
 });
@@ -93,7 +100,7 @@ const otpVerifyByEmail = rateLimit({
 });
 const otpVerifyByIp = rateLimit({
   windowMs: 15 * 60_000,
-  max: 120,
+  max: 1200,
   keyPrefix: "otp-verify-ip",
   message: TOO_MANY_ATTEMPTS,
 });
@@ -107,7 +114,7 @@ const passwordByEmail = rateLimit({
 });
 const passwordByIp = rateLimit({
   windowMs: 15 * 60_000,
-  max: 120,
+  max: 1200,
   keyPrefix: "auth-pw-ip",
   message: TOO_MANY_ATTEMPTS,
 });
@@ -135,6 +142,14 @@ const PasswordLoginSchema = z.object({
 
 const RequestPasswordResetSchema = z.object({
   email: z.string().trim().min(3).max(200),
+});
+
+const SocialSignInSchema = z.object({
+  token: z.string().min(20).max(8000),
+  // Only for a brand-new account: the guest ticked the data-processing consent.
+  consent: z.boolean().optional(),
+  // Apple sends the name to the browser once, on the very first sign-in.
+  name: z.string().trim().max(120).optional(),
 });
 
 const ConfirmPasswordResetSchema = z.object({
@@ -192,12 +207,16 @@ function serializeUser(user: PublicUser) {
   };
 }
 
-/** Sign the guest in and attach the table session they already opened, if any. */
-async function completeSignIn(req: Request, res: any, user: PublicUser) {
+function issueUserCookie(res: any, user: { id: string; role: string }) {
   const token = jwt.sign({ userId: user.id, role: user.role }, env.JWT_USER_SECRET, {
-    expiresIn: "30d",
+    expiresIn: USER_TOKEN_TTL_SEC,
   });
   setCookie(res, "uid", token, USER_TOKEN_TTL_SEC);
+}
+
+/** Sign the guest in and attach the table session they already opened, if any. */
+async function completeSignIn(req: Request, res: any, user: PublicUser) {
+  issueUserCookie(res, user);
 
   // The guest scanned the QR before registering, so a table session already
   // exists — bind it to the account now, otherwise their bill and cashback
@@ -268,6 +287,31 @@ async function consumeOtpOrThrow(email: string, code: string) {
   }
 
   await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+}
+
+/**
+ * The password as typed now, plus the two slips phones make: a stray space at
+ * the end, and the first letter capitalised (or not) by the keyboard. The
+ * same leniency big sites use; it does not weaken a real password.
+ */
+function passwordCandidates(raw: string) {
+  const flipFirst = (value: string) => {
+    const first = value.charAt(0);
+    const flipped = first === first.toUpperCase() ? first.toLowerCase() : first.toUpperCase();
+    return flipped + value.slice(1);
+  };
+  const out = new Set<string>([raw]);
+  const trimmed = raw.trim();
+  if (trimmed) out.add(trimmed);
+  for (const value of [raw, trimmed]) if (value) out.add(flipFirst(value));
+  return Array.from(out);
+}
+
+async function passwordMatches(raw: string, hash: string) {
+  for (const candidate of passwordCandidates(raw)) {
+    if (await bcrypt.compare(candidate, hash)) return true;
+  }
+  return false;
 }
 
 function isUniqueViolation(error: unknown) {
@@ -394,10 +438,11 @@ authRouter.post(
 
     if (!user) throw new HttpError(404, "NO_ACCOUNT", "Account not found. Please register.");
     if (!user.passwordHash) {
+      // Created with Google / Apple (or before passwords existed).
       throw new HttpError(400, "PASSWORD_NOT_SET", "Password is not set for this account");
     }
 
-    const ok = await bcrypt.compare(body.password, user.passwordHash);
+    const ok = await passwordMatches(body.password, user.passwordHash);
     if (!ok) throw new HttpError(400, "PASSWORD_INVALID", "Password is invalid");
 
     res.json(await completeSignIn(req, res, user));
@@ -467,6 +512,114 @@ authRouter.post(
 );
 
 // ---------------------------------------------------------------------------
+// Sign in with Google / Apple
+//
+//   1. the provider account is already linked      → sign in
+//   2. its verified e-mail matches an account      → link it, sign in
+//   3. otherwise                                   → new account (needs consent)
+// ---------------------------------------------------------------------------
+const publicUserSelect = {
+  id: true,
+  name: true,
+  email: true,
+  phone: true,
+  cardNumber: true,
+  role: true,
+  privacyAcceptedAt: true,
+} as const;
+
+async function findBySocial(identity: SocialIdentity) {
+  return identity.provider === "google"
+    ? prisma.user.findUnique({ where: { googleSub: identity.sub }, select: publicUserSelect })
+    : prisma.user.findUnique({ where: { appleSub: identity.sub }, select: publicUserSelect });
+}
+
+async function socialSignIn(
+  req: Request,
+  res: any,
+  identity: SocialIdentity,
+  opts: { consent: boolean; name?: string }
+) {
+  const linked = await findBySocial(identity);
+  if (linked) return completeSignIn(req, res, linked);
+
+  const email = identity.emailVerified ? normalizeEmail(identity.email) : null;
+  const link = identity.provider === "google" ? { googleSub: identity.sub } : { appleSub: identity.sub };
+
+  if (email) {
+    const existing = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, googleSub: true, appleSub: true },
+    });
+    if (existing) {
+      const current = identity.provider === "google" ? existing.googleSub : existing.appleSub;
+      if (current && current !== identity.sub) {
+        throw new HttpError(409, "SOCIAL_CONFLICT", "This e-mail is linked to another account of the provider");
+      }
+      const user = await prisma.user.update({ where: { id: existing.id }, data: link, select: publicUserSelect });
+      return completeSignIn(req, res, user);
+    }
+  }
+
+  // A brand-new guest: same consent as the e-mail registration.
+  if (!opts.consent) {
+    throw new HttpError(400, "CONSENT_REQUIRED", "Consent is required");
+  }
+
+  const name =
+    identity.name?.trim() ||
+    opts.name?.trim() ||
+    (email ? email.split("@")[0] : "") ||
+    "Host";
+
+  try {
+    const user = await prisma.user.create({
+      data: { name: name.slice(0, 120), email, privacyAcceptedAt: new Date(), ...link },
+      select: publicUserSelect,
+    });
+    return completeSignIn(req, res, user);
+  } catch (error) {
+    // The same account signing in from two devices at the same moment.
+    if (isUniqueViolation(error)) {
+      const again = await findBySocial(identity);
+      if (again) return completeSignIn(req, res, again);
+      throw new HttpError(409, "ACCOUNT_EXISTS", "Account already exists. Please sign in.");
+    }
+    throw error;
+  }
+}
+
+/** Which sign-in buttons the guest app should show. */
+authRouter.get(
+  "/guest/providers",
+  asyncHandler(async (_req, res) => {
+    res.json({ ok: true, ...socialProvidersConfig() });
+  })
+);
+
+authRouter.post(
+  "/guest/google",
+  passwordByIp,
+  validate(SocialSignInSchema),
+  asyncHandler(async (req, res) => {
+    const body = req.body as z.infer<typeof SocialSignInSchema>;
+    const identity = await verifyGoogleCredential(body.token);
+    res.json(await socialSignIn(req, res, identity, { consent: !!body.consent }));
+  })
+);
+
+authRouter.post(
+  "/guest/apple",
+  passwordByIp,
+  validate(SocialSignInSchema),
+  asyncHandler(async (req, res) => {
+    const body = req.body as z.infer<typeof SocialSignInSchema>;
+    const identity = await verifyAppleIdToken(body.token);
+    res.json(await socialSignIn(req, res, identity, { consent: !!body.consent, name: body.name }));
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
 authRouter.get(
@@ -476,7 +629,7 @@ authRouter.get(
     if (!uid) return res.json({ authenticated: false });
 
     try {
-      const payload = jwt.verify(uid, env.JWT_USER_SECRET) as { userId: string };
+      const payload = jwt.verify(uid, env.JWT_USER_SECRET) as { userId: string; iat?: number };
       const user = await prisma.user.findUnique({
         where: { id: payload.userId },
         select: {
@@ -490,6 +643,11 @@ authRouter.get(
         },
       });
       if (!user) return res.json({ authenticated: false });
+
+      // Slide the session forward (at most once a day), so a guest who keeps
+      // coming back is never signed out.
+      const ageSec = Math.floor(Date.now() / 1000) - (payload.iat ?? 0);
+      if (ageSec > USER_TOKEN_REFRESH_AFTER_SEC) issueUserCookie(res, user);
 
       return res.json({ authenticated: true, user: serializeUser(user) });
     } catch {

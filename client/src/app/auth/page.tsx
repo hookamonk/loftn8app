@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
 import { markAnonBypassAuthOnce } from "@/lib/guestFlow";
 import { beginGuestPushOptIn, completeGuestPushOptIn } from "@/lib/guestPush";
@@ -12,6 +12,7 @@ import { useAuth } from "@/providers/auth";
 import { useSession } from "@/providers/session";
 import { useI18n } from "@/providers/i18n";
 import { useEscapeToClose } from "@/lib/useModalA11y";
+import { SocialSignIn, type SocialToken } from "@/components/SocialSignIn";
 import type { GuestUser } from "@/types";
 
 /**
@@ -19,6 +20,11 @@ import type { GuestUser } from "@/types";
  *
  *   Register → name, e-mail, password, consent → code from the inbox → done.
  *   Sign in  → e-mail + password. Nothing else.
+ *   Or one tap: «Continue with Google / Apple».
+ *
+ * A guest who comes back on the same phone lands on «Sign in» with the e-mail
+ * filled in. Typing a known e-mail into «Register» signs the guest in when the
+ * password is right, and moves to «Sign in» otherwise.
  *
  * Reached right after the QR scan when the guest isn't signed in yet; a guest
  * who already has an account never lands here at all.
@@ -26,6 +32,26 @@ import type { GuestUser } from "@/types";
 
 type Mode = "register" | "login" | "forgot";
 type Step = "form" | "code";
+
+// The last e-mail that signed in on this device — a returning guest whose
+// session expired gets «Sign in» with it filled in instead of «Register».
+const LAST_EMAIL_KEY = "loftn8LastGuestEmail";
+
+function readLastEmail() {
+  try {
+    return window.localStorage.getItem(LAST_EMAIL_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberEmail(value: string | null | undefined) {
+  try {
+    if (value) window.localStorage.setItem(LAST_EMAIL_KEY, value);
+  } catch {
+    // storage unavailable — nothing to remember
+  }
+}
 
 function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
@@ -42,12 +68,23 @@ function humanError(message: string, isCz: boolean) {
   const raw = String(message || "");
 
   if (raw.includes("ACCOUNT_EXISTS"))
-    return isCz ? "Tento účet už existuje. Přihlaste se." : "This account already exists. Please sign in.";
+    return isCz
+      ? "Účet s tímto e-mailem už máte. Zadejte své heslo, nebo si ho obnovte."
+      : "You already have an account with this e-mail. Enter your password or reset it.";
   if (raw.includes("NO_ACCOUNT"))
     return isCz ? "Účet nebyl nalezen. Zaregistrujte se." : "Account not found. Please register.";
-  if (raw.includes("PASSWORD_INVALID")) return isCz ? "Nesprávné heslo." : "Incorrect password.";
+  if (raw.includes("PASSWORD_INVALID"))
+    return isCz ? "Nesprávné heslo. Zkuste to znovu, nebo si heslo obnovte." : "Incorrect password. Try again or reset it.";
   if (raw.includes("PASSWORD_NOT_SET"))
-    return isCz ? "Pro tento účet není nastavené heslo." : "No password is set for this account.";
+    return isCz
+      ? "Tento účet nemá heslo. Přihlaste se přes Google nebo Apple, nebo si heslo nastavte."
+      : "This account has no password. Sign in with Google or Apple, or set a password.";
+  if (raw.includes("SOCIAL_CONFLICT"))
+    return isCz
+      ? "Tento e-mail je propojený s jiným účtem Google / Apple."
+      : "This e-mail is linked to a different Google / Apple account.";
+  if (raw.includes("SOCIAL_TOKEN_INVALID") || raw.includes("SOCIAL_DISABLED"))
+    return isCz ? "Přihlášení se nezdařilo. Zkuste to znovu." : "Sign-in failed. Please try again.";
   if (raw.includes("OTP_TOO_MANY_ATTEMPTS"))
     return isCz ? "Příliš mnoho pokusů. Vyžádejte si nový kód." : "Too many attempts. Request a new code.";
   if (raw.includes("OTP_INVALID")) return isCz ? "Neplatný kód." : "Invalid code.";
@@ -70,8 +107,12 @@ function humanError(message: string, isCz: boolean) {
   if (raw.includes("CONSENT_REQUIRED"))
     return isCz ? "Musíte souhlasit se zpracováním údajů." : "You must agree to data processing.";
   if (raw.includes("NAME_REQUIRED")) return isCz ? "Zadejte jméno." : "Enter your name.";
+  if (raw.includes("VALIDATION_ERROR") || raw.includes("HTTP 400"))
+    return isCz ? "Zkontrolujte zadané údaje." : "Please check the details you entered.";
+  if (raw.includes("Failed to fetch") || raw.includes("Request failed") || raw.includes("HTTP 5"))
+    return isCz ? "Nepodařilo se spojit se serverem. Zkuste to znovu." : "Couldn't reach the server. Please try again.";
 
-  return raw || (isCz ? "Něco se pokazilo." : "Something went wrong.");
+  return isCz ? "Něco se pokazilo. Zkuste to znovu." : "Something went wrong. Please try again.";
 }
 
 function Input({
@@ -83,6 +124,7 @@ function Input({
   autoComplete,
   inputMode,
   trailing,
+  plain,
 }: {
   label: string;
   value: string;
@@ -92,6 +134,8 @@ function Input({
   autoComplete?: string;
   inputMode?: "text" | "email" | "numeric";
   trailing?: React.ReactNode;
+  /** E-mail / password: the keyboard must not capitalise or "correct" it. */
+  plain?: boolean;
 }) {
   return (
     <label className="block">
@@ -103,6 +147,9 @@ function Input({
           placeholder={placeholder}
           autoComplete={autoComplete}
           inputMode={inputMode}
+          autoCapitalize={plain ? "none" : undefined}
+          autoCorrect={plain ? "off" : undefined}
+          spellCheck={plain ? false : undefined}
           onChange={(event) => onChange(event.target.value)}
           className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
         />
@@ -142,8 +189,12 @@ export default function AuthPage() {
   const [err, setErr] = useState<string | null>(null);
   const [suggested, setSuggested] = useState<Mode | null>(null);
   const [anonOpen, setAnonOpen] = useState(false);
+  // A new guest signing up with Google / Apple must tick the consent first.
+  const [pendingSocial, setPendingSocial] = useState<SocialToken | null>(null);
+  const [socialConsent, setSocialConsent] = useState(false);
 
   useEscapeToClose(anonOpen, () => setAnonOpen(false));
+  useEscapeToClose(!!pendingSocial, () => setPendingSocial(null));
 
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
   const targetPath = nextPath ?? "/menu";
@@ -153,6 +204,12 @@ export default function AuthPage() {
     if (typeof window === "undefined") return;
     setNextPath(sanitizeNextPath(new URLSearchParams(window.location.search).get("next")));
     void ensureBackendWarm();
+
+    const lastEmail = readLastEmail();
+    if (lastEmail) {
+      setMode("login");
+      setEmail(lastEmail);
+    }
   }, []);
 
   // Already signed in (e.g. came back to this URL) — go straight through.
@@ -176,23 +233,27 @@ export default function AuthPage() {
   };
 
   const fail = (error: unknown) => {
-    const raw = error instanceof Error ? error.message : "";
+    const raw = errorText(error);
     const message = humanError(raw, isCz);
     setErr(message);
 
     if (raw.includes("ACCOUNT_EXISTS")) {
-      setSuggested("login");
+      setSuggested("forgot");
       setStep("form");
     }
     if (raw.includes("NO_ACCOUNT")) {
       setSuggested("register");
       setStep("form");
     }
+    if (raw.includes("PASSWORD_INVALID") || raw.includes("PASSWORD_NOT_SET")) {
+      setSuggested("forgot");
+    }
 
     push({ kind: "error", title: isCz ? "Chyba" : "Error", message });
   };
 
   const signedIn = async (user: GuestUser, title: string) => {
+    rememberEmail(user.email);
     setAuthenticated({ authenticated: true, user });
     await restoreSession().catch(() => {});
     push({ kind: "success", title, message: isCz ? "Vítejte!" : "Welcome!" });
@@ -261,12 +322,59 @@ export default function AuthPage() {
         return;
       }
 
-      const result = await api<{ ok: true; devCode?: string }>("/auth/guest/request-otp", {
-        method: "POST",
-        body: JSON.stringify({ name: name.trim(), email: email.trim() }),
-      });
-      showCodeSent(result);
+      try {
+        const result = await api<{ ok: true; devCode?: string }>("/auth/guest/request-otp", {
+          method: "POST",
+          body: JSON.stringify({ name: name.trim(), email: email.trim() }),
+        });
+        showCodeSent(result);
+      } catch (error) {
+        if (!errorText(error).includes("ACCOUNT_EXISTS")) throw error;
+
+        // The guest already has an account (signed out, typed into «Register»).
+        // The password they just typed is most likely theirs — try it.
+        try {
+          const result = await api<{ ok: true; user: GuestUser }>("/auth/guest/login-password", {
+            method: "POST",
+            body: JSON.stringify({ email: email.trim(), password }),
+          });
+          await signedIn(result.user, isCz ? "Přihlášeno" : "Signed in");
+        } catch (loginError) {
+          setMode("login");
+          setPassword("");
+          // A Google / Apple account without a password says so; anything else
+          // is "you already have an account — enter your password or reset it".
+          throw errorText(loginError).includes("PASSWORD_NOT_SET") ? loginError : error;
+        }
+      }
     } catch (error) {
+      fail(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitSocial = async (social: SocialToken, consentGiven: boolean) => {
+    resetErrors();
+    setBusy(true);
+    const pushOptIn = beginGuestPushOptIn();
+
+    try {
+      const result = await api<{ ok: true; user: GuestUser }>(`/auth/guest/${social.provider}`, {
+        method: "POST",
+        body: JSON.stringify({ token: social.token, consent: consentGiven, name: social.name }),
+      });
+      setPendingSocial(null);
+      await signedIn(result.user, isCz ? "Přihlášeno" : "Signed in");
+      void completeGuestPushOptIn(pushOptIn, lang);
+    } catch (error) {
+      if (errorText(error).includes("CONSENT_REQUIRED") && !consentGiven) {
+        // New guest: one more tap with the consent ticked.
+        setSocialConsent(consent);
+        setPendingSocial(social);
+        return;
+      }
+      setPendingSocial(null);
       fail(error);
     } finally {
       setBusy(false);
@@ -381,6 +489,46 @@ export default function AuthPage() {
         </div>
       ) : null}
 
+      {pendingSocial ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPendingSocial(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-white/10 bg-[rgba(20,20,20,0.97)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.6)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="text-lg font-semibold text-white">{isCz ? "Ještě jeden krok" : "One more step"}</div>
+            <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm leading-5 text-white/80">
+              <input
+                type="checkbox"
+                checked={socialConsent}
+                onChange={(event) => setSocialConsent(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/30"
+              />
+              <span>
+                {isCz ? "Souhlasím se zpracováním osobních údajů" : "I agree to the processing of my personal data"}
+              </span>
+            </label>
+            <div className="mt-4 grid gap-2">
+              <button
+                type="button"
+                className={btnPrimary}
+                disabled={!socialConsent || busy}
+                onClick={() => void submitSocial(pendingSocial, true)}
+              >
+                {busy ? (isCz ? "Moment…" : "One moment…") : isCz ? "Pokračovat" : "Continue"}
+              </button>
+              <button type="button" className={btnGhost} onClick={() => setPendingSocial(null)}>
+                {isCz ? "Zpět" : "Back"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
         <div className="mb-5 flex flex-col items-center">
           <div className="mb-3 grid h-16 w-16 place-items-center rounded-2xl border border-white/10 bg-white/5">
@@ -422,6 +570,18 @@ export default function AuthPage() {
 
           {step === "form" ? (
             <>
+              {mode !== "forgot" ? (
+                <div className="mt-4">
+                  <SocialSignIn
+                    mode={mode}
+                    isCz={isCz}
+                    disabled={busy}
+                    onToken={(social) => void submitSocial(social, consent)}
+                    onError={(message) => setErr(message)}
+                  />
+                </div>
+              ) : null}
+
               <div className="mt-4 grid gap-3">
                 {mode === "register" ? (
                   <Input
@@ -441,6 +601,7 @@ export default function AuthPage() {
                   inputMode="email"
                   placeholder="name@email.com"
                   autoComplete="email"
+                  plain
                 />
 
                 {mode !== "forgot" ? (
@@ -451,6 +612,7 @@ export default function AuthPage() {
                     type={showPassword ? "text" : "password"}
                     placeholder={mode === "register" ? (isCz ? "Alespoň 6 znaků" : "At least 6 characters") : undefined}
                     autoComplete={mode === "register" ? "new-password" : "current-password"}
+                    plain
                     trailing={
                       <button
                         type="button"
@@ -493,9 +655,13 @@ export default function AuthPage() {
                         ? isCz
                           ? "Přihlásit se"
                           : "Sign in"
-                        : isCz
-                          ? "Zaregistrovat se"
-                          : "Register"}
+                        : suggested === "forgot"
+                          ? isCz
+                            ? "Obnovit heslo"
+                            : "Reset password"
+                          : isCz
+                            ? "Zaregistrovat se"
+                            : "Register"}
                     </button>
                   ) : null}
                 </div>
@@ -586,6 +752,7 @@ export default function AuthPage() {
                     type={showPassword ? "text" : "password"}
                     placeholder={isCz ? "Alespoň 6 znaků" : "At least 6 characters"}
                     autoComplete="new-password"
+                    plain
                     trailing={
                       <button
                         type="button"
