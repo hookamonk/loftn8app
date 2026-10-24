@@ -15,7 +15,10 @@ import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useStaffEvents } from "@/lib/useStaffEvents";
 import { emitStaffLiveSync, subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 import { useToast } from "@/providers/toast";
+import { useStaffSession } from "@/providers/staffSession";
+import { canCancelItems } from "@/lib/staffRoles";
 import { OrderComposer } from "@/components/staff/OrderComposer";
+import { CancelItemSheet, type CancelTarget } from "@/components/staff/CancelItemSheet";
 
 /**
  * Everything a waiter needs at a table, on one screen: what is unpaid right
@@ -24,17 +27,19 @@ import { OrderComposer } from "@/components/staff/OrderComposer";
  */
 
 const card =
-  "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
+  "rounded-3xl border border-white/10 bg-white/[0.05] p-3.5";
 const btnPrimary =
-  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
+  "h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
 const btnAccent =
-  "h-12 w-full rounded-2xl bg-emerald-400 text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
+  "h-11 w-full rounded-xl bg-emerald-400 text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
 const btnGhost =
-  "h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50";
+  "h-11 w-full rounded-xl border border-white/10 bg-transparent text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50";
 
 export default function StaffTableDetailsPage() {
   const params = useParams<{ tableId: string }>();
   const { push } = useToast();
+  const { staff } = useStaffSession();
+  const canCancel = canCancelItems(staff?.role);
   const tableId = Number(params.tableId);
 
   const [data, setData] = useState<StaffActiveTableDetails | null>(null);
@@ -43,6 +48,7 @@ export default function StaffTableDetailsPage() {
   const [busy, setBusy] = useState(false);
   const [askMethod, setAskMethod] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
 
   const load = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -189,7 +195,27 @@ export default function StaffTableDetailsPage() {
                     <div className="mt-0.5 text-[11px] text-white/45">{item.comment}</div>
                   ) : null}
                 </div>
-                <div className="shrink-0 text-white/70">{item.totalCzk} Kč</div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-white/70">{item.totalCzk} Kč</span>
+                  {canCancel && !pending ? (
+                    <button
+                      type="button"
+                      aria-label={`Отменить ${item.name}`}
+                      onClick={() =>
+                        setCancelTarget({
+                          orderId: item.orderId,
+                          itemId: item.orderItemId,
+                          name: item.name,
+                          qty: item.qty,
+                          tableCode: data.table.code,
+                        })
+                      }
+                      className="grid h-8 w-8 place-items-center rounded-xl border border-white/10 bg-white/5 text-sm text-white/60 active:bg-white/15"
+                    >
+                      ✕
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))
           ) : (
@@ -202,7 +228,7 @@ export default function StaffTableDetailsPage() {
 
       {/* The guest started the payment from their phone — just confirm it. */}
       {pending ? (
-        <div className="rounded-[28px] border border-sky-400/35 bg-sky-500/12 p-4">
+        <div className="rounded-3xl border border-sky-400/35 bg-sky-500/12 p-3.5">
           <div className="text-sm font-semibold text-sky-100">
             Гость ждёт оплату · {pending.method === "CARD" ? "Карта" : "Наличные"}
           </div>
@@ -283,6 +309,16 @@ export default function StaffTableDetailsPage() {
           ) : null}
         </div>
       ) : null}
+
+      <CancelItemSheet
+        target={cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onDone={async () => {
+          setCancelTarget(null);
+          emitStaffLiveSync("order-item-cancelled");
+          await load({ silent: true });
+        }}
+      />
 
       {data ? (
         <OrderComposer

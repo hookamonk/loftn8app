@@ -11,8 +11,9 @@ import { useGuestFeed, type GuestFeedCall } from "@/providers/guestFeed";
 import { useI18n } from "@/providers/i18n";
 
 /**
- * Two taps, two outcomes: get a waiter, or get the hookah master. Plus a free
- * text message when neither fits. Every card shows the live state of its own
+ * Two taps, two outcomes: get a waiter, or get the hookah master (with the
+ * reason: coals, too harsh, a new hookah). Plus a free text message when
+ * neither fits. Every card shows the live state of its own
  * request, so the guest never wonders whether it went through.
  *
  * Staff handle hookah calls and messages in ONE tap («Принять» → DONE), so for
@@ -123,6 +124,58 @@ function ActionCard({
   );
 }
 
+// Sent as the call message; staff see them as «Поменять угли» etc.
+const HOOKAH_REASONS = [
+  { code: "HOOKAH:COALS", cs: "Vyměnit uhlíky", en: "Change coals" },
+  { code: "HOOKAH:HARSH", cs: "Dýmka pálí", en: "Too harsh" },
+  { code: "HOOKAH:NEW", cs: "Nová dýmka", en: "New hookah" },
+] as const;
+
+function HookahCard({
+  isCz,
+  status,
+  disabled,
+  onPick,
+}: {
+  isCz: boolean;
+  status?: string;
+  disabled?: boolean;
+  onPick: (code: string) => void;
+}) {
+  return (
+    <div className="w-full rounded-3xl border border-white/10 bg-white/6 p-3.5 backdrop-blur-xl shadow-[0_8px_28px_rgba(0,0,0,0.3)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-white">{isCz ? "Servis vodní dýmky" : "Hookah service"}</div>
+          <div className="mt-1 text-xs text-white/60">{isCz ? "Přijde kalianér" : "The hookah master will come"}</div>
+          {status ? (
+            <div className="mt-2">
+              <StatusLine status={status} />
+            </div>
+          ) : null}
+        </div>
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/10 bg-black/30">
+          <Icon name="zap" />
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-1.5">
+        {HOOKAH_REASONS.map((reason) => (
+          <button
+            key={reason.code}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(reason.code)}
+            className="h-10 rounded-xl border border-white/10 bg-black/30 px-1 text-xs font-semibold text-white transition active:scale-[0.98] disabled:opacity-50"
+          >
+            {isCz ? reason.cs : reason.en}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function CallPage() {
   const { isCz, ready, lang } = useI18n();
   const venueName = ready ? getVenueName() : "LOFT№8 Žižkov";
@@ -230,13 +283,11 @@ export default function CallPage() {
             onClick={() => void send("WAITER")}
           />
 
-          <ActionCard
+          <HookahCard
+            isCz={isCz}
             disabled={busy || Boolean(hookahOpen)}
-            title={isCz ? "Servis vodní dýmky" : "Hookah service"}
-            subtitle={isCz ? "Přijde kalianér" : "The hookah master will come"}
             status={hookahStatus}
-            icon={<Icon name="zap" />}
-            onClick={() => void send("HOOKAH")}
+            onPick={(code) => void send("HOOKAH", code)}
           />
         </div>
 
@@ -249,8 +300,8 @@ export default function CallPage() {
             className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/40 outline-none focus:border-white/25"
             placeholder={
               isCz
-                ? 'Například: "Vodní dýmka pálí"'
-                : 'For example: "The hookah is burning"'
+                ? 'Například: "Přineste prosím ubrousky"'
+                : 'For example: "Could we get some napkins?"'
             }
             value={msg}
             onChange={(e) => setMsg(e.target.value)}

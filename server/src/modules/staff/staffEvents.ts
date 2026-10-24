@@ -1,4 +1,5 @@
 import type { Response } from "express";
+import type { StaffRole } from "@prisma/client";
 
 /**
  * In-memory SSE (Server-Sent Events) hub for the staff dashboard.
@@ -14,6 +15,10 @@ export type StaffEventKind =
   | "GUEST_MESSAGE"
   | "ORDER_CREATED"
   | "PAYMENT_REQUESTED"
+  | "TICKET_NEW"
+  | "TICKET_REMINDER"
+  | "TICKET_READY"
+  | "TICKET_CANCELLED"
   | "DATA_CHANGED";
 
 export type StaffEvent = {
@@ -30,6 +35,7 @@ export type StaffEvent = {
 type Client = {
   id: number;
   venueId: number;
+  role: StaffRole;
   res: Response;
 };
 
@@ -59,10 +65,10 @@ function ensureHeartbeat() {
   heartbeat.unref?.();
 }
 
-export function addStaffClient(venueId: number, res: Response): () => void {
+export function addStaffClient(venueId: number, role: StaffRole, res: Response): () => void {
   ensureHeartbeat();
 
-  const client: Client = { id: nextClientId++, venueId, res };
+  const client: Client = { id: nextClientId++, venueId, role, res };
 
   let set = clientsByVenue.get(venueId);
   if (!set) {
@@ -79,9 +85,14 @@ export function addStaffClient(venueId: number, res: Response): () => void {
   };
 }
 
+/**
+ * `roles` limits an alert to the people it is meant for (a hookah call must not
+ * beep on the kitchen iPad). Without it the event goes to the whole venue —
+ * that is what DATA_CHANGED refreshes rely on.
+ */
 export function emitStaffEvent(
   venueId: number,
-  event: Omit<StaffEvent, "venueId" | "at"> & { at?: number }
+  event: Omit<StaffEvent, "venueId" | "at"> & { at?: number; roles?: StaffRole[] }
 ) {
   const set = clientsByVenue.get(venueId);
   if (!set || set.size === 0) return;
@@ -97,6 +108,7 @@ export function emitStaffEvent(
   const frame = `event: staff\ndata: ${JSON.stringify(payload)}\n\n`;
 
   for (const client of set) {
+    if (event.roles && !event.roles.includes(client.role)) continue;
     try {
       client.res.write(frame);
     } catch {

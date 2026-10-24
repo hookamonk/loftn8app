@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { fireInAppAlert } from "@/lib/staffAlerts";
+import { fireInAppAlert, type StaffAlertKind } from "@/lib/staffAlerts";
 import { getStaffVenueSlug, resolveVenueSlug } from "@/lib/venue";
 
 export type StaffPushPayload = {
@@ -10,7 +10,7 @@ export type StaffPushPayload = {
   url?: string;
   tag?: string;
   ts?: number;
-  kind?: "ORDER_CREATED" | "CALL_CREATED" | "GUEST_MESSAGE" | "PAYMENT_REQUESTED";
+  kind?: StaffAlertKind;
   venueId?: number | null;
   venueSlug?: string | null;
 };

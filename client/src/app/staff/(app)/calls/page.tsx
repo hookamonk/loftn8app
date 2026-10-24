@@ -31,9 +31,9 @@ function typeLabel(type: StaffCall["type"]) {
 }
 
 const card =
-  "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
+  "rounded-3xl border border-white/10 bg-white/[0.05] p-3.5";
 const btnPrimary =
-  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
+  "h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
 
 export default function StaffCallsPage() {
   const { push } = useToast();

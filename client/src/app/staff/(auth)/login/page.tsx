@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { staffLogin } from "@/lib/staffApi";
+import { getStaffMe, staffLogin, type ApiResult } from "@/lib/staffApi";
+import { homeForRole } from "@/lib/staffRoles";
 import { useStaffSession } from "@/providers/staffSession";
 import { enablePush, ensureServiceWorker, rebindPushIfPossible } from "@/lib/staffPush";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
@@ -15,16 +16,49 @@ import {
   type VenueSlug,
 } from "@/lib/venue";
 
+/** True only after hydration — the form reads localStorage, the server can't. */
+function useMounted() {
+  return useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
+}
+
+function loginErrorText(r: Extract<ApiResult<unknown>, { ok: false }>) {
+  if (r.status === 0 || r.error === "NETWORK_ERROR") return "Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.";
+  if (r.status === 429) return "Слишком много попыток входа. Подождите 15 минут и попробуйте снова.";
+  if (r.status === 401) return "Неверный логин или пароль.";
+  if (r.status >= 500) return "Сервер запускается. Подождите минуту и попробуйте ещё раз.";
+  return "Не получилось войти. Попробуйте ещё раз.";
+}
+
 export default function StaffLoginPage() {
+  const mounted = useMounted();
+
+  return (
+    <main className="min-h-dvh w-full bg-[#07070a] text-white">
+      <div className="mx-auto flex min-h-dvh max-w-md items-center px-4 py-10">
+        <div className="w-full rounded-3xl border border-white/10 bg-white/[0.05] p-4">
+          <div className="text-[11px] tracking-[0.18em] text-white/40">LOFT№8</div>
+          <h1 className="mt-1 text-xl font-semibold">Вход для персонала</h1>
+          {/* Rendered only on the client: the chosen venue comes from this
+              device's storage, so the highlighted venue is always the real one. */}
+          {mounted ? <LoginForm /> : <div className="mt-4 h-[360px]" />}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
   const { setStaff } = useStaffSession();
 
   const [venues, setVenues] = useState<VenueOption[]>(() => getVenueCatalog());
+  const [selectedVenue, setSelectedVenue] = useState<VenueSlug>(() => getStoredStaffVenueSlug() ?? "loft-zizkov");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [selectedVenue, setSelectedVenue] = useState<VenueSlug>(
-    () => getStoredStaffVenueSlug() ?? "loft-zizkov"
-  );
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -32,41 +66,55 @@ export default function StaffLoginPage() {
     void ensureBackendWarm();
   }, []);
 
+  // The installed app opens here: an account that is still signed in (a
+  // station iPad, a waiter's phone) goes straight to its screen.
   useEffect(() => {
-    let mounted = true;
-
-    void refreshVenueCatalog().then((catalog) => {
-      if (!mounted) return;
-      setVenues(catalog);
+    let active = true;
+    void getStaffMe().then((r) => {
+      if (!active || !r.ok) return;
+      if (r.data.staff.venueSlug) setStaffVenueSlug(r.data.staff.venueSlug);
+      setStaff(r.data.staff);
+      router.replace(homeForRole(r.data.staff.role));
     });
-
     return () => {
-      mounted = false;
+      active = false;
+    };
+  }, [router, setStaff]);
+
+  useEffect(() => {
+    let active = true;
+    void refreshVenueCatalog().then((catalog) => {
+      if (active) setVenues(catalog);
+    });
+    return () => {
+      active = false;
     };
   }, []);
 
-  useEffect(() => {
-    if (!venues.some((venue) => venue.slug === selectedVenue)) {
-      setSelectedVenue(venues[0]?.slug ?? "loft-zizkov");
-    }
-  }, [selectedVenue, venues]);
-
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (loading) return;
     setErr(null);
+
+    if (!username.trim() || !password) {
+      setErr("Введите логин и пароль.");
+      return;
+    }
+
     setLoading(true);
-
     setStaffVenueSlug(selectedVenue);
-
     const r = await staffLogin(username.trim(), password, selectedVenue);
     setLoading(false);
 
     if (!r.ok) {
-      setErr(r.error || "Что-то пошло не так");
+      setErr(loginErrorText(r));
       return;
     }
 
     const staff = r.data.staff;
+    // The account decides the venue: if another venue was highlighted, the
+    // server still signs it in to its own one — every next request must say so.
+    if (staff.venueSlug) setStaffVenueSlug(staff.venueSlug);
     setStaff(staff);
 
     // Подписку на push запускаем в фоне (не блокируя переход) — иначе медленный
@@ -80,88 +128,61 @@ export default function StaffLoginPage() {
       .then(() => rebindPushIfPossible())
       .catch(() => {});
 
-    // Переходим в панель сразу.
-    router.replace(staff.role === "ADMIN" ? "/staff/admin" : "/staff/summary");
+    router.replace(homeForRole(staff.role));
   };
 
   return (
-    <main className="min-h-screen w-full bg-[#050508] text-white">
-      <div className="pointer-events-none fixed inset-0 opacity-60">
-        <div className="absolute -top-40 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-white/10 blur-3xl" />
-        <div className="absolute bottom-0 left-1/4 h-[380px] w-[380px] rounded-full bg-white/5 blur-3xl" />
-      </div>
+    <form className="mt-4 space-y-3" onSubmit={onSubmit}>
+      {err ? (
+        <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">{err}</div>
+      ) : null}
 
-      <div className="relative mx-auto flex min-h-screen max-w-md items-center px-4 py-10">
-        <div className="w-full rounded-3xl border border-white/10 bg-white/5 p-5 shadow-2xl backdrop-blur">
-          <div className="text-xs tracking-[0.22em] text-white/45">LOFT№8</div>
-          <h1 className="mt-2 text-2xl font-semibold">Вход для персонала</h1>
-          <p className="mt-1 text-sm text-white/60">Официант, кальянщик, менеджер</p>
-
-          {err ? (
-            <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
-              {err}
-            </div>
-          ) : null}
-
-          <form className="mt-5 space-y-3" onSubmit={onSubmit}>
-            <div className="space-y-2">
-              <label className="text-xs text-white/60">Точка</label>
-              <div className="grid grid-cols-1 gap-2">
-                {venues.map((venue) => {
-                  const active = selectedVenue === venue.slug;
-                  return (
-                    <button
-                      key={venue.slug}
-                      type="button"
-                      onClick={() => setSelectedVenue(venue.slug)}
-                      className={[
-                        "w-full rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition",
-                        active
-                          ? "border-white/20 bg-white text-black"
-                          : "border-white/10 bg-black/30 text-white/80 hover:bg-white/10",
-                      ].join(" ")}
-                    >
-                      {venue.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs text-white/60">Логин</label>
-              <input
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
-                placeholder="логин"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoCapitalize="none"
-                autoCorrect="off"
-                autoComplete="username"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs text-white/60">Пароль</label>
-              <input
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
-                placeholder="••••••••"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-              />
-            </div>
-
+      <div className="grid gap-1.5">
+        {venues.map((venue) => {
+          const active = selectedVenue === venue.slug;
+          return (
             <button
-              className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black disabled:opacity-60"
-              disabled={loading}
+              key={venue.slug}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setSelectedVenue(venue.slug)}
+              className={[
+                "h-11 w-full rounded-xl border px-4 text-left text-sm font-semibold transition",
+                active ? "border-white/20 bg-white text-black" : "border-white/10 bg-black/30 text-white/80",
+              ].join(" ")}
             >
-              {loading ? "Входим…" : "Войти"}
+              {venue.name}
             </button>
-          </form>
-        </div>
+          );
+        })}
       </div>
-    </main>
+
+      <input
+        className="h-11 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
+        placeholder="Логин"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        autoComplete="username"
+      />
+
+      <input
+        className="h-11 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
+        placeholder="Пароль"
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        autoComplete="current-password"
+      />
+
+      <button
+        className="h-11 w-full rounded-xl bg-white text-sm font-semibold text-black disabled:opacity-60"
+        disabled={loading}
+      >
+        {loading ? "Входим…" : "Войти"}
+      </button>
+    </form>
   );
 }

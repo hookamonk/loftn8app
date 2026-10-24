@@ -13,6 +13,8 @@
     "prisma:reset": "tsx prisma/resetData.ts",
     "prisma:prune-tables": "tsx prisma/pruneTables.ts",
     "admin:create": "tsx prisma/createAdmin.ts",
+    "staff:sync": "tsx prisma/syncStaff.ts",
+    "staff:sync:built": "node dist/prisma/syncStaff.js",
     "push:keys": "web-push generate-vapid-keys",
     "mail:check": "tsx prisma/checkMail.ts",
     "mail:check:built": "node dist/prisma/checkMail.js"

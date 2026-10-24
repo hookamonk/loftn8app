@@ -21,6 +21,8 @@ model Venue {
   staffUsers           StaffUser[]
   tables               Table[]
   shifts               Shift[]
+  stationTickets       StationTicket[]
+  itemCancellations    OrderItemCancellation[]
 }
 
 model Table {
@@ -37,6 +39,8 @@ model Table {
   payments  PaymentRequest[]
   ratings   Rating[]
   calls     StaffCall[]
+  stationTickets    StationTicket[]
+  itemCancellations OrderItemCancellation[]
   venue     Venue            @relation(fields: [venueId], references: [id])
 
   @@index([venueId, code])
@@ -61,6 +65,7 @@ model Shift {
 
   participants      ShiftParticipant[]
   guestSessions     GuestSession[]
+  stationTickets    StationTicket[]
 
   @@index([venueId, status])
   @@index([venueId, openedAt])
@@ -178,10 +183,14 @@ model MenuItem {
   updatedAt   DateTime     @updatedAt
   category    MenuCategory @relation(fields: [categoryId], references: [id])
   orderItems  OrderItem[]
+  cancellations OrderItemCancellation[]
 
   @@index([categoryId, isActive, sort])
 }
 
+// Order.status is derived from its station tickets (see tickets.service.ts):
+// NEW until a station accepts, IN_PROGRESS while anything is being made or
+// waiting to be carried out, DELIVERED once every ticket is served.
 model Order {
   id        String       @id @default(cuid())
   sessionId String
@@ -195,6 +204,8 @@ model Order {
   table     Table        @relation(fields: [tableId], references: [id])
   user      User?        @relation(fields: [userId], references: [id])
   items     OrderItem[]
+  tickets   StationTicket[]
+  itemCancellations OrderItemCancellation[]
 
   @@index([tableId, status, createdAt])
   @@index([sessionId, createdAt])
@@ -207,11 +218,89 @@ model OrderItem {
   qty        Int
   comment    String?
   priceCzk   Int
+  // Station ticket the line was sent on. Null only for lines created before
+  // station tickets existed.
+  ticketId   String?
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
   order      Order    @relation(fields: [orderId], references: [id])
+  ticket     StationTicket? @relation(fields: [ticketId], references: [id])
 
   @@index([orderId])
   @@index([menuItemId])
+  @@index([ticketId])
+}
+
+// One batch of lines for one station (kitchen, bar or hookah zone), created
+// every time a waiter or hookah master sends an order or an add-on.
+//   NEW → ACCEPTED (station saw it) → READY (made) → SERVED (carried out)
+// CANCELLED when the manager removed every line on it.
+model StationTicket {
+  id             String       @id @default(cuid())
+  venueId        Int
+  tableId        Int
+  orderId        String
+  shiftId        String
+  station        MenuSection
+  status         TicketStatus @default(NEW)
+  // The table had already ordered from this station during the visit.
+  isAddon        Boolean      @default(false)
+  createdById    String?
+  acceptedById   String?
+  readyById      String?
+  servedById     String?
+  createdAt      DateTime     @default(now())
+  acceptedAt     DateTime?
+  readyAt        DateTime?
+  servedAt       DateTime?
+  cancelledAt    DateTime?
+  // "Not accepted yet" reminders (every few minutes until a station accepts).
+  lastRemindedAt DateTime?
+  reminderCount  Int          @default(0)
+  updatedAt      DateTime     @updatedAt
+
+  venue          Venue        @relation(fields: [venueId], references: [id])
+  table          Table        @relation(fields: [tableId], references: [id])
+  order          Order        @relation(fields: [orderId], references: [id])
+  shift          Shift        @relation(fields: [shiftId], references: [id])
+  createdBy      StaffUser?   @relation("TicketCreatedBy", fields: [createdById], references: [id])
+  acceptedBy     StaffUser?   @relation("TicketAcceptedBy", fields: [acceptedById], references: [id])
+  readyBy        StaffUser?   @relation("TicketReadyBy", fields: [readyById], references: [id])
+  servedBy       StaffUser?   @relation("TicketServedBy", fields: [servedById], references: [id])
+  items          OrderItem[]
+  cancellations  OrderItemCancellation[]
+
+  @@index([shiftId, station, status])
+  @@index([status, lastRemindedAt])
+  @@index([orderId])
+  @@index([tableId, shiftId])
+}
+
+// What the manager took off an order. The order line itself is reduced or
+// deleted (so every bill stays correct); this row keeps who, what and why.
+model OrderItemCancellation {
+  id            String         @id @default(cuid())
+  venueId       Int
+  tableId       Int
+  orderId       String
+  ticketId      String?
+  menuItemId    Int
+  name          String
+  qty           Int
+  comment       String?
+  reason        String?
+  cancelledById String
+  createdAt     DateTime       @default(now())
+
+  venue         Venue          @relation(fields: [venueId], references: [id])
+  table         Table          @relation(fields: [tableId], references: [id])
+  order         Order          @relation(fields: [orderId], references: [id])
+  ticket        StationTicket? @relation(fields: [ticketId], references: [id])
+  menuItem      MenuItem       @relation(fields: [menuItemId], references: [id])
+  cancelledBy   StaffUser      @relation(fields: [cancelledById], references: [id])
+
+  @@index([ticketId])
+  @@index([orderId])
+  @@index([venueId, createdAt])
 }
 
 model StaffCall {
@@ -298,6 +387,11 @@ model StaffUser {
   shiftParticipants    ShiftParticipant[]
   openedShifts         Shift[]                 @relation("ShiftOpenedBy")
   closedShifts         Shift[]                 @relation("ShiftClosedBy")
+  ticketsCreated       StationTicket[]         @relation("TicketCreatedBy")
+  ticketsAccepted      StationTicket[]         @relation("TicketAcceptedBy")
+  ticketsReady         StationTicket[]         @relation("TicketReadyBy")
+  ticketsServed        StationTicket[]         @relation("TicketServedBy")
+  itemCancellations    OrderItemCancellation[]
   venue                Venue                   @relation(fields: [venueId], references: [id])
 }
 
@@ -385,11 +479,24 @@ enum UserRole {
   ADMIN
 }
 
+// KITCHEN, BAR and HOOKAH_ZONE are the shared station iPads: they only see
+// and accept the tickets of their own station.
 enum StaffRole {
   WAITER
   HOOKAH
   MANAGER
   ADMIN
+  KITCHEN
+  BAR
+  HOOKAH_ZONE
+}
+
+enum TicketStatus {
+  NEW
+  ACCEPTED
+  READY
+  SERVED
+  CANCELLED
 }
 
 enum ShiftStatus {

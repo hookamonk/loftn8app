@@ -1,11 +1,12 @@
 import { prisma } from "../../db/prisma";
-import type { StaffRole, MenuSection } from "@prisma/client";
+import type { StaffRole } from "@prisma/client";
 import { isOrderRequestMessage } from "../orders/orderRequest";
 import { publicTableCode, publicVenueSlug } from "../../config/venues";
 import { emitStaffEvent } from "./staffEvents";
 import { sendWebPush, type WebPushSubscriptionRow } from "../push/webPushSender";
+import { staffCallMessage } from "../calls/hookahReasons";
 
-type PushPayload = {
+export type PushPayload = {
   title: string;
   body: string;
   url?: string;
@@ -15,7 +16,11 @@ type PushPayload = {
     | "ORDER_CREATED"
     | "CALL_CREATED"
     | "GUEST_MESSAGE"
-    | "PAYMENT_REQUESTED";
+    | "PAYMENT_REQUESTED"
+    | "TICKET_NEW"
+    | "TICKET_REMINDER"
+    | "TICKET_READY"
+    | "TICKET_CANCELLED";
   message?: string;
   tableCode?: string;
   venueId?: number;
@@ -36,7 +41,7 @@ function trimMessage(message?: string | null, max = 120) {
 }
 
 function normalizeCallMessage(type: "WAITER" | "HOOKAH" | "BILL" | "HELP", message?: string | null) {
-  const trimmed = trimMessage(message, 110);
+  const trimmed = trimMessage(staffCallMessage(type, message), 110);
   if (!trimmed) return null;
 
   if (type === "BILL" && trimmed.startsWith("PAYMENT_METHOD:")) {
@@ -94,56 +99,6 @@ export async function pushToVenueRoles(venueId: number, roles: StaffRole[], payl
   return { sent: r.ok, failed: r.failed, removed: r.removed };
 }
 
-export async function notifyOrderCreated(orderId: string) {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    select: {
-      id: true,
-      table: { select: { venueId: true, code: true, venue: { select: { slug: true } } } },
-      items: {
-        select: {
-          menuItem: {
-            select: {
-              category: { select: { section: true } },
-            },
-          },
-        },
-      },
-    },
-  });
-  if (!order) {
-    console.warn("notifyOrderCreated: order not found", { orderId });
-    return;
-  }
-
-  const venueId = order.table.venueId;
-  const tableCode = publicTableCode(order.table.code);
-  const venueSlug = publicVenueSlug(order.table.venue.slug);
-
-  emitStaffEvent(venueId, { kind: "ORDER_CREATED", tableCode, tag: `order_new:${order.id}` });
-
-  const sections = order.items.map((it) => it.menuItem.category.section as MenuSection);
-  const hasHookah = sections.includes("HOOKAH");
-  const hasNonHookah = sections.some((s) => s !== "HOOKAH");
-
-  const roles: StaffRole[] = ["MANAGER"];
-  if (hasHookah) roles.push("HOOKAH");
-  if (hasNonHookah) roles.push("WAITER");
-
-  await pushToVenueRoles(venueId, Array.from(new Set(roles)), {
-    title: "Новый заказ",
-    body: `Стол ${tableCode}`,
-    url: "/staff/orders",
-    tag: `order_new:${order.id}`,
-    ts: Date.now(),
-    kind: "ORDER_CREATED",
-    tableCode,
-    venueId,
-    venueSlug,
-    vibrate: [240, 120, 240, 120, 360],
-  });
-}
-
 export async function notifyCallCreated(callId: string) {
   const call = await prisma.staffCall.findUnique({
     where: { id: callId },
@@ -168,21 +123,21 @@ export async function notifyCallCreated(callId: string) {
   const messagePreview = normalizeCallMessage(call.type, call.message);
   const isMessageOnly = call.type === "HELP" && !!messagePreview;
 
+  // Hookah masters (and the hookah-zone iPad) get hookah calls only;
+  // everything else (order requests, the bill, guest messages) is the
+  // waiters'. The manager hears all of it.
+  const isHookahCall = call.type === "HOOKAH" && !isOrderRequest;
+  const roles: StaffRole[] = isHookahCall ? ["MANAGER", "HOOKAH", "HOOKAH_ZONE"] : ["MANAGER", "WAITER"];
+
   // Emit SSE with the SAME kind the push uses, so the in-app alert plays the
   // right tone (a guest message sounds different from a service call).
   emitStaffEvent(venueId, {
     kind: isOrderRequest ? "ORDER_CREATED" : isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
     tableCode,
     tag: `call_new:${call.id}`,
+    roles,
   });
-
-  // An order request is taken by a waiter (manager is always notified too); a
-  // plain guest message goes to waiter + hookah.
-  const roles: StaffRole[] = ["MANAGER"];
-  if (isOrderRequest) roles.push("WAITER");
-  else if (call.type === "HOOKAH") roles.push("HOOKAH");
-  else if (call.type === "BILL") roles.push("WAITER");
-  else roles.push("WAITER", "HOOKAH");
+  emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
   const kind =
     call.type === "HOOKAH"
@@ -203,7 +158,7 @@ export async function notifyCallCreated(callId: string) {
     ? `${kind} • Стол ${tableCode} • ${messagePreview}`
     : `${kind} • Стол ${tableCode}`;
 
-  await pushToVenueRoles(venueId, Array.from(new Set(roles)), {
+  const payload: PushPayload = {
     title,
     body,
     url: isOrderRequest ? "/staff/orders" : "/staff/calls",
@@ -215,7 +170,13 @@ export async function notifyCallCreated(callId: string) {
     venueId,
     venueSlug,
     vibrate: isMessageOnly ? [420, 140, 420, 140, 560] : [320, 140, 320, 140, 420],
-  });
+  };
+
+  // The hookah-zone iPad opens its own station screen, everyone else Calls.
+  await Promise.all([
+    pushToVenueRoles(venueId, roles.filter((role) => role !== "HOOKAH_ZONE"), payload),
+    isHookahCall ? pushToVenueRoles(venueId, ["HOOKAH_ZONE"], { ...payload, url: "/staff/station" }) : null,
+  ]);
 }
 
 export async function notifyPaymentRequested(paymentRequestId: string) {
@@ -240,7 +201,9 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
     kind: "PAYMENT_REQUESTED",
     tableCode: publicTableCode(pr.table.code),
     tag: `payment_pending:${pr.id}`,
+    roles: ["WAITER", "MANAGER"],
   });
+  emitStaffEvent(pr.table.venueId, { kind: "DATA_CHANGED" });
 
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
     title: "Запрос оплаты",
@@ -278,7 +241,9 @@ export async function notifyPaymentMethodChanged(paymentRequestId: string) {
     kind: "PAYMENT_REQUESTED",
     tableCode,
     tag: `payment_method:${pr.id}`,
+    roles: ["WAITER", "MANAGER"],
   });
+  emitStaffEvent(pr.table.venueId, { kind: "DATA_CHANGED" });
 
   await pushToVenueRoles(pr.table.venueId, ["WAITER", "MANAGER"], {
     title: "Способ оплаты изменён",

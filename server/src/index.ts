@@ -12,6 +12,7 @@ import { callsRouter } from "./modules/calls/calls.routes";
 import { paymentsRouter } from "./modules/payments/payments.routes";
 import { ratingsRouter } from "./modules/ratings/ratings.routes";
 import { staffRouter } from "./modules/staff/staff.router";
+import { startTicketReminders } from "./modules/staff/tickets.service";
 
 const app = express();
 
@@ -79,6 +80,9 @@ app.use(errorHandler);
 
 app.listen(env.PORT, () => {
   console.log(`✅ API running on http://localhost:${env.PORT}`);
+
+  // Re-alert stations about tickets nobody has accepted yet.
+  startTicketReminders();
 
   // Make a misconfigured push setup visible at boot: without VAPID keys,
   // web-push silently no-ops (SSE + polling still work) and staff get no

@@ -1,39 +1,85 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   connectOrderRequest,
   dismissOrderRequest,
   listOrderRequests,
-  listOrders,
-  updateOrderStatus,
-  type StaffOrder,
+  listTickets,
+  moveTicket,
   type StaffOrderRequest,
+  type StationTicket,
+  type TicketAction,
 } from "@/lib/staffApi";
+import type { StaffRole } from "@/providers/staffSession";
+import { useStaffSession } from "@/providers/staffSession";
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useStaffEvents } from "@/lib/useStaffEvents";
-import { emitStaffLiveSync } from "@/lib/staffLiveSync";
-import { WaitBadge, TONE_BORDER, waitInfo, queueCardBase } from "@/lib/staffQueue";
+import { emitStaffLiveSync, subscribeStaffLiveSync } from "@/lib/staffLiveSync";
+import { WaitBadge, TONE_BORDER, waitInfo } from "@/lib/staffQueue";
+import { canCancelItems, canDeliver, canPrepare, canTakeOrderRequests } from "@/lib/staffRoles";
 import { OrderComposer } from "@/components/staff/OrderComposer";
+import { TicketCard } from "@/components/staff/TicketCard";
+import { CancelItemSheet, type CancelTarget } from "@/components/staff/CancelItemSheet";
 
 /**
- * The whole order lifecycle lives on this one screen, two taps end to end:
+ * Everything about orders on one screen, most urgent first, one button per card:
  *
- *   Новые    →  «Принять»  (guest sees "waiter is on the way")
- *            →  «Подключиться к столу» → sheet → «Сохранить заказ»
- *   Принятые →  «Готово»   (guest can now pay)
+ *   Официант    К выдаче («Выдано») → Заявки гостей → Готовится (только статус)
+ *   Кальянщик   Новые («Принять») → К выдаче («Выдано») → Готовится («Готово»)
+ *   Менеджер    Заявки → Не приняты → Готовится → К выдаче → Выданы; ✕ = отмена
  */
 
-type Tab = "new" | "accepted";
+const ACTION_LABEL: Record<TicketAction, string> = {
+  accept: "Принять",
+  ready: "Готово",
+  served: "Выдано",
+};
 
-const card =
-  "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
-const btnPrimary =
-  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
-const btnAccent =
-  "h-12 w-full rounded-2xl bg-emerald-400 text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
+function nextAction(role: StaffRole | undefined, ticket: StationTicket): TicketAction | null {
+  if (ticket.status === "NEW") return canPrepare(role, ticket.station) ? "accept" : null;
+  if (ticket.status === "ACCEPTED") return canPrepare(role, ticket.station) ? "ready" : null;
+  if (ticket.status === "READY") return canDeliver(role, ticket.station) ? "served" : null;
+  return null;
+}
+
+const byTime = (field: "createdAt" | "readyAt") => (a: StationTicket, b: StationTicket) =>
+  new Date(a[field] ?? a.createdAt).getTime() - new Date(b[field] ?? b.createdAt).getTime();
+
+type Block = { kind: "tickets"; key: string; title: string; tickets: StationTicket[] } | { kind: "requests" };
+
+function layoutFor(role: StaffRole | undefined, tickets: StationTicket[]): Block[] {
+  const of = (status: StationTicket["status"]) => tickets.filter((ticket) => ticket.status === status);
+  const fresh = of("NEW").sort(byTime("createdAt"));
+  const cooking = of("ACCEPTED").sort(byTime("createdAt"));
+  const ready = of("READY").sort(byTime("readyAt"));
+
+  if (role === "WAITER") {
+    return [
+      { kind: "tickets", key: "ready", title: "К выдаче", tickets: ready },
+      { kind: "requests" },
+      { kind: "tickets", key: "cooking", title: "Готовится", tickets: [...fresh, ...cooking].sort(byTime("createdAt")) },
+    ];
+  }
+
+  if (role === "HOOKAH") {
+    return [
+      { kind: "tickets", key: "new", title: "Новые", tickets: fresh },
+      { kind: "tickets", key: "ready", title: "К выдаче", tickets: ready },
+      { kind: "tickets", key: "cooking", title: "Готовится", tickets: cooking },
+      { kind: "tickets", key: "cancelled", title: "Отменены", tickets: of("CANCELLED") },
+    ];
+  }
+
+  return [
+    { kind: "requests" },
+    { kind: "tickets", key: "new", title: "Не приняты", tickets: fresh },
+    { kind: "tickets", key: "cooking", title: "Готовится", tickets: cooking },
+    { kind: "tickets", key: "ready", title: "К выдаче", tickets: ready },
+  ];
+}
 
 type ComposerTarget = {
   tableId: number;
@@ -42,72 +88,83 @@ type ComposerTarget = {
   requestId: string;
 };
 
+const sectionTitle = "px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45";
+
 export default function StaffOrdersPage() {
   const { push } = useToast();
+  const { staff } = useStaffSession();
+  const role = staff?.role;
+  const takesRequests = canTakeOrderRequests(role);
+  const isManager = canCancelItems(role);
 
-  const [tab, setTab] = useState<Tab>("new");
   const [requests, setRequests] = useState<StaffOrderRequest[]>([]);
-  const [orders, setOrders] = useState<StaffOrder[]>([]);
+  const [tickets, setTickets] = useState<StationTicket[]>([]);
+  const [served, setServed] = useState<StationTicket[] | null>(null);
+  const [showServed, setShowServed] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [composer, setComposer] = useState<ComposerTarget | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
 
-  // Live clock so the waiting badges tick between polls.
+  // Live clock so the waiting times tick between polls.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 15000);
     return () => window.clearInterval(timer);
   }, []);
 
-  const load = useCallback(async (opts?: { silent?: boolean }) => {
-    const silent = opts?.silent ?? false;
-    if (!silent) setLoading(true);
-
-    const [requestsResult, ordersResult] = await Promise.all([
-      listOrderRequests(),
-      listOrders("IN_PROGRESS"),
+  const load = useCallback(async () => {
+    const [requestsResult, ticketsResult, servedResult] = await Promise.all([
+      takesRequests ? listOrderRequests() : Promise.resolve(null),
+      listTickets("active"),
+      showServed ? listTickets("served") : Promise.resolve(null),
     ]);
 
-    if (!silent) setLoading(false);
+    setLoaded(true);
 
-    if (!requestsResult.ok) {
-      setErr(requestsResult.error);
+    if (!ticketsResult.ok) {
+      setErr(ticketsResult.status === 409 ? null : ticketsResult.error);
+      if (ticketsResult.status === 409) {
+        setTickets([]);
+        setRequests([]);
+      }
       return;
     }
-    setErr(null);
-    setRequests(requestsResult.data.requests);
-    if (ordersResult.ok) setOrders(ordersResult.data.orders);
-  }, []);
 
-  const { tick } = usePolling(() => load({ silent: true }), {
+    setErr(null);
+    setTickets(ticketsResult.data.tickets);
+    if (requestsResult?.ok) setRequests(requestsResult.data.requests);
+    if (servedResult?.ok) setServed(servedResult.data.tickets);
+  }, [takesRequests, showServed]);
+
+  const { tick } = usePolling(() => load(), {
     activeMs: 8000,
     idleMs: 20000,
     immediate: false,
-    enabled: true,
+    enabled: !!staff,
   });
 
   useEffect(() => {
-    void load({ silent: false });
-  }, [load]);
+    if (staff) void load();
+  }, [staff, load]);
 
-  useStaffPushEvents((payload) => {
-    if (payload.kind === "ORDER_CREATED" || payload.kind === "CALL_CREATED") void tick();
-  });
+  useStaffPushEvents(() => void tick());
+  useStaffEvents(() => void tick());
+  useEffect(() => subscribeStaffLiveSync(() => void tick()), [tick]);
 
-  useStaffEvents((e) => {
-    if (e.kind === "ORDER_CREATED" || e.kind === "CALL_CREATED" || e.kind === "DATA_CHANGED") void tick();
-  });
+  const run = async (ticket: StationTicket, action: TicketAction) => {
+    setBusyId(ticket.id);
+    const result = await moveTicket(ticket.id, action);
+    setBusyId(null);
 
-  // Oldest first — whoever waited longest is served first.
-  const sortedRequests = useMemo(
-    () => [...requests].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
-    [requests]
-  );
-  const sortedOrders = useMemo(
-    () => [...orders].sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()),
-    [orders]
-  );
+    if (!result.ok) {
+      push({ kind: "error", title: "Ошибка", message: result.error });
+    } else {
+      emitStaffLiveSync(`ticket-${action}`);
+    }
+    await load();
+  };
 
   const accept = async (request: StaffOrderRequest) => {
     setBusyId(request.id);
@@ -119,10 +176,10 @@ export default function StaffOrdersPage() {
       return;
     }
 
-    // Guest instantly sees "waiter is on the way"; the card stays put and now
+    // The guest instantly sees "waiter is on the way"; the card stays and now
     // offers the next step.
     emitStaffLiveSync("order-request-accepted");
-    await load({ silent: true });
+    await load();
   };
 
   const dismiss = async (request: StaffOrderRequest) => {
@@ -136,207 +193,172 @@ export default function StaffOrdersPage() {
     }
 
     emitStaffLiveSync("order-request-dismissed");
-    await load({ silent: true });
+    await load();
   };
 
-  const markReady = async (order: StaffOrder) => {
-    setBusyId(order.id);
-    const result = await updateOrderStatus(order.id, "DELIVERED");
-    setBusyId(null);
+  const sortedRequests = [...requests].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
 
-    if (!result.ok) {
-      push({ kind: "error", title: "Ошибка", message: result.error });
-      return;
-    }
-
-    push({ kind: "success", title: "Готово", message: `Стол ${order.table.code} — гость может оплатить.` });
-    emitStaffLiveSync("order-delivered");
-    await load({ silent: true });
+  const ticketCard = (ticket: StationTicket) => {
+    const action = nextAction(role, ticket);
+    return (
+      <TicketCard
+        key={ticket.id}
+        ticket={ticket}
+        now={now}
+        showStation={role !== "HOOKAH"}
+        showStatus={!action}
+        action={
+          action
+            ? {
+                label: ACTION_LABEL[action],
+                tone: action === "accept" ? "primary" : "accent",
+                busy: busyId === ticket.id,
+                onClick: () => void run(ticket, action),
+              }
+            : null
+        }
+        onCancelLine={
+          isManager
+            ? (line) =>
+                setCancelTarget({
+                  orderId: line.orderId,
+                  itemId: line.id,
+                  name: line.name,
+                  qty: line.qty,
+                  tableCode: ticket.table.code,
+                })
+            : undefined
+        }
+      />
+    );
   };
 
-  const tabs: Array<{ key: Tab; label: string; count: number }> = [
-    { key: "new", label: "Новые", count: requests.length },
-    { key: "accepted", label: "Принятые", count: orders.length },
-  ];
+  const blocks = layoutFor(role, tickets);
+  const nothing = loaded && !err && tickets.length === 0 && (!takesRequests || requests.length === 0);
 
   return (
-    <div>
-      <div className={card}>
-        <div className="text-xl font-semibold text-white">Заказы</div>
+    <div className="space-y-4">
+      {err ? (
+        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">{err}</div>
+      ) : null}
 
-        <div className="mt-3 flex gap-1 rounded-2xl border border-white/10 bg-black/30 p-1">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={[
-                "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition",
-                t.key === tab ? "bg-white text-black" : "text-white/65",
-              ].join(" ")}
-            >
-              {t.label}
-              {t.count > 0 ? (
-                <span
-                  className={[
-                    "inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold leading-none",
-                    t.key === tab ? "bg-black/15 text-black" : "bg-white text-black",
-                  ].join(" ")}
-                >
-                  {t.count}
-                </span>
-              ) : null}
-            </button>
-          ))}
+      {!loaded ? <div className="text-sm text-white/60">Загрузка…</div> : null}
+
+      {nothing ? (
+        <div className="rounded-3xl border border-white/10 bg-white/[0.05] p-3.5 text-sm text-white/60">
+          Сейчас заказов нет.
         </div>
+      ) : null}
 
-        {err ? (
-          <div className="mt-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
-            {err}
-          </div>
-        ) : null}
-      </div>
-
-      {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
-
-      {tab === "new" ? (
-        <div className="mt-4 space-y-3">
-          {sortedRequests.map((request) => {
-            const accepted = request.status === "ACKED";
-            const busy = busyId === request.id;
-
-            return (
-              <div
-                key={request.id}
-                className={`${queueCardBase} ${TONE_BORDER[waitInfo(request.createdAt, now).tone]}`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-lg font-semibold text-white">Стол {request.table.code}</div>
-                      <WaitBadge createdAt={request.createdAt} now={now} />
-                    </div>
-                    <div className="mt-1 text-sm text-white/60">
-                      {request.session?.user ? request.session.user.name : "Гость без аккаунта"}
-                    </div>
-                  </div>
-
-                  {accepted ? (
-                    <span className="shrink-0 rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-200">
-                      Принят
-                    </span>
-                  ) : null}
-                </div>
-
-                {request.items && request.items.length > 0 ? (
-                  <div className="mt-3 space-y-1 rounded-2xl border border-white/10 bg-black/20 p-3">
-                    <div className="text-[10px] uppercase tracking-[0.16em] text-white/45">Гость выбрал</div>
-                    {request.items.map((item) => (
-                      <div key={item.menuItemId} className="flex justify-between gap-3 text-sm text-white/85">
-                        <span className="min-w-0 truncate">
-                          {item.name} × {item.qty}
-                        </span>
-                        <span className="shrink-0 text-white/55">{item.qty * item.priceCzk} Kč</span>
+      {blocks.map((block) => {
+        if (block.kind === "requests") {
+          if (!takesRequests || sortedRequests.length === 0) return null;
+          return (
+            <section key="requests" className="space-y-2">
+              <div className={sectionTitle}>Заявки гостей · {sortedRequests.length}</div>
+              {sortedRequests.map((request) => {
+                const taken = request.status === "ACKED";
+                const busy = busyId === request.id;
+                return (
+                  <div
+                    key={request.id}
+                    className={`rounded-3xl border bg-white/[0.05] p-3.5 ${TONE_BORDER[waitInfo(request.createdAt, now).tone]}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="text-lg font-bold text-white">Стол {request.table.code}</span>
+                        <WaitBadge createdAt={request.createdAt} now={now} />
                       </div>
-                    ))}
-                  </div>
-                ) : null}
+                      {taken ? (
+                        <span className="shrink-0 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-200">
+                          Вы идёте
+                        </span>
+                      ) : null}
+                    </div>
 
-                <div className="mt-4">
-                  {accepted ? (
-                    <>
+                    {request.items && request.items.length > 0 ? (
+                      <div className="mt-2 space-y-0.5 text-sm text-white/80">
+                        {request.items.map((item) => (
+                          <div key={item.menuItemId}>
+                            <span className="font-bold tabular-nums">{item.qty} ×</span> {item.name}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {taken ? (
+                      <>
+                        <button
+                          className="mt-3 h-11 w-full rounded-xl bg-emerald-400 text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() =>
+                            setComposer({
+                              tableId: request.table.id,
+                              tableCode: request.table.code,
+                              sessionId: request.session.id,
+                              requestId: request.id,
+                            })
+                          }
+                        >
+                          Пробить заказ
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void dismiss(request)}
+                          className="mt-2 w-full text-xs text-white/40 underline underline-offset-4 disabled:opacity-50"
+                        >
+                          {busy ? "…" : "Закрыть без заказа"}
+                        </button>
+                      </>
+                    ) : (
                       <button
-                        className={btnAccent}
+                        className="mt-3 h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50"
                         disabled={busy}
-                        onClick={() =>
-                          setComposer({
-                            tableId: request.table.id,
-                            tableCode: request.table.code,
-                            sessionId: request.session.id,
-                            requestId: request.id,
-                          })
-                        }
+                        onClick={() => void accept(request)}
                       >
-                        Подключиться к столу
+                        {busy ? "…" : "Иду к столу"}
                       </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void dismiss(request)}
-                        className="mt-2 w-full text-xs text-white/40 underline underline-offset-4 disabled:opacity-50"
-                      >
-                        {busy ? "…" : "Закрыть заявку без заказа"}
-                      </button>
-                    </>
-                  ) : (
-                    <button className={btnPrimary} disabled={busy} onClick={() => void accept(request)}>
-                      {busy ? "…" : "Принять"}
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-
-          {!loading && sortedRequests.length === 0 ? (
-            <div className={`${card} text-sm text-white/60`}>Новых заявок нет.</div>
-          ) : null}
-        </div>
-      ) : (
-        <div className="mt-4 space-y-3">
-          {sortedOrders.map((order) => {
-            const sum = order.items.reduce((acc, item) => acc + item.priceCzk * item.qty, 0);
-            const busy = busyId === order.id;
-
-            return (
-              <div
-                key={order.id}
-                className={`${queueCardBase} ${TONE_BORDER[waitInfo(order.updatedAt, now).tone]}`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-lg font-semibold text-white">Стол {order.table.code}</div>
-                      <WaitBadge createdAt={order.updatedAt} now={now} />
-                    </div>
-                    <div className="mt-1 text-sm text-white/60">
-                      {order.session?.user ? order.session.user.name : "Гость без аккаунта"}
-                    </div>
+                    )}
                   </div>
-                  <div className="shrink-0 text-lg font-semibold text-white">{sum} Kč</div>
-                </div>
+                );
+              })}
+            </section>
+          );
+        }
 
-                <div className="mt-3 space-y-1 rounded-2xl border border-white/10 bg-black/20 p-3">
-                  {order.items.map((item) => (
-                    <div key={item.id} className="flex justify-between gap-3 text-sm text-white/85">
-                      <span className="min-w-0 truncate">
-                        {item.menuItem.name} × {item.qty}
-                      </span>
-                      <span className="shrink-0 text-white/55">{item.priceCzk * item.qty} Kč</span>
-                    </div>
-                  ))}
-                </div>
+        if (block.tickets.length === 0) return null;
+        return (
+          <section key={block.key} className="space-y-2">
+            <div className={sectionTitle}>
+              {block.title} · {block.tickets.length}
+            </div>
+            {block.tickets.map(ticketCard)}
+          </section>
+        );
+      })}
 
-                {order.comment ? (
-                  <div className="mt-2 text-xs text-white/55">Комментарий: {order.comment}</div>
-                ) : null}
-
-                <button
-                  className={`${btnPrimary} mt-4`}
-                  disabled={busy}
-                  onClick={() => void markReady(order)}
-                >
-                  {busy ? "Сохраняем…" : "Готово"}
-                </button>
-              </div>
-            );
-          })}
-
-          {!loading && sortedOrders.length === 0 ? (
-            <div className={`${card} text-sm text-white/60`}>Сейчас ничего не готовится.</div>
-          ) : null}
-        </div>
-      )}
+      {isManager && loaded ? (
+        <section className="space-y-2">
+          <button
+            type="button"
+            onClick={() => {
+              setShowServed((value) => !value);
+              if (showServed) setServed(null);
+            }}
+            className="h-11 w-full rounded-xl border border-white/10 text-sm font-semibold text-white/70"
+          >
+            {showServed ? "Скрыть выданные" : "Выданные за смену"}
+          </button>
+          {showServed && served
+            ? served.length
+              ? served.map(ticketCard)
+              : <div className="px-1 text-sm text-white/50">Пока ничего не выдано.</div>
+            : null}
+        </section>
+      ) : null}
 
       {composer ? (
         <OrderComposer
@@ -348,12 +370,21 @@ export default function StaffOrdersPage() {
           onClose={() => setComposer(null)}
           onSaved={async () => {
             setComposer(null);
-            setTab("accepted");
             emitStaffLiveSync("order-created");
-            await load({ silent: true });
+            await load();
           }}
         />
       ) : null}
+
+      <CancelItemSheet
+        target={cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onDone={async () => {
+          setCancelTarget(null);
+          emitStaffLiveSync("order-item-cancelled");
+          await load();
+        }}
+      />
     </div>
   );
 }

@@ -46,6 +46,10 @@ const EnvSchema = z.object({
 	SMTP_FROM_EMAIL: z.string().optional(),
 	SMTP_FROM_NAME: z.string().optional(),
 
+	// A station ticket nobody has accepted re-alerts the station (and the
+	// manager) every this many minutes until someone taps «Принять».
+	TICKET_REMINDER_MINUTES: z.coerce.number().positive().default(2),
+
 	//Web Push
 	VAPID_SUBJECT: z.string().optional(),
 	VAPID_PUBLIC_KEY: z.string().optional(),

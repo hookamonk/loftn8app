@@ -312,13 +312,14 @@ staffMenuAdminRouter.delete(
 
     const existing = await prisma.menuItem.findFirst({
       where: { id, category: { venueId: venue.id } },
-      select: { id: true, _count: { select: { orderItems: true } } },
+      select: { id: true, _count: { select: { orderItems: true, cancellations: true } } },
     });
     if (!existing) throw new HttpError(404, "ITEM_NOT_FOUND", "Item not found");
 
-    // Items referenced by past orders can't be hard-deleted (would break order
-    // history / FK) — deactivate them instead so they leave the live menu.
-    if (existing._count.orderItems > 0) {
+    // Items referenced by past orders (or by a cancelled line) can't be
+    // hard-deleted (would break order history / FK) — deactivate them instead
+    // so they leave the live menu.
+    if (existing._count.orderItems > 0 || existing._count.cancellations > 0) {
       await prisma.menuItem.update({ where: { id }, data: { isActive: false } });
       invalidateMenuCache(venue.id);
       return res.json({ ok: true, softDeleted: true });

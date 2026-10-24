@@ -8,46 +8,26 @@ import { useStaffSession } from "@/providers/staffSession";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useStaffEvents } from "@/lib/useStaffEvents";
-import { fireInAppAlert, armAudio } from "@/lib/staffAlerts";
+import { fireInAppAlert, armAudio, isAlertKind } from "@/lib/staffAlerts";
 import { unsubscribePushOnLogout } from "@/lib/staffPush";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
+import { roleLabel } from "@/lib/staffRoles";
 
-function Badge({ value }: { value?: number }) {
-  if (!value || value <= 0) return null;
+type NavItem = { href: string; label: string; badge?: number; exact?: boolean };
 
-  return (
-    <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-white px-1.5 py-0.5 text-[11px] font-bold leading-none text-black">
-      {value}
-    </span>
-  );
-}
-
-function NavLink({
-  href,
-  label,
-  active,
-  badge,
-}: {
-  href: string;
-  label: string;
-  active: boolean;
-  badge?: number;
-}) {
+function NavTab({ item, active }: { item: NavItem; active: boolean }) {
+  const badge = item.badge ?? 0;
   return (
     <Link
-      href={href}
+      href={item.href}
       className={[
-        "whitespace-nowrap rounded-2xl border px-4 py-3 text-sm font-semibold transition",
-        "inline-flex items-center justify-center",
-        active
-          ? "border-white/20 bg-white text-black shadow-[0_8px_30px_rgba(255,255,255,0.12)]"
-          : "border-white/10 bg-white/5 text-white/75 hover:bg-white/10 hover:text-white",
+        "relative inline-flex h-10 min-w-0 flex-1 items-center justify-center rounded-xl px-1 text-sm font-semibold transition",
+        active ? "bg-white text-black" : "text-white/65 active:bg-white/10",
       ].join(" ")}
     >
-      <span>{label}</span>
-      {!active ? <Badge value={badge} /> : null}
-      {active && badge && badge > 0 ? (
-        <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-black/15 px-1.5 py-0.5 text-[11px] font-bold leading-none text-black">
+      <span className="truncate">{item.label}</span>
+      {badge > 0 ? (
+        <span className="absolute -right-0.5 -top-1.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold leading-none text-white ring-2 ring-[#07070a]">
           {badge}
         </span>
       ) : null}
@@ -55,22 +35,9 @@ function NavLink({
   );
 }
 
-function roleLabel(role?: string) {
-  if (role === "WAITER") return "Официант";
-  if (role === "HOOKAH") return "Кальянщик";
-  if (role === "MANAGER") return "Менеджер";
-  if (role === "ADMIN") return "Администратор";
-  return role ?? "Персонал";
-}
-
-function normalizeVenueName(name?: string | null, venueId?: number) {
-  if (!name) return venueId ? `Точка #${venueId}` : "Точка";
-
-  return name
-    .replace(/LoftN8/gi, "LOFT№8")
-    .replace(/Loft N8/gi, "LOFT№8")
-    .replace(/LOFT N8/gi, "LOFT№8")
-    .replace(/LOFT №8/gi, "LOFT№8");
+function shortVenueName(name?: string | null) {
+  if (!name) return "";
+  return name.replace(/^(LOFT\s*№\s*8|LoftN8|Loft N8|LOFT N8)\s*/i, "").trim();
 }
 
 export function StaffShell({ children }: { children: React.ReactNode }) {
@@ -102,9 +69,8 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   const isAdmin = staff?.role === "ADMIN";
   const isManager = staff?.role === "MANAGER";
   const isAdminPage = pathname.startsWith("/staff/admin");
-  // Poll the summary on every non-admin screen (including «Сводка») so the nav
-  // badges are always live — SSE ticks are no-ops when polling is disabled, and
-  // disabling it on the summary page made badges update only «через раз».
+  // Poll the summary on every non-admin screen so the nav badges are always
+  // live — SSE ticks are no-ops when polling is disabled.
   const shouldPollSummary = !isAdmin;
 
   const loadSummary = async () => {
@@ -116,11 +82,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
         // No open shift — surface it instead of silently showing zeros, so
         // staff understand why nothing appears.
         setNoShift(true);
-        setSummary({
-          newOrders: 0,
-          newCalls: 0,
-          pendingPayments: 0,
-        });
+        setSummary({ newOrders: 0, newCalls: 0, pendingPayments: 0 });
       }
       // Network/server failure — signal the poller so it backs off.
       if (r.status === undefined || r.status >= 500) {
@@ -141,27 +103,15 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   });
 
   useStaffPushEvents((payload) => {
-    if (
-      payload.kind === "CALL_CREATED" ||
-      payload.kind === "GUEST_MESSAGE" ||
-      payload.kind === "ORDER_CREATED" ||
-      payload.kind === "PAYMENT_REQUESTED"
-    ) {
-      void tick();
-    }
+    if (isAlertKind(payload.kind)) void tick();
   });
 
   // Realtime SSE channel — the reliable in-app signal while the dashboard is
-  // open, independent of (flaky) web-push. Refresh badges and beep on visible.
+  // open, independent of (flaky) web-push. The server already sends each alert
+  // only to the roles it concerns.
   useStaffEvents(
     (e) => {
-      if (
-        document.visibilityState === "visible" &&
-        (e.kind === "CALL_CREATED" ||
-          e.kind === "GUEST_MESSAGE" ||
-          e.kind === "ORDER_CREATED" ||
-          e.kind === "PAYMENT_REQUESTED")
-      ) {
+      if (document.visibilityState === "visible" && isAlertKind(e.kind)) {
         fireInAppAlert({ kind: e.kind, tableCode: e.tableCode ?? null, tag: e.tag ?? undefined });
       }
       void tick();
@@ -182,100 +132,52 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
     });
   }, [shouldPollSummary, tick]);
 
+  const nav: NavItem[] = isAdmin
+    ? [
+        { href: "/staff/admin", label: "Статистика", exact: true },
+        { href: "/staff/admin/menu", label: "Меню" },
+        { href: "/staff/admin/guests", label: "Гости" },
+      ]
+    : [
+        { href: "/staff/summary", label: "Смена" },
+        { href: "/staff/orders", label: "Заказы", badge: summary?.newOrders ?? 0 },
+        { href: "/staff/calls", label: "Вызовы", badge: summary?.newCalls ?? 0 },
+        { href: "/staff/tables", label: "Столы", badge: summary?.pendingPayments ?? 0 },
+      ];
+
   return (
     <div className="min-h-dvh bg-[#07070a] text-white">
-      <div className="pointer-events-none fixed inset-0 opacity-70">
-        <div className="absolute -top-40 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-white/10 blur-3xl" />
-        <div className="absolute -bottom-40 left-1/4 h-[420px] w-[420px] rounded-full bg-white/5 blur-3xl" />
-      </div>
-
-      <div className={`relative mx-auto p-4 pb-10 ${isAdminPage ? "max-w-7xl" : "max-w-md"}`}>
-        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
-          <div className="flex flex-col gap-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-[11px] tracking-[0.24em] text-white/45">LOFT№8 • ПЕРСОНАЛ</div>
-                <div className="mt-2 text-xl font-semibold">
-                  {isAdminPage ? "Администратор" : "Рабочая панель"}
-                </div>
-
-                {staff ? (
-                  <div className="mt-2 space-y-1">
-                    <div className="text-sm text-white/60">
-                      {staff.username} • {roleLabel(staff.role)}
-                    </div>
-                    <div className="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/85">
-                      Текущая точка: {normalizeVenueName(staff.venueName, staff.venueId)}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              <button
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
-                onClick={onLogout}
-              >
-                Выйти
-              </button>
+      <div className={`mx-auto p-4 pb-10 ${isAdminPage ? "max-w-7xl" : "max-w-md"}`}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-[11px] tracking-[0.18em] text-white/40">
+              LOFT№8{staff?.venueName ? ` · ${shortVenueName(staff.venueName)}` : ""}
             </div>
-
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {isAdmin ? (
-                <>
-                  <NavLink
-                    href="/staff/admin"
-                    label="Статистика"
-                    active={pathname === "/staff/admin"}
-                  />
-                  <NavLink
-                    href="/staff/admin/menu"
-                    label="Меню"
-                    active={pathname.startsWith("/staff/admin/menu")}
-                  />
-                  <NavLink
-                    href="/staff/admin/guests"
-                    label="Гости"
-                    active={pathname.startsWith("/staff/admin/guests")}
-                  />
-                </>
-              ) : (
-                <>
-                  <NavLink
-                    href="/staff/summary"
-                    label="Смена"
-                    active={pathname.startsWith("/staff/summary")}
-                  />
-                  <NavLink
-                    href="/staff/orders"
-                    label="Заказы"
-                    active={pathname.startsWith("/staff/orders")}
-                    badge={summary?.newOrders ?? 0}
-                  />
-                  <NavLink
-                    href="/staff/calls"
-                    label="Вызовы"
-                    active={pathname.startsWith("/staff/calls")}
-                    badge={summary?.newCalls ?? 0}
-                  />
-                  <NavLink
-                    href="/staff/tables"
-                    label="Столы"
-                    active={pathname.startsWith("/staff/tables")}
-                  />
-                </>
-              )}
-            </div>
+            <div className="text-xl font-semibold">{roleLabel(staff?.role)}</div>
           </div>
+
+          <button
+            className="h-9 shrink-0 rounded-xl border border-white/10 px-3 text-xs font-semibold text-white/65 active:bg-white/10"
+            onClick={onLogout}
+          >
+            Выйти
+          </button>
         </div>
 
+        <nav className="mt-3 flex gap-1 rounded-2xl border border-white/10 bg-white/[0.04] p-1">
+          {nav.map((item) => (
+            <NavTab
+              key={item.href}
+              item={item}
+              active={item.exact ? pathname === item.href : pathname.startsWith(item.href)}
+            />
+          ))}
+        </nav>
+
         {!isAdmin && noShift ? (
-          <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
-            <div className="font-semibold">Смена не открыта</div>
-            <div className="mt-1 text-amber-100/80">
-              {isManager
-                ? "Откройте смену в разделе «Смена», иначе новые заказы, вызовы и оплаты не приходят."
-                : "Дождитесь, пока менеджер откроет смену — до этого новые заказы и вызовы не приходят."}
-            </div>
+          <div className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">
+            <span className="font-semibold">Смена не открыта.</span>{" "}
+            {isManager ? "Откройте её в разделе «Смена»." : "Дождитесь, пока менеджер откроет смену."}
           </div>
         ) : null}
 

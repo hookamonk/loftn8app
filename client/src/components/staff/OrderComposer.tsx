@@ -7,15 +7,20 @@ import { getStaffVenueSlug } from "@/lib/venue";
 import { useStaffSession } from "@/providers/staffSession";
 import { useToast } from "@/providers/toast";
 import { useEscapeToClose } from "@/lib/useModalA11y";
+import { orderSectionsForRole } from "@/lib/staffRoles";
 import type { MenuCategory, MenuItem, MenuResponse, MenuSection } from "@/types";
 
 /**
  * Full-screen sheet for punching an order in at the table. Deliberately opened
  * IN PLACE (over the current tab) instead of navigating away, so the waiter
  * never loses the queue they came from and never has to find their way back.
+ *
+ * On save every line goes straight to its station: food → kitchen, drinks →
+ * bar, hookah → hookah zone. A line may carry a comment for the station
+ * (for a hookah: flavour and strength) — optional.
  */
 
-type DraftItem = { menuItemId: number; name: string; priceCzk: number; qty: number };
+type DraftItem = { menuItemId: number; name: string; priceCzk: number; qty: number; comment: string };
 
 const SECTION_LABEL: Record<MenuSection, string> = {
   DISHES: "Еда",
@@ -102,7 +107,6 @@ export function OrderComposer({
 
   const [menu, setMenu] = useState<MenuResponse | null>(null);
   const [items, setItems] = useState<DraftItem[]>([]);
-  const [comment, setComment] = useState("");
   const [section, setSection] = useState<MenuSection>("DISHES");
   const [catId, setCatId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
@@ -113,7 +117,6 @@ export function OrderComposer({
   useEffect(() => {
     if (!open) return;
     setItems([]);
-    setComment("");
     setSearch("");
   }, [open, tableId]);
 
@@ -157,10 +160,8 @@ export function OrderComposer({
 
   // A hookah master may only add hookah; a waiter only food and drinks.
   const categories = useMemo<MenuCategory[]>(() => {
-    const all = (menu?.categories ?? []).filter((c) => (c.items?.length ?? 0) > 0);
-    if (staff?.role === "HOOKAH") return all.filter((c) => c.section === "HOOKAH");
-    if (staff?.role === "WAITER") return all.filter((c) => c.section !== "HOOKAH");
-    return all;
+    const allowed = orderSectionsForRole(staff?.role);
+    return (menu?.categories ?? []).filter((c) => (c.items?.length ?? 0) > 0 && allowed.includes(c.section));
   }, [menu, staff]);
 
   const sections = useMemo(
@@ -188,14 +189,14 @@ export function OrderComposer({
   const visibleItems = useMemo(() => {
     const query = search.trim().toLowerCase();
     const source = query ? categories : activeCat ? [activeCat] : [];
-    const flat = source.flatMap((c) => c.items.map((i) => ({ ...i, categoryName: c.name })));
+    const flat = source.flatMap((c) => c.items.map((i) => ({ ...i, categoryName: c.name, section: c.section })));
     if (!query) return flat;
     return flat.filter((i) =>
       `${i.name} ${i.description ?? ""} ${i.categoryName}`.toLowerCase().includes(query)
     );
   }, [categories, activeCat, search]);
 
-  const qtyById = useMemo(() => new Map(items.map((i) => [i.menuItemId, i.qty])), [items]);
+  const draftById = useMemo(() => new Map(items.map((i) => [i.menuItemId, i])), [items]);
   const totalQty = items.reduce((sum, i) => sum + i.qty, 0);
   const totalCzk = items.reduce((sum, i) => sum + i.priceCzk * i.qty, 0);
 
@@ -207,8 +208,11 @@ export function OrderComposer({
         next[index] = { ...next[index], qty: next[index].qty + 1 };
         return next;
       }
-      return [...current, { menuItemId: item.id, name: item.name, priceCzk: item.priceCzk, qty: 1 }];
+      return [...current, { menuItemId: item.id, name: item.name, priceCzk: item.priceCzk, qty: 1, comment: "" }];
     });
+
+  const setLineComment = (menuItemId: number, comment: string) =>
+    setItems((current) => current.map((i) => (i.menuItemId === menuItemId ? { ...i, comment } : i)));
 
   const remove = (menuItemId: number) =>
     setItems((current) =>
@@ -225,8 +229,11 @@ export function OrderComposer({
       tableId,
       sessionId,
       requestId,
-      comment: comment.trim() || undefined,
-      items: items.map((i) => ({ menuItemId: i.menuItemId, qty: i.qty })),
+      items: items.map((i) => ({
+        menuItemId: i.menuItemId,
+        qty: i.qty,
+        comment: i.comment.trim() || undefined,
+      })),
     });
 
     setSaving(false);
@@ -236,7 +243,7 @@ export function OrderComposer({
       return;
     }
 
-    push({ kind: "success", title: "Заказ сохранён", message: `Стол ${tableCode} · ${totalCzk} Kč` });
+    push({ kind: "success", title: "Заказ отправлен", message: `Стол ${tableCode} · ${totalCzk} Kč` });
     onSaved();
   };
 
@@ -307,7 +314,8 @@ export function OrderComposer({
           {loading && !menu ? <div className="text-sm text-white/55">Загружаем меню…</div> : null}
 
           {visibleItems.map((item) => {
-            const qty = qtyById.get(item.id) ?? 0;
+            const draft = draftById.get(item.id);
+            const qty = draft?.qty ?? 0;
             return (
               <div
                 key={item.id}
@@ -328,6 +336,15 @@ export function OrderComposer({
                   </div>
                   <Qty qty={qty} onMinus={() => remove(item.id)} onPlus={() => add(item)} />
                 </div>
+                {draft ? (
+                  <input
+                    className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-white/25"
+                    placeholder={item.section === "HOOKAH" ? "Вкус, крепость (необязательно)" : "Комментарий (необязательно)"}
+                    value={draft.comment}
+                    maxLength={300}
+                    onChange={(e) => setLineComment(item.id, e.target.value)}
+                  />
+                ) : null}
               </div>
             );
           })}
@@ -338,15 +355,6 @@ export function OrderComposer({
             </div>
           ) : null}
 
-          {items.length ? (
-            <textarea
-              className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-white/35"
-              placeholder="Комментарий к заказу (необязательно)"
-              rows={2}
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-            />
-          ) : null}
         </div>
       </div>
 
@@ -365,7 +373,7 @@ export function OrderComposer({
             onClick={() => void save()}
             className="h-14 w-full rounded-2xl bg-white text-base font-semibold text-black transition active:scale-[0.99] disabled:opacity-40"
           >
-            {saving ? "Сохраняем…" : "Сохранить заказ"}
+            {saving ? "Отправляем…" : "Отправить заказ"}
           </button>
         </div>
       </div>

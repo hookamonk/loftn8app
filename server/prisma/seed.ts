@@ -3,6 +3,7 @@ import { applyMenuTranslations } from "./applyMenuTranslations";
 import bcrypt from "bcryptjs";
 import { defaultMenuCategoryDefinitions } from "../src/config/menuStructure";
 import { branchTables } from "../src/config/tables";
+import { upsertVenueStaffAccounts } from "./staffAccounts";
 
 const prisma = new PrismaClient();
 
@@ -21,34 +22,16 @@ const VENUES = [
 		slug: "zizkov",
 		name: "LOFT№8 Žižkov",
 		staffPrefix: "ZIZKOV",
-		legacyPrefix: null,
-		defaults: {
-			waiter: "zizkov_waiter",
-			hookah: "zizkov_hookah",
-			manager: "zizkov_manager",
-		},
 	},
 	{
 		slug: "garden",
 		name: "LOFT№8 Garden",
 		staffPrefix: "GARDEN",
-		legacyPrefix: null,
-		defaults: {
-			waiter: "garden_waiter",
-			hookah: "garden_hookah",
-			manager: "garden_manager",
-		},
 	},
 	{
 		slug: "nekazanka",
 		name: "LOFT№8 Nekázanka",
 		staffPrefix: "NEKAZANKA",
-		legacyPrefix: null,
-		defaults: {
-			waiter: "nekazanka_waiter",
-			hookah: "nekazanka_hookah",
-			manager: "nekazanka_manager",
-		},
 	},
 ] as const;
 
@@ -112,80 +95,20 @@ async function resolveSeedVenue(target: (typeof VENUES)[number]) {
 	});
 }
 
-function envOrFallback(
-	primary: string,
-	fallback: string | null,
-	defaultValue: string,
-) {
-	return (
-		process.env[primary] ||
-		(fallback ? process.env[fallback] : undefined) ||
-		defaultValue
-	);
-}
-
 async function seedVenueStaff(
 	venueId: number,
+	venueSlug: string,
 	staffPrefix: string,
-	defaults: { waiter: string; hookah: string; manager: string },
-	legacyPrefix: string | null,
 ) {
-	const waiterUser = envOrFallback(
-		`STAFF_${staffPrefix}_WAITER_USERNAME`,
-		legacyPrefix ? `STAFF_${legacyPrefix}_WAITER_USERNAME` : null,
-		defaults.waiter,
-	);
-	const waiterPass = envOrFallback(
-		`STAFF_${staffPrefix}_WAITER_PASSWORD`,
-		legacyPrefix ? `STAFF_${legacyPrefix}_WAITER_PASSWORD` : null,
-		`${defaults.waiter}_1234`,
-	);
-
-	const hookahUser = envOrFallback(
-		`STAFF_${staffPrefix}_HOOKAH_USERNAME`,
-		legacyPrefix ? `STAFF_${legacyPrefix}_HOOKAH_USERNAME` : null,
-		defaults.hookah,
-	);
-	const hookahPass = envOrFallback(
-		`STAFF_${staffPrefix}_HOOKAH_PASSWORD`,
-		legacyPrefix ? `STAFF_${legacyPrefix}_HOOKAH_PASSWORD` : null,
-		`${defaults.hookah}_1234`,
-	);
-
-	const managerUser = envOrFallback(
-		`STAFF_${staffPrefix}_MANAGER_USERNAME`,
-		legacyPrefix ? `STAFF_${legacyPrefix}_MANAGER_USERNAME` : null,
-		defaults.manager,
-	);
-	const managerPass = envOrFallback(
-		`STAFF_${staffPrefix}_MANAGER_PASSWORD`,
-		legacyPrefix ? `STAFF_${legacyPrefix}_MANAGER_PASSWORD` : null,
-		`${defaults.manager}_1234`,
-	);
-
-	const staffSeed: Array<{
-		role: "WAITER" | "HOOKAH" | "MANAGER";
-		username: string;
-		password: string;
-	}> = [
-		{ role: "WAITER", username: waiterUser, password: waiterPass },
-		{ role: "HOOKAH", username: hookahUser, password: hookahPass },
-		{ role: "MANAGER", username: managerUser, password: managerPass },
-	];
-
-	for (const s of staffSeed) {
-		const passwordHash = await bcrypt.hash(s.password, 10);
-		await prisma.staffUser.upsert({
-			where: { username: s.username },
-			update: { role: s.role as any, venueId, passwordHash, isActive: true },
-			create: {
-				role: s.role as any,
-				venueId,
-				username: s.username,
-				passwordHash,
-				isActive: true,
-			},
-		});
+	// Waiter, hookah, manager and the kitchen / bar / hookah-zone iPads.
+	const results = await upsertVenueStaffAccounts(prisma, {
+		venueId,
+		venueSlug,
+		envPrefix: staffPrefix,
+		allowDefaultPasswords: true,
+	});
+	for (const r of results.filter((row) => row.status === "skipped")) {
+		console.warn(`⚠️  ${venueSlug} ${r.label}: ${r.note}`);
 	}
 }
 
@@ -4178,12 +4101,7 @@ async function main() {
 	);
 
 	// ===== 5) STAFF =====
-	await seedVenueStaff(
-		venue.id,
-		baseVenueDef.staffPrefix,
-		baseVenueDef.defaults,
-		baseVenueDef.legacyPrefix,
-	);
+	await seedVenueStaff(venue.id, baseVenueDef.slug, baseVenueDef.staffPrefix);
 
 	for (const target of VENUES.filter(
 		(candidate) => candidate.slug !== baseVenueDef.slug,
@@ -4201,12 +4119,7 @@ async function main() {
 			targetCats,
 			menuByVenueSlug[targetVenue.slug] ?? nekazankaMenu,
 		);
-		await seedVenueStaff(
-			targetVenue.id,
-			target.staffPrefix,
-			target.defaults,
-			target.legacyPrefix,
-		);
+		await seedVenueStaff(targetVenue.id, target.slug, target.staffPrefix);
 	}
 
 	await seedAdmin();

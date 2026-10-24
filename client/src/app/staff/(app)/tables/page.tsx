@@ -9,7 +9,7 @@ import { useStaffEvents } from "@/lib/useStaffEvents";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 
 const card =
-  "rounded-[28px] border border-white/10 bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
+  "rounded-3xl border border-white/10 bg-white/[0.05] p-3.5";
 const btnGhost =
   "rounded-2xl border border-white/10 bg-transparent px-4 py-3 text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white";
 
@@ -124,7 +124,7 @@ export default function StaffTablesPage() {
             <Link
               key={entry.session.id}
               href={`/staff/tables/${entry.table.id}`}
-              className={`rounded-[24px] border bg-white/6 p-4 backdrop-blur-xl shadow-[0_14px_50px_rgba(0,0,0,0.4)] transition active:scale-[0.98] hover:bg-white/[0.09] ${s.ring}`}
+              className={`rounded-3xl border bg-white/[0.05] p-3.5 transition active:scale-[0.98] hover:bg-white/[0.09] ${s.ring}`}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="truncate text-lg font-bold text-white">

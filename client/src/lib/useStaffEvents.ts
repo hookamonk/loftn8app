@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import type { StaffAlertKind } from "@/lib/staffAlerts";
 
 export type StaffRealtimeEvent = {
-  kind: "CALL_CREATED" | "GUEST_MESSAGE" | "ORDER_CREATED" | "PAYMENT_REQUESTED" | "DATA_CHANGED";
+  kind: StaffAlertKind | "DATA_CHANGED";
   venueId: number;
   at: number;
   tableCode?: string | null;
@@ -23,9 +24,9 @@ type Listener = (e: StaffRealtimeEvent) => void;
  * cap (after which new SSE silently fails to connect). The connection opens on
  * the first subscriber and closes when the last one unmounts.
  *
- * The stream is already venue-scoped on the server (the SSE connection is bound
- * to the staff member's venue via their session cookie), so only this branch's
- * events arrive here.
+ * The stream is already venue- and role-scoped on the server (the SSE
+ * connection is bound to the staff member's venue and role via their session
+ * cookie), so only this branch's events meant for this account arrive here.
  */
 const listeners = new Set<Listener>();
 let es: EventSource | null = null;

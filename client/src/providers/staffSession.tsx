@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import { STAFF_VENUE_CHANGE_EVENT } from "@/lib/venue";
 
-export type StaffRole = "WAITER" | "HOOKAH" | "MANAGER" | "ADMIN";
+export type StaffRole = "WAITER" | "HOOKAH" | "MANAGER" | "ADMIN" | "KITCHEN" | "BAR" | "HOOKAH_ZONE";
 
 export type StaffSession = {
   id: string;

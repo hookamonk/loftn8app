@@ -37,4 +37,4 @@ export function WaitBadge({ createdAt, now }: { createdAt: string; now: number }
 
 // Card base without a border-color, so callers can apply an urgency border.
 export const queueCardBase =
-  "rounded-[28px] border bg-white/6 p-4 backdrop-blur-xl shadow-[0_20px_80px_rgba(0,0,0,0.45)]";
+  "rounded-3xl border bg-white/[0.05] p-3.5";

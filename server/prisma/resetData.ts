@@ -2,9 +2,10 @@
  * Fresh-start data reset.
  *
  * Wipes all runtime / user data (guest accounts, sessions, shifts, orders,
- * calls, payments, loyalty, ratings, OTP codes, staff push subscriptions) so
- * the app behaves like brand new — WITHOUT touching configuration that the app
- * needs to run: venues, tables, menu categories/items and staff logins.
+ * station tickets, calls, payments, loyalty, ratings, OTP codes, staff push
+ * subscriptions) so the app behaves like brand new — WITHOUT touching
+ * configuration that the app needs to run: venues, tables, menu
+ * categories/items and staff logins.
  *
  * No cascade deletes exist in the schema, so rows are removed children-first
  * inside a single transaction. If any FK ordering is wrong the whole thing
@@ -60,7 +61,9 @@ async function main() {
     prisma.loyaltyTransaction.deleteMany({}),
     prisma.paymentConfirmation.deleteMany({}),
     prisma.paymentRequest.deleteMany({}),
+    prisma.orderItemCancellation.deleteMany({}),
     prisma.orderItem.deleteMany({}),
+    prisma.stationTicket.deleteMany({}),
     prisma.order.deleteMany({}),
     prisma.staffCall.deleteMany({}),
     prisma.rating.deleteMany({}),

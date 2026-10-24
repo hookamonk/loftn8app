@@ -1,10 +1,36 @@
+export type StaffAlertKind =
+  | "ORDER_CREATED"
+  | "CALL_CREATED"
+  | "GUEST_MESSAGE"
+  | "PAYMENT_REQUESTED"
+  | "TICKET_NEW"
+  | "TICKET_REMINDER"
+  | "TICKET_READY"
+  | "TICKET_CANCELLED";
+
+const ALERT_KINDS = new Set<string>([
+  "ORDER_CREATED",
+  "CALL_CREATED",
+  "GUEST_MESSAGE",
+  "PAYMENT_REQUESTED",
+  "TICKET_NEW",
+  "TICKET_REMINDER",
+  "TICKET_READY",
+  "TICKET_CANCELLED",
+]);
+
+/** Everything except plain "refresh" events makes a sound. */
+export function isAlertKind(kind?: string | null): kind is StaffAlertKind {
+  return !!kind && ALERT_KINDS.has(kind);
+}
+
 export type StaffPushPayload = {
   title?: string;
   body?: string;
   url?: string;
   tag?: string;
   ts?: number;
-  kind?: "ORDER_CREATED" | "CALL_CREATED" | "GUEST_MESSAGE" | "PAYMENT_REQUESTED";
+  kind?: StaffAlertKind;
   message?: string | null;
   tableCode?: string | null;
   venueId?: number | null;
@@ -34,7 +60,16 @@ export async function primeAlerts(): Promise<void> {
   if (!ctx) return;
 
   try {
-    if (ctx.state === "suspended") await ctx.resume();
+    // iOS/iPadOS 16.4+: play alerts even when the ringer switch is on silent —
+    // a station iPad must never go quiet because of a side switch.
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session) session.type = "playback";
+  } catch {
+    // ignore
+  }
+
+  try {
+    if (ctx.state !== "running") await ctx.resume();
 
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -53,6 +88,15 @@ export async function primeAlerts(): Promise<void> {
 
 export async function armAudio(): Promise<void> {
   return primeAlerts();
+}
+
+/**
+ * Browsers only allow sound after a tap, and iOS suspends audio again when the
+ * app goes to the background. Screens that must be heard check this and ask
+ * for one tap when it is false.
+ */
+export function isAudioArmed() {
+  return primed && audioCtx?.state === "running";
 }
 
 export function vibrate(pattern: number[] = [160, 80, 160]) {
@@ -97,18 +141,27 @@ function shouldFire(payload?: StaffPushPayload) {
   return true;
 }
 
-function tonePatternFor(payload?: StaffPushPayload) {
+function tonePatternFor(payload?: StaffPushPayload): { tones: number[]; gain: number } {
   switch (payload?.kind) {
     case "GUEST_MESSAGE":
-      return [1120, 920, 1120];
+      return { tones: [1120, 920, 1120], gain: 0.22 };
     case "CALL_CREATED":
-      return [1040, 860, 1040];
+      return { tones: [1040, 860, 1040], gain: 0.22 };
     case "PAYMENT_REQUESTED":
-      return [780, 780, 980];
+      return { tones: [780, 780, 980], gain: 0.22 };
     case "ORDER_CREATED":
-      return [860, 980, 860];
+      return { tones: [860, 980, 860], gain: 0.22 };
+    case "TICKET_NEW":
+      return { tones: [880, 1175, 880, 1175], gain: 0.4 };
+    // Seatbelt chime: insistent, unmistakable, repeats until accepted.
+    case "TICKET_REMINDER":
+      return { tones: [1320, 1320, 1320, 1320, 1320, 1320], gain: 0.5 };
+    case "TICKET_READY":
+      return { tones: [660, 880, 1100], gain: 0.3 };
+    case "TICKET_CANCELLED":
+      return { tones: [990, 740, 520], gain: 0.35 };
     default:
-      return [920, 860, 1020];
+      return { tones: [920, 860, 1020], gain: 0.22 };
   }
 }
 
@@ -118,7 +171,7 @@ export function beep(payload?: StaffPushPayload) {
     if (!ctx) return;
     if (!primed || ctx.state === "suspended") return;
 
-    const tones = tonePatternFor(payload);
+    const { tones, gain: peak } = tonePatternFor(payload);
 
     tones.forEach((freq, index) => {
       const startAt = ctx.currentTime + index * 0.18;
@@ -131,7 +184,7 @@ export function beep(payload?: StaffPushPayload) {
       osc.frequency.setValueAtTime(freq, startAt);
 
       gain.gain.setValueAtTime(0.0001, startAt);
-      gain.gain.exponentialRampToValueAtTime(0.22, startAt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(peak, startAt + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, endAt);
 
       osc.connect(gain);

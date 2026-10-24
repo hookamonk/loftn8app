@@ -13,21 +13,14 @@ import { usePolling } from "@/lib/usePolling";
 import { useStaffSession } from "@/providers/staffSession";
 import { useToast } from "@/providers/toast";
 import { NotificationSetup } from "@/components/staff/NotificationSetup";
+import { roleLabel } from "@/lib/staffRoles";
 
 const card =
-  "rounded-[28px] border border-white/10 bg-white/6 p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl";
+  "rounded-3xl border border-white/10 bg-white/[0.05] p-3.5";
 const btnPrimary =
-  "h-12 w-full rounded-2xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.99] disabled:opacity-50";
+  "h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition hover:bg-white/90 active:scale-[0.99] disabled:opacity-50";
 const btnGhost =
-  "h-12 w-full rounded-2xl border border-white/10 bg-transparent text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50";
-
-function roleLabel(role?: string) {
-  if (role === "WAITER") return "Официант";
-  if (role === "HOOKAH") return "Кальянщик";
-  if (role === "MANAGER") return "Менеджер";
-  if (role === "ADMIN") return "Администратор";
-  return role ?? "Персонал";
-}
+  "h-11 w-full rounded-xl border border-white/10 bg-transparent text-sm font-semibold text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50";
 
 export default function StaffShiftPage() {
   const { staff } = useStaffSession();

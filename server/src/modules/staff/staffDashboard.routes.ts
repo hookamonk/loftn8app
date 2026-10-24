@@ -6,14 +6,13 @@ import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
 import { requireStaffAuth } from "./staff.middleware";
 import { effectiveAvailableAt, nextPragueMidnight, summarizeLoyalty } from "../../utils/loyalty";
-import { notifyOrderCreated, notifyPaymentRequested } from "../staff/push.service";
+import { notifyPaymentRequested } from "../staff/push.service";
 import { ORDER_REQUEST_MARKER, isOrderRequestMessage } from "../orders/orderRequest";
 import {
   latestLegacyPaymentCutoff,
   paidQtyByOrderItemId,
   parsePaymentItemsJson,
 } from "../payments/paymentAllocation";
-import { publicTableCode } from "../../config/venues";
 import { getOpenShiftOrThrow } from "./shiftCache";
 import { addStaffClient, emitStaffEvent } from "./staffEvents";
 import { emitGuestEvent } from "../guest/guestEvents";
@@ -22,22 +21,29 @@ import {
   notifyGuestPayment,
   notifyGuestsBillIssued,
   notifyGuestsOrderCreated,
-  notifyGuestsOrderItemCancelled,
-  notifyGuestsOrderStatus,
 } from "../guest/guestPush.service";
 import {
   expireGuestSessionIfInactiveAfterPayment,
   getGuestSessionClosureState,
 } from "../guest/sessionExpiry";
-import type {
-  Prisma,
-  CallType,
-  CallStatus,
-  OrderStatus,
-  PaymentStatus,
-  StaffRole,
-  MenuSection,
-} from "@prisma/client";
+import type { Prisma, CallType, CallStatus, OrderStatus, PaymentStatus, StaffRole } from "@prisma/client";
+import {
+  callTypesForRole,
+  canHandlePayments,
+  canTakeOrderRequests,
+  canWorkTables,
+  orderSectionsForRole,
+} from "./roles";
+import { toPublicTable } from "./tableView";
+import { staffCallMessage } from "../calls/hookahReasons";
+import {
+  announceOrderStatus,
+  cancelOrderLine,
+  createStationTickets,
+  notifyTicketsCreated,
+  refreshOrderStatus,
+  ticketCountsForRole,
+} from "./tickets.service";
 
 export const staffDashboardRouter = Router();
 staffDashboardRouter.use(requireStaffAuth);
@@ -50,6 +56,7 @@ const IdParamSchema = z.object({
 // receives "refresh now" events instantly; polling remains as a fallback.
 staffDashboardRouter.get("/events", (req, res) => {
   const venueId = req.staff!.venueId;
+  const role = req.staff!.role;
 
   res.status(200);
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -64,7 +71,7 @@ staffDashboardRouter.get("/events", (req, res) => {
   res.write("retry: 3000\n\n");
   res.write(`event: ready\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
 
-  const remove = addStaffClient(venueId, res);
+  const remove = addStaffClient(venueId, role, res);
 
   req.on("close", () => {
     remove();
@@ -74,12 +81,8 @@ staffDashboardRouter.get("/events", (req, res) => {
 
 // A guest tapping "Call the waiter" in the menu IS the request to order: staff
 // accept it under Orders, walk to the table and punch the order in there. Only
-// plain service calls (hookah / free-text message / bill) stay under Calls.
-function callTypesForRole(role: StaffRole): CallType[] {
-  if (role === "WAITER") return ["BILL", "HELP"];
-  if (role === "HOOKAH") return ["HOOKAH", "HELP"];
-  return ["HOOKAH", "BILL", "HELP"];
-}
+// plain service calls (hookah / free-text message / bill) stay under Calls —
+// see callTypesForRole in roles.ts for who answers which.
 
 /** Everything that shows up in the staff "Orders" tab as an incoming request. */
 function orderRequestWhere(): Prisma.StaffCallWhereInput {
@@ -95,12 +98,6 @@ function isOrderRequestCall(call: { type: CallType; message: string | null }) {
   return call.type === "WAITER" || isOrderRequestMessage(call.message);
 }
 
-function orderSectionsForRole(role: StaffRole): MenuSection[] | null {
-  if (role === "HOOKAH") return ["HOOKAH"];
-  if (role === "WAITER") return ["DISHES", "DRINKS"];
-  return null;
-}
-
 function excludeOrderRequestMarker(): Prisma.StaffCallWhereInput {
   return {
     OR: [
@@ -114,17 +111,10 @@ function excludeOrderRequestMarker(): Prisma.StaffCallWhereInput {
   };
 }
 
-function toPublicTable<T extends { code: string; label: string | null }>(table: T): T {
-  const publicCode = publicTableCode(table.code);
-  return {
-    ...table,
-    code: table.label?.trim() || publicCode,
-    label: table.label && table.label.trim() && table.label.trim() !== publicCode ? table.label : null,
-  };
-}
-
-function canCreateSettlement(role: StaffRole) {
-  return role === "WAITER" || role === "MANAGER" || role === "ADMIN";
+function forbidStations(role: StaffRole) {
+  if (!canWorkTables(role)) {
+    throw new HttpError(403, "FORBIDDEN", "Недоступно для этого аккаунта");
+  }
 }
 
 function disconnectBlockedReason() {
@@ -250,20 +240,19 @@ async function getActiveTableSessionOrThrow(params: {
   return session;
 }
 
-async function createOrAppendTableOrder(
-  tx: typeof prisma,
+/**
+ * The table's open order for this shift (an add-on is appended to it), or a
+ * new one. Lines are added afterwards by createStationTickets, one ticket per
+ * station, and the status is then derived from those tickets.
+ */
+async function upsertOpenTableOrder(
+  tx: Prisma.TransactionClient,
   params: {
     tableId: number;
     sessionId: string;
     userId?: string | null;
     shiftId?: string | null;
     comment?: string | null;
-    items: Array<{
-      menuItemId: number;
-      qty: number;
-      comment?: string;
-      priceCzk: number;
-    }>;
   }
 ) {
   // Scope the "open order to append to" and the paid-through cutoff to the
@@ -271,7 +260,7 @@ async function createOrAppendTableOrder(
   // this table can't be merged into (and re-billed on) the current session.
   const shiftScope = params.shiftId ? { session: { shiftId: params.shiftId } } : {};
 
-  const latestConfirmedPayment = await (tx as any).paymentRequest.findFirst({
+  const latestConfirmedPayment = await tx.paymentRequest.findFirst({
     where: {
       tableId: params.tableId,
       status: "CONFIRMED",
@@ -319,13 +308,9 @@ async function createOrAppendTableOrder(
       data: {
         sessionId: params.sessionId,
         userId: params.userId ?? null,
-        status: "IN_PROGRESS",
         comment: mergedComment,
-        items: {
-          create: params.items,
-        },
       },
-      include: { items: true },
+      select: { id: true },
     });
   }
 
@@ -334,13 +319,10 @@ async function createOrAppendTableOrder(
       sessionId: params.sessionId,
       tableId: params.tableId,
       userId: params.userId ?? null,
-      status: "IN_PROGRESS",
-      comment: params.comment,
-      items: {
-        create: params.items,
-      },
+      status: "NEW",
+      comment: params.comment?.trim() || null,
     },
-    include: { items: true },
+    select: { id: true },
   });
 }
 
@@ -357,49 +339,39 @@ staffDashboardRouter.get(
     const types = callTypesForRole(role);
 
     const shift = await getActiveShiftOrThrow(venueId);
-    const sections = orderSectionsForRole(role);
 
-    const [newOrders, newCalls, pendingPayments] = await Promise.all([
-      // The "Orders" badge counts what still needs an action from THIS role:
-      // waiters/managers take incoming order requests, the hookah master only
-      // ever works his own in-progress orders.
-      role === "HOOKAH"
-        ? prisma.order.count({
-            where: {
-              status: { in: ["NEW", "ACCEPTED", "IN_PROGRESS"] },
-              table: { venueId },
-              session: { shiftId: shift.id },
-              ...(sections
-                ? { items: { some: { menuItem: { category: { section: { in: sections } } } } } }
-                : {}),
-            },
-          })
-        : prisma.staffCall.count({
+    const [orderRequests, tickets, newCalls, pendingPayments] = await Promise.all([
+      canTakeOrderRequests(role)
+        ? prisma.staffCall.count({
             where: {
               status: "NEW",
               ...orderRequestWhere(),
               table: { venueId },
               createdAt: { gte: shift.openedAt },
             },
-          }),
-      prisma.staffCall.count({
-        where: {
-          status: "NEW",
-          type: { in: types },
-          ...excludeOrderRequestMarker(),
-          table: { venueId },
-          session: { shiftId: shift.id },
-        },
-      }),
-      role === "HOOKAH"
-        ? Promise.resolve(0)
-        : prisma.paymentRequest.count({
+          })
+        : Promise.resolve(0),
+      ticketCountsForRole(venueId, shift.id, role),
+      types.length
+        ? prisma.staffCall.count({
+            where: {
+              status: "NEW",
+              type: { in: types },
+              ...excludeOrderRequestMarker(),
+              table: { venueId },
+              session: { shiftId: shift.id },
+            },
+          })
+        : Promise.resolve(0),
+      canHandlePayments(role)
+        ? prisma.paymentRequest.count({
             where: {
               status: "PENDING",
               table: { venueId },
               session: { shiftId: shift.id },
             },
-          }),
+          })
+        : Promise.resolve(0),
     ]);
 
     res.json({
@@ -408,7 +380,11 @@ staffDashboardRouter.get(
         id: shift.id,
         openedAt: shift.openedAt,
       },
-      newOrders,
+      // The "Orders" badge: everything waiting for an action from THIS role —
+      // guest order requests, tickets to accept, tickets to carry out.
+      newOrders: orderRequests + tickets.toAccept + tickets.toDeliver,
+      ticketsToAccept: tickets.toAccept,
+      ticketsToDeliver: tickets.toDeliver,
       newCalls,
       pendingPayments,
     });
@@ -416,72 +392,6 @@ staffDashboardRouter.get(
 );
 
 // ORDERS
-staffDashboardRouter.get(
-  "/orders",
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const role = req.staff!.role;
-    const status = (req.query.status as OrderStatus | undefined) ?? "NEW";
-
-    const shift = await getActiveShiftOrThrow(venueId);
-    const sections = orderSectionsForRole(role);
-
-    const where: any = {
-      table: { venueId },
-      session: { shiftId: shift.id },
-    };
-
-    if (status === "IN_PROGRESS") {
-      where.status = { in: ["NEW", "ACCEPTED", "IN_PROGRESS"] };
-    } else {
-      where.status = status;
-    }
-
-    if (sections) {
-      where.items = {
-        some: {
-          menuItem: { category: { section: { in: sections } } },
-        },
-      };
-    }
-
-    const itemsInclude: any = sections
-      ? {
-          where: { menuItem: { category: { section: { in: sections } } } },
-          include: { menuItem: { select: { id: true, name: true } } },
-        }
-      : {
-          include: { menuItem: { select: { id: true, name: true } } },
-        };
-
-    const orders = await prisma.order.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      include: {
-        table: { select: { code: true, label: true } },
-        session: { select: { id: true, user: { select: { id: true, name: true, phone: true } } } },
-        items: itemsInclude,
-      },
-    });
-
-    res.json({
-      ok: true,
-      orders: orders.map((order) => ({
-        ...order,
-        table: toPublicTable(order.table),
-        status:
-          status === "IN_PROGRESS" && (order.status === "NEW" || order.status === "ACCEPTED")
-            ? "IN_PROGRESS"
-            : order.status,
-      })),
-    });
-  })
-);
-
-const UpdateOrderStatusSchema = z.object({
-  status: z.enum(["NEW", "ACCEPTED", "IN_PROGRESS", "DELIVERED", "CANCELLED"]),
-});
-
 const CreateTableOrderSchema = z.object({
   tableId: z.number().int().positive(),
   sessionId: z.string().min(1),
@@ -498,131 +408,34 @@ const CreateTableOrderSchema = z.object({
     .min(1),
 });
 
-staffDashboardRouter.patch(
-  "/orders/:id/status",
-  validate(UpdateOrderStatusSchema),
-  asyncHandler(async (req, res) => {
-    const venueId = req.staff!.venueId;
-    const role = req.staff!.role;
-    await getActiveShiftOrThrow(venueId);
+// Take a line (or part of it) off an order — manager only. The line is reduced
+// or removed so every bill stays right, the station sees it crossed out, and
+// who / what / why is kept in OrderItemCancellation. Paid lines are refused.
+const CancelOrderItemSchema = z.object({
+  qty: z.number().int().min(1).max(50).optional(),
+  reason: z.string().trim().max(200).optional(),
+});
 
-    const { id } = IdParamSchema.parse(req.params);
-    const { status } = req.body as any;
-
-    const sections = orderSectionsForRole(role);
-
-    const order = await prisma.order.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        tableId: true,
-        status: true,
-        table: { select: { venueId: true } },
-        session: { select: { shiftId: true } },
-        items: {
-          select: {
-            menuItem: { select: { category: { select: { section: true } } } },
-          },
-        },
-      },
-    });
-
-    if (!order) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
-    if (order.table.venueId !== venueId) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
-
-    if (sections) {
-      const allowed = order.items.some((it) => sections.includes(it.menuItem.category.section));
-      if (!allowed) throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
-    }
-
-    await prisma.order.update({
-      where: { id: order.id },
-      data: { status },
-    });
-
-    emitGuestEvent(order.tableId, "order-status");
-    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
-
-    // Lock-screen notification for the guests at the table (only on a real change).
-    if (order.status !== status) {
-      void notifyGuestsOrderStatus(order.id, status).catch((e) => {
-        console.warn("guest push notifyGuestsOrderStatus failed", e);
-      });
-    }
-
-    res.json({ ok: true });
-  })
-);
-
-// Cancel a SINGLE item from an order (e.g. the guest changed their mind). If it
-// was the order's last item, the whole order is cancelled. Items already paid
-// for cannot be cancelled.
 staffDashboardRouter.post(
   "/orders/:orderId/items/:itemId/cancel",
+  validate(CancelOrderItemSchema),
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
-    const role = req.staff!.role;
     const shift = await getActiveShiftOrThrow(venueId);
-    const orderId = String(req.params.orderId);
-    const itemId = String(req.params.itemId);
-    const sections = orderSectionsForRole(role);
+    const body = req.body as z.infer<typeof CancelOrderItemSchema>;
 
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
-      select: {
-        id: true,
-        tableId: true,
-        status: true,
-        table: { select: { venueId: true } },
-        items: {
-          select: {
-            id: true,
-            menuItem: { select: { category: { select: { section: true } } } },
-          },
-        },
-      },
+    const result = await cancelOrderLine({
+      venueId,
+      shiftId: shift.id,
+      staffId: req.staff!.staffId,
+      role: req.staff!.role,
+      orderId: String(req.params.orderId),
+      orderItemId: String(req.params.itemId),
+      qty: body.qty,
+      reason: body.reason,
     });
 
-    if (!order || order.table.venueId !== venueId) {
-      throw new HttpError(404, "ORDER_NOT_FOUND", "Order not found");
-    }
-    if (order.status === "CANCELLED") {
-      throw new HttpError(409, "ORDER_CANCELLED", "Order already cancelled");
-    }
-
-    const item = order.items.find((it) => it.id === itemId);
-    if (!item) throw new HttpError(404, "ITEM_NOT_FOUND", "Order item not found");
-
-    if (sections && !sections.includes(item.menuItem.category.section)) {
-      throw new HttpError(403, "WRONG_SECTION", "This item belongs to another section");
-    }
-
-    // Don't allow cancelling something the guest already paid for.
-    const confirmedPayments = await (prisma as any).paymentRequest.findMany({
-      where: { tableId: order.tableId, status: "CONFIRMED", session: { shiftId: shift.id } },
-      select: { itemsJson: true, confirmation: { select: { itemsJson: true } } },
-    });
-    const paidQty = paidQtyByOrderItemId(confirmedPayments as any[]).get(itemId) ?? 0;
-    if (paidQty > 0) {
-      throw new HttpError(409, "ITEM_ALREADY_PAID", "This item is already paid");
-    }
-
-    const lastItem = order.items.length <= 1;
-    await prisma.$transaction(async (tx) => {
-      await tx.orderItem.delete({ where: { id: itemId } });
-      if (lastItem) {
-        await tx.order.update({ where: { id: order.id }, data: { status: "CANCELLED" } });
-      }
-    });
-
-    emitGuestEvent(order.tableId, "order-item-cancelled");
-    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
-
-    void notifyGuestsOrderItemCancelled(order.id, lastItem).catch((e) => {
-      console.warn("guest push notifyGuestsOrderItemCancelled failed", e);
-    });
-
-    res.json({ ok: true, orderCancelled: lastItem });
+    res.json({ ok: true, ...result });
   })
 );
 
@@ -632,11 +445,16 @@ staffDashboardRouter.post(
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
     const role = req.staff!.role;
+    const sections = orderSectionsForRole(role);
+    if (sections.length === 0) {
+      throw new HttpError(403, "FORBIDDEN", "Этот аккаунт не принимает заказы");
+    }
+
     const shift = await getActiveShiftOrThrow(venueId);
     const body = req.body as z.infer<typeof CreateTableOrderSchema>;
 
-    const menuItemIds = body.items.map((item) => item.menuItemId);
-    const sections = orderSectionsForRole(role);
+    // The same dish may come twice (two lines with different comments).
+    const menuItemIds = Array.from(new Set(body.items.map((item) => item.menuItemId)));
 
     const [session, menuItems] = await Promise.all([
       prisma.guestSession.findUnique({
@@ -654,8 +472,9 @@ staffDashboardRouter.post(
         where: {
           id: { in: menuItemIds },
           isActive: true,
-          ...(sections ? { category: { section: { in: sections } } } : {}),
+          category: { venueId, section: { in: sections } },
         },
+        select: { id: true, priceCzk: true, category: { select: { section: true } } },
       }),
     ]);
 
@@ -675,9 +494,9 @@ staffDashboardRouter.post(
       throw new HttpError(400, "MENU_ITEM_INVALID", "Some menu items are invalid/inactive");
     }
 
-    const priceMap = new Map(menuItems.map((item) => [item.id, item.priceCzk]));
+    const menuById = new Map(menuItems.map((item) => [item.id, item]));
 
-    const order = await prisma.$transaction(async (tx) => {
+    const { orderId, ticketIds, statusChange } = await prisma.$transaction(async (tx) => {
       if (session.shiftId !== shift.id) {
         await tx.guestSession.update({
           where: { id: session.id },
@@ -685,19 +504,34 @@ staffDashboardRouter.post(
         });
       }
 
-      const created = await createOrAppendTableOrder(tx as typeof prisma, {
+      const order = await upsertOpenTableOrder(tx, {
         tableId: body.tableId,
         sessionId: session.id,
         userId: session.userId,
         shiftId: shift.id,
         comment: body.comment,
-        items: body.items.map((it) => ({
-          menuItemId: it.menuItemId,
-          qty: it.qty,
-          comment: it.comment,
-          priceCzk: priceMap.get(it.menuItemId)!,
-        })),
       });
+
+      // One ticket per station: food → kitchen, drinks → bar, hookah → zone.
+      const ticketIds = await createStationTickets(tx, {
+        venueId,
+        tableId: body.tableId,
+        orderId: order.id,
+        shiftId: shift.id,
+        staffId: req.staff!.staffId,
+        lines: body.items.map((it) => {
+          const menuItem = menuById.get(it.menuItemId)!;
+          return {
+            menuItemId: it.menuItemId,
+            qty: it.qty,
+            comment: it.comment,
+            priceCzk: menuItem.priceCzk,
+            section: menuItem.category.section,
+          };
+        }),
+      });
+
+      const statusChange = await refreshOrderStatus(tx, order.id);
 
       // Close EVERY open order-request for this table's session once the staff
       // has placed the order — not just the one passed in. Otherwise a lingering
@@ -716,20 +550,25 @@ staffDashboardRouter.post(
         },
       });
 
-      return created;
+      return { orderId: order.id, ticketIds, statusChange };
     });
 
-    void notifyOrderCreated(order.id).catch((e) => {
-      console.warn("push notifyOrderCreated failed", e);
+    void notifyTicketsCreated(ticketIds).catch((e) => {
+      console.warn("push notifyTicketsCreated failed", e);
     });
+    emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
     emitGuestEvent(body.tableId, "order-created");
+    // "Order received" covers the new lines; a status move it caused (an add-on
+    // reopening a served order is not possible — those start a new order) only
+    // needs the feed refresh.
+    announceOrderStatus(statusChange, { push: false });
 
-    void notifyGuestsOrderCreated(order.id).catch((e) => {
+    void notifyGuestsOrderCreated(orderId).catch((e) => {
       console.warn("guest push notifyGuestsOrderCreated failed", e);
     });
 
-    res.json({ ok: true, order });
+    res.json({ ok: true, order: { id: orderId }, ticketIds });
   })
 );
 
@@ -738,6 +577,7 @@ staffDashboardRouter.get(
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
     const role = req.staff!.role;
+    forbidStations(role);
     const shift = await getActiveShiftOrThrow(venueId);
 
     const sessions = await prisma.guestSession.findMany({
@@ -870,6 +710,7 @@ staffDashboardRouter.post(
   "/tables/:id/disconnect",
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
+    forbidStations(req.staff!.role);
     const shift = await getActiveShiftOrThrow(venueId);
     const tableId = Number(req.params.id);
 
@@ -942,6 +783,7 @@ staffDashboardRouter.get(
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
     const role = req.staff!.role;
+    forbidStations(role);
     const shift = await getActiveShiftOrThrow(venueId);
     const tableId = Number(req.params.id);
 
@@ -955,7 +797,9 @@ staffDashboardRouter.get(
       shiftId: shift.id,
     });
 
-    const sections = orderSectionsForRole(role);
+    // Whoever settles the table sees the whole bill (hookah included — it is
+    // part of what they collect); the hookah master sees his own lines only.
+    const sections = canHandlePayments(role) ? null : orderSectionsForRole(role);
 
     const [orders, activeCalls, pendingPayment] = await Promise.all([
       prisma.order.findMany({
@@ -1113,7 +957,7 @@ staffDashboardRouter.get(
       })),
       payableItems,
       billTotalCzk,
-      activeCalls,
+      activeCalls: activeCalls.map((call) => ({ ...call, message: staffCallMessage(call.type, call.message) })),
       pendingPayment: pendingPayment
         ? {
             ...pendingPayment,
@@ -1125,7 +969,7 @@ staffDashboardRouter.get(
         : null,
       capabilities: {
         canAddItems: true,
-        canSettle: canCreateSettlement(role),
+        canSettle: canHandlePayments(role),
         canDisconnect,
         disconnectBlockedReason: canDisconnect ? null : disconnectBlockedReason(),
       },
@@ -1146,7 +990,7 @@ staffDashboardRouter.post(
     const shift = await getActiveShiftOrThrow(venueId);
     const tableId = Number(req.params.id);
 
-    if (!canCreateSettlement(role)) {
+    if (!canHandlePayments(role)) {
       throw new HttpError(403, "FORBIDDEN", "Only waiter or manager can settle a table");
     }
     if (!Number.isFinite(tableId) || tableId <= 0) {
@@ -1302,6 +1146,9 @@ staffDashboardRouter.get(
     const types = callTypesForRole(role);
 
     const shift = await getActiveShiftOrThrow(venueId);
+    if (types.length === 0) {
+      return res.json({ ok: true, calls: [] });
+    }
 
     const calls = await prisma.staffCall.findMany({
       where: {
@@ -1322,6 +1169,7 @@ staffDashboardRouter.get(
       ok: true,
       calls: calls.map((call) => ({
         ...call,
+        message: staffCallMessage(call.type, call.message),
         table: toPublicTable(call.table),
       })),
     });
@@ -1335,7 +1183,7 @@ staffDashboardRouter.get(
     const role = req.staff!.role;
     const shift = await getActiveShiftOrThrow(venueId);
 
-    if (role === "HOOKAH") {
+    if (!canTakeOrderRequests(role)) {
       return res.json({ ok: true, requests: [] });
     }
 
@@ -1403,8 +1251,8 @@ staffDashboardRouter.post(
     const role = req.staff!.role;
     const shift = await getActiveShiftOrThrow(venueId);
 
-    if (role === "HOOKAH") {
-      throw new HttpError(403, "FORBIDDEN", "Hookah role cannot take table orders");
+    if (!canTakeOrderRequests(role)) {
+      throw new HttpError(403, "FORBIDDEN", "This role cannot take table orders");
     }
 
     const { id } = IdParamSchema.parse(req.params);
@@ -1459,6 +1307,9 @@ staffDashboardRouter.post(
   "/order-requests/:id/done",
   asyncHandler(async (req, res) => {
     const venueId = req.staff!.venueId;
+    if (!canTakeOrderRequests(req.staff!.role)) {
+      throw new HttpError(403, "FORBIDDEN", "This role cannot take table orders");
+    }
     const shift = await getActiveShiftOrThrow(venueId);
 
     const { id } = IdParamSchema.parse(req.params);
@@ -1550,7 +1401,7 @@ staffDashboardRouter.get(
     const venueId = req.staff!.venueId;
     const role = req.staff!.role;
 
-    if (role === "HOOKAH") {
+    if (!canHandlePayments(role)) {
       return res.json({ ok: true, payments: [] });
     }
 
@@ -1682,8 +1533,8 @@ staffDashboardRouter.post(
     const role = req.staff!.role;
     const shift = await getActiveShiftOrThrow(venueId);
 
-    if (role === "HOOKAH") {
-      throw new HttpError(403, "FORBIDDEN", "Hookah role cannot confirm payments");
+    if (!canHandlePayments(role)) {
+      throw new HttpError(403, "FORBIDDEN", "This role cannot confirm payments");
     }
 
     const staffId = req.staff!.staffId;
@@ -1901,8 +1752,8 @@ staffDashboardRouter.post(
     const role = req.staff!.role;
     await getActiveShiftOrThrow(venueId);
 
-    if (role === "HOOKAH") {
-      throw new HttpError(403, "FORBIDDEN", "Hookah role cannot cancel payments");
+    if (!canHandlePayments(role)) {
+      throw new HttpError(403, "FORBIDDEN", "This role cannot cancel payments");
     }
 
     const { id } = IdParamSchema.parse(req.params);
@@ -1964,8 +1815,8 @@ staffDashboardRouter.post(
     const role = req.staff!.role;
     await getActiveShiftOrThrow(venueId);
 
-    if (role === "HOOKAH") {
-      throw new HttpError(403, "FORBIDDEN", "Hookah role cannot change payments");
+    if (!canHandlePayments(role)) {
+      throw new HttpError(403, "FORBIDDEN", "This role cannot change payments");
     }
 
     const { id } = IdParamSchema.parse(req.params);

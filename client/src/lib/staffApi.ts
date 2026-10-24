@@ -1,4 +1,5 @@
 import type { StaffSession, StaffRole } from "@/providers/staffSession";
+import type { MenuSection } from "@/types";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
 import { getStaffVenueSlug } from "@/lib/venue";
 
@@ -257,6 +258,8 @@ export async function closeShift(): Promise<ApiResult<{ shiftId: string; closedA
 // DASHBOARD
 export type StaffSummary = {
   newOrders: number;
+  ticketsToAccept?: number;
+  ticketsToDeliver?: number;
   newCalls: number;
   pendingPayments: number;
   shift?: {
@@ -270,6 +273,8 @@ export async function getStaffSummary(): Promise<ApiResult<StaffSummary>> {
     ok: true;
     shift?: { id: string; openedAt: string };
     newOrders: number;
+    ticketsToAccept?: number;
+    ticketsToDeliver?: number;
     newCalls: number;
     pendingPayments: number;
   }>(["/staff/dashboard/summary", "/staff/summary"], {
@@ -283,6 +288,8 @@ export async function getStaffSummary(): Promise<ApiResult<StaffSummary>> {
     data: {
       shift: r.data.shift,
       newOrders: r.data.newOrders,
+      ticketsToAccept: r.data.ticketsToAccept,
+      ticketsToDeliver: r.data.ticketsToDeliver,
       newCalls: r.data.newCalls,
       pendingPayments: r.data.pendingPayments,
     },
@@ -295,23 +302,6 @@ export type PaymentStatus = "PENDING" | "CONFIRMED" | "CANCELLED";
 export type CallType = "WAITER" | "HOOKAH" | "BILL" | "HELP";
 export type PaymentMethod = "CARD" | "CASH";
 
-export type StaffOrder = {
-  id: string;
-  status: OrderStatus;
-  comment: string | null;
-  createdAt: string;
-  updatedAt: string;
-  table: { code: string; label: string | null };
-  session: { id: string; user: { id: string; name: string; phone: string | null } | null };
-  items: Array<{
-    id: string;
-    qty: number;
-    comment: string | null;
-    priceCzk: number;
-    menuItem: { id: number; name: string };
-  }>;
-};
-
 export type StaffOrderRequest = {
   id: string;
   status: CallStatus;
@@ -320,20 +310,6 @@ export type StaffOrderRequest = {
   session: { id: string; user: { id: string; name: string; phone: string | null } | null };
   items?: Array<{ menuItemId: number; name: string; qty: number; priceCzk: number }>;
 };
-
-export async function listOrders(status: OrderStatus): Promise<ApiResult<{ orders: StaffOrder[] }>> {
-  return tryPaths<{ ok: true; orders: StaffOrder[] }>(
-    [`/staff/dashboard/orders?status=${status}`, `/staff/orders?status=${status}`],
-    { method: "GET" }
-  ).then((r) => (r.ok ? { ok: true, data: { orders: r.data.orders } } : r));
-}
-
-export async function updateOrderStatus(id: string, status: OrderStatus): Promise<ApiResult<{ ok: true }>> {
-  return tryPaths<{ ok: true }>(
-    [`/staff/dashboard/orders/${id}/status`, `/staff/orders/${id}/status`],
-    { method: "PATCH", body: JSON.stringify({ status }) }
-  );
-}
 
 export async function listOrderRequests(): Promise<ApiResult<{ requests: StaffOrderRequest[] }>> {
   return tryPaths<{ ok: true; requests: StaffOrderRequest[] }>(
@@ -366,6 +342,73 @@ export async function createTableOrder(payload: {
   return tryPaths<any>(
     ["/staff/dashboard/table-orders"],
     { method: "POST", body: JSON.stringify(payload) }
+  );
+}
+
+// STATION TICKETS — one per station (kitchen / bar / hookah) per send.
+export type TicketStatus = "NEW" | "ACCEPTED" | "READY" | "SERVED" | "CANCELLED";
+export type TicketAction = "accept" | "ready" | "served";
+
+export type StationTicket = {
+  id: string;
+  orderId: string;
+  station: MenuSection;
+  status: TicketStatus;
+  isAddon: boolean;
+  createdAt: string;
+  acceptedAt: string | null;
+  readyAt: string | null;
+  servedAt: string | null;
+  cancelledAt: string | null;
+  table: { id: number; code: string; label: string | null };
+  items: Array<{
+    id: string;
+    orderId: string;
+    menuItemId: number;
+    name: string;
+    qty: number;
+    comment: string | null;
+    priceCzk: number;
+  }>;
+  cancellations: Array<{
+    id: string;
+    name: string;
+    qty: number;
+    comment: string | null;
+    reason: string | null;
+    createdAt: string;
+  }>;
+};
+
+export async function listTickets(
+  view: "active" | "served" = "active"
+): Promise<ApiResult<{ tickets: StationTicket[] }>> {
+  return tryPaths<{ ok: true; tickets: StationTicket[] }>([`/staff/tickets?view=${view}`], {
+    method: "GET",
+  }).then((r) => (r.ok ? { ok: true, data: { tickets: r.data.tickets } } : r));
+}
+
+export async function moveTicket(
+  id: string,
+  action: TicketAction
+): Promise<ApiResult<{ changed: boolean; status: TicketStatus }>> {
+  return tryPaths<{ ok: true; changed: boolean; status: TicketStatus }>([`/staff/tickets/${id}/${action}`], {
+    method: "POST",
+    body: JSON.stringify({}),
+  }).then((r) => (r.ok ? { ok: true, data: { changed: r.data.changed, status: r.data.status } } : r));
+}
+
+/** Manager only: take `qty` (default: all) of a line off the order. */
+export async function cancelOrderItem(
+  orderId: string,
+  itemId: string,
+  body: { qty?: number; reason?: string }
+): Promise<ApiResult<{ orderCancelled: boolean; cancelledQty: number }>> {
+  return tryPaths<{ ok: true; orderCancelled: boolean; cancelledQty: number }>(
+    [`/staff/dashboard/orders/${orderId}/items/${itemId}/cancel`],
+    { method: "POST", body: JSON.stringify(body) }
+  ).then((r) =>
+    r.ok ? { ok: true, data: { orderCancelled: r.data.orderCancelled, cancelledQty: r.data.cancelledQty } } : r
   );
 }
 

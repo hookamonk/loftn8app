@@ -5,11 +5,13 @@ import { staffPushRouter } from "./push.routes";
 import { staffShiftRouter } from "./shift.routes";
 import { staffAdminRouter } from "./admin.routes";
 import { staffMenuAdminRouter } from "./menuAdmin.routes";
+import { staffTicketsRouter } from "./staffTickets.routes";
 
 export const staffRouter = Router();
 
 staffRouter.use("/auth", staffAuthRouter);
 staffRouter.use("/dashboard", staffDashboardRouter);
+staffRouter.use("/tickets", staffTicketsRouter);
 staffRouter.use("/push", staffPushRouter);
 staffRouter.use("/shift", staffShiftRouter);
 // Mount the menu editor BEFORE the generic /admin router so /admin/menu/* is
