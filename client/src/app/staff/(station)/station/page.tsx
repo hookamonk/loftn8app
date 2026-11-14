@@ -17,7 +17,14 @@ import { useToast } from "@/providers/toast";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffEvents } from "@/lib/useStaffEvents";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
-import { armAudio, fireInAppAlert, isAlertKind, isAudioArmed } from "@/lib/staffAlerts";
+import {
+  armAudio,
+  fireInAppAlert,
+  isAlertKind,
+  isAudioArmed,
+  setStationAlertProfile,
+  type StaffAlertKind,
+} from "@/lib/staffAlerts";
 import { unsubscribePushOnLogout } from "@/lib/staffPush";
 import { stationScreenTitle } from "@/lib/staffRoles";
 import { TicketCard } from "@/components/staff/TicketCard";
@@ -33,9 +40,33 @@ import { NotificationSetup } from "@/components/staff/NotificationSetup";
  * A ticket nobody accepted re-alerts every couple of minutes until someone
  * does. The screen is kept awake and asks for one tap if sound is blocked.
  * The hookah zone also gets the guests' hookah calls (coals, too harsh…).
+ *
+ * Sound does not depend on one channel: the live channel and web push alert
+ * right away, and the 5-second refresh beeps by itself for anything they
+ * missed (new ticket, cancellation, hookah call), plus its own reminder while
+ * a ticket waits. One gate below makes sure each event beeps once.
  */
 
-type WakeLockSentinelLike = { release: () => Promise<void> };
+type WakeLockSentinelLike = {
+  release: () => Promise<void>;
+  addEventListener?: (type: "release", listener: () => void) => void;
+};
+
+// The server reminds every TICKET_REMINDER_MINUTES (2). The screen's own
+// reminder is the fallback for when that reminder does not arrive, so it
+// waits a bit longer and never doubles a server reminder.
+const FALLBACK_REMINDER_MS = 165_000;
+// Two reminders closer than this make one sound.
+const REMINDER_MERGE_MS = 45_000;
+// A cancellation heard from the server covers what the refresh sees this long.
+const CANCEL_MATCH_MS = 30_000;
+const HEARD_TTL_MS = 15 * 60_000;
+
+/** The ticket / call id inside a server alert tag. */
+function idFromTag(tag: string | null | undefined, prefix: string) {
+  if (!tag || !tag.startsWith(prefix)) return null;
+  return tag.slice(prefix.length).split(":")[0] || null;
+}
 
 function useScreenWakeLock() {
   useEffect(() => {
@@ -45,29 +76,49 @@ function useScreenWakeLock() {
     if (!nav.wakeLock) return;
 
     let sentinel: WakeLockSentinelLike | null = null;
+    let pending = false;
     let cancelled = false;
+    let retryTimer: number | null = null;
 
     const acquire = async () => {
-      if (document.visibilityState !== "visible") return;
+      if (cancelled || pending || sentinel || document.visibilityState !== "visible") return;
+      pending = true;
       try {
         const next = await nav.wakeLock!.request("screen");
-        if (cancelled) void next.release().catch(() => {});
-        else sentinel = next;
+        if (cancelled) {
+          void next.release().catch(() => {});
+          return;
+        }
+        sentinel = next;
+        // Android drops the lock on its own (battery saver, a system dialog):
+        // take it back as soon as the screen is ours again.
+        next.addEventListener?.("release", () => {
+          if (sentinel === next) sentinel = null;
+          if (cancelled) return;
+          if (retryTimer !== null) window.clearTimeout(retryTimer);
+          retryTimer = window.setTimeout(() => void acquire(), 3000);
+        });
       } catch {
         // not allowed right now (battery saver, no gesture) — the next
-        // visibility change tries again
+        // visibility change or tap tries again
+      } finally {
+        pending = false;
       }
     };
 
     const onVisible = () => {
       if (document.visibilityState === "visible") void acquire();
     };
+    const onTap = () => void acquire();
 
     void acquire();
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pointerdown", onTap);
     return () => {
       cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pointerdown", onTap);
       void sentinel?.release().catch(() => {});
     };
   }, []);
@@ -103,6 +154,12 @@ export default function StaffStationPage() {
 
   useScreenWakeLock();
 
+  // Louder, longer alerts — on this screen only, waiter phones keep theirs.
+  useEffect(() => {
+    setStationAlertProfile(true);
+    return () => setStationAlertProfile(false);
+  }, []);
+
   useEffect(() => {
     const timer = window.setInterval(() => {
       setNow(Date.now());
@@ -110,15 +167,165 @@ export default function StaffStationPage() {
     }, 3000);
     // Any tap re-arms sound (iOS suspends it after the app was in background).
     const prime = () => void armAudio().then(() => setSoundOn(isAudioArmed()));
+    // Back on screen after sleep or another app: re-arm right away, Android
+    // allows it without a tap once the app has been tapped before.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") prime();
+    };
     window.addEventListener("pointerdown", prime);
+    document.addEventListener("visibilitychange", onVisible);
     // Try right away too: where the browser allows sound without a tap (an
     // installed app, a site used every day) the banner never shows up.
     prime();
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("pointerdown", prime);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
+
+  /* ---- one gate for every sound: live channel, push and the refresh ---- */
+
+  // What already beeped: new:<ticket>, cancel:<ticket>, call:<call>, tag:<server tag>.
+  const heardRef = useRef(new Map<string, number>());
+  // Cancellations the refresh found before the server's alert arrived.
+  const polledCancelRef = useRef(new Map<string, number>());
+  const lastReminderRef = useRef(0);
+
+  // While the screen is off the lock-screen notification does the job.
+  const sound = useCallback((kind: StaffAlertKind, tag: string | undefined, tableCode: string | null) => {
+    if (document.visibilityState !== "visible") return;
+    fireInAppAlert({ kind, tag, tableCode });
+  }, []);
+
+  const pruneHeard = useCallback((at: number) => {
+    for (const [key, ts] of heardRef.current) if (at - ts > HEARD_TTL_MS) heardRef.current.delete(key);
+    for (const [key, ts] of polledCancelRef.current) if (at - ts > CANCEL_MATCH_MS) polledCancelRef.current.delete(key);
+  }, []);
+
+  const onServerAlert = useCallback(
+    (kind: string | null | undefined, tag: string | null | undefined, tableCode: string | null | undefined) => {
+      if (!isAlertKind(kind)) return;
+      const at = Date.now();
+      pruneHeard(at);
+      const heard = heardRef.current;
+      const table = tableCode ?? null;
+
+      if (kind === "TICKET_REMINDER") {
+        if (at - lastReminderRef.current < REMINDER_MERGE_MS) return;
+        lastReminderRef.current = at;
+        sound(kind, tag ?? `station-reminder:${at}`, table);
+        return;
+      }
+
+      if (kind === "TICKET_CANCELLED") {
+        // Live channel and push carry the same tag: one sound for both.
+        if (tag) {
+          if (heard.has(`tag:${tag}`)) return;
+          heard.set(`tag:${tag}`, at);
+        }
+        const ticketId = idFromTag(tag, "ticket_cancel:");
+        if (ticketId) {
+          heard.set(`cancel:${ticketId}`, at);
+          const polled = polledCancelRef.current.get(ticketId);
+          if (polled !== undefined && at - polled < CANCEL_MATCH_MS) {
+            polledCancelRef.current.delete(ticketId);
+            return;
+          }
+        }
+        sound(kind, tag ?? `ticket_cancel:${at}`, table);
+        return;
+      }
+
+      const ticketId = kind === "TICKET_NEW" ? idFromTag(tag, "ticket:") : null;
+      const callId = idFromTag(tag, "call_new:");
+      const key = ticketId ? `new:${ticketId}` : callId ? `call:${callId}` : tag ? `tag:${tag}` : null;
+      if (key) {
+        if (heard.has(key)) return;
+        heard.set(key, at);
+      }
+      sound(kind, tag ?? undefined, table);
+    },
+    [pruneHeard, sound]
+  );
+
+  // What the previous refresh saw; null until the first one (nothing to
+  // compare with yet — tickets already waiting get the reminder).
+  const snapshotRef = useRef<Map<string, { status: string; cancels: number }> | null>(null);
+  const callIdsRef = useRef<Set<string> | null>(null);
+  const ticketsRef = useRef<StationTicket[]>([]);
+
+  const noticeTickets = useCallback(
+    (next: StationTicket[]) => {
+      const prev = snapshotRef.current;
+      snapshotRef.current = new Map(next.map((t) => [t.id, { status: t.status, cancels: t.cancellations.length }]));
+      ticketsRef.current = next;
+      if (!prev) return;
+
+      const at = Date.now();
+      pruneHeard(at);
+      const heard = heardRef.current;
+
+      for (const ticket of next) {
+        const before = prev.get(ticket.id);
+        const table = ticket.table.code;
+
+        if (!before && ticket.status === "NEW") {
+          const key = `new:${ticket.id}`;
+          if (heard.has(key)) continue;
+          heard.set(key, at);
+          sound("TICKET_NEW", `ticket:${ticket.id}`, table);
+          continue;
+        }
+
+        const cancelled = before
+          ? ticket.cancellations.length > before.cancels || (ticket.status === "CANCELLED" && before.status !== "CANCELLED")
+          : ticket.status === "CANCELLED";
+        if (!cancelled) continue;
+
+        const last = heard.get(`cancel:${ticket.id}`);
+        if (last !== undefined && at - last < CANCEL_MATCH_MS) continue;
+        heard.set(`cancel:${ticket.id}`, at);
+        polledCancelRef.current.set(ticket.id, at);
+        sound("TICKET_CANCELLED", `poll_cancel:${ticket.id}:${ticket.cancellations.length}`, table);
+      }
+    },
+    [pruneHeard, sound]
+  );
+
+  const noticeCalls = useCallback(
+    (next: StaffCall[]) => {
+      const prev = callIdsRef.current;
+      callIdsRef.current = new Set(next.map((call) => call.id));
+      if (!prev) return;
+
+      const at = Date.now();
+      for (const call of next) {
+        if (prev.has(call.id)) continue;
+        const key = `call:${call.id}`;
+        if (heardRef.current.has(key)) continue;
+        heardRef.current.set(key, at);
+        sound("CALL_CREATED", `call_new:${call.id}`, call.table.code);
+      }
+    },
+    [sound]
+  );
+
+  // Fallback reminder: the server's reminder normally comes every 2 minutes
+  // and keeps this one quiet; if it stops arriving, the screen reminds itself.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      const at = Date.now();
+      const overdue = ticketsRef.current.some(
+        (ticket) => ticket.status === "NEW" && at - new Date(ticket.createdAt).getTime() >= FALLBACK_REMINDER_MS
+      );
+      if (!overdue || at - lastReminderRef.current < FALLBACK_REMINDER_MS) return;
+      lastReminderRef.current = at;
+      sound("TICKET_REMINDER", `station-reminder:${at}`, null);
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [sound]);
 
   const answersCalls = staff?.role === "HOOKAH_ZONE";
   // The station joins the open shift by itself, so the manager sees the
@@ -131,11 +338,17 @@ export default function StaffStationPage() {
       answersCalls ? listCalls("NEW") : Promise.resolve(null),
     ]);
     setLoaded(true);
-    if (callsResult?.ok) setCalls(callsResult.data.calls);
+    if (callsResult?.ok) {
+      noticeCalls(callsResult.data.calls);
+      setCalls(callsResult.data.calls);
+    }
 
     if (!result.ok) {
       if (result.status === 409) {
         joinedRef.current = false;
+        // No shift yet: whatever shows up once it opens is new.
+        noticeTickets([]);
+        if (answersCalls && !callIdsRef.current) callIdsRef.current = new Set();
         setNoShift(true);
         setTickets([]);
         setErr(null);
@@ -148,6 +361,7 @@ export default function StaffStationPage() {
 
     setNoShift(false);
     setErr(null);
+    noticeTickets(result.data.tickets);
     setTickets(result.data.tickets);
 
     if (!joinedRef.current) {
@@ -156,7 +370,7 @@ export default function StaffStationPage() {
         if (!r.ok) joinedRef.current = false;
       });
     }
-  }, [answersCalls]);
+  }, [answersCalls, noticeCalls, noticeTickets]);
 
   const { tick } = usePolling(() => load(), {
     activeMs: 5000,
@@ -167,12 +381,17 @@ export default function StaffStationPage() {
 
   // Alerts arrive role-filtered from the server: new ticket, reminder, cancel.
   useStaffEvents((e) => {
-    if (document.visibilityState === "visible" && isAlertKind(e.kind)) {
-      fireInAppAlert({ kind: e.kind, tableCode: e.tableCode ?? null, tag: e.tag ?? undefined });
-    }
+    onServerAlert(e.kind, e.tag, e.tableCode);
     void tick();
   });
-  useStaffPushEvents(() => void tick());
+  const onPush = useCallback(
+    (p: { kind?: string; tag?: string; tableCode?: string | null }) => {
+      onServerAlert(p.kind, p.tag, p.tableCode);
+      void tick();
+    },
+    [onServerAlert, tick]
+  );
+  useStaffPushEvents(onPush, { inAppAlert: false });
 
   const visible = useMemo(() => sortForStation(tickets), [tickets]);
   const waiting = visible.filter((ticket) => ticket.status === "NEW").length;

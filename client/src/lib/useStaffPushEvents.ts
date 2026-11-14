@@ -11,11 +11,20 @@ export type StaffPushPayload = {
   tag?: string;
   ts?: number;
   kind?: StaffAlertKind;
+  tableCode?: string | null;
   venueId?: number | null;
   venueSlug?: string | null;
 };
 
-export function useStaffPushEvents(onEvent?: (p: StaffPushPayload) => void) {
+/**
+ * `inAppAlert: false` leaves the sound to the caller (the station screen
+ * dedupes push, live channel and its own polling in one place).
+ */
+export function useStaffPushEvents(
+  onEvent?: (p: StaffPushPayload) => void,
+  opts?: { inAppAlert?: boolean }
+) {
+  const inAppAlert = opts?.inAppAlert ?? true;
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
@@ -29,7 +38,7 @@ export function useStaffPushEvents(onEvent?: (p: StaffPushPayload) => void) {
         return;
       }
 
-      if (document.visibilityState === "visible") {
+      if (inAppAlert && document.visibilityState === "visible") {
         fireInAppAlert(payload);
       }
 
@@ -38,5 +47,5 @@ export function useStaffPushEvents(onEvent?: (p: StaffPushPayload) => void) {
 
     navigator.serviceWorker.addEventListener("message", handler);
     return () => navigator.serviceWorker.removeEventListener("message", handler);
-  }, [onEvent]);
+  }, [onEvent, inAppAlert]);
 }

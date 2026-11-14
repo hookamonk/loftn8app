@@ -40,6 +40,13 @@ export type StaffPushPayload = {
 
 let audioCtx: AudioContext | null = null;
 let primed = false;
+// Station screens (kitchen / bar / hookah-zone tablets) play a louder, longer
+// version of every alert. Waiter and manager phones keep the normal one.
+let stationProfile = false;
+
+export function setStationAlertProfile(on: boolean) {
+  stationProfile = on;
+}
 const DEFAULT_VIBRATE = [320, 140, 320, 140, 420];
 const ALERT_DEDUPE_MS = 2500;
 const recentAlerts = new Map<string, number>();
@@ -165,22 +172,39 @@ function tonePatternFor(payload?: StaffPushPayload): { tones: number[]; gain: nu
   }
 }
 
-export function beep(payload?: StaffPushPayload) {
-  try {
-    const ctx = getAudioCtx();
-    if (!ctx) return;
-    if (!primed || ctx.state === "suspended") return;
+// Louder and longer on station tablets: a square wave carries over kitchen
+// noise, and the pattern repeats (the reminder three times).
+function stationPatternFor(payload?: StaffPushPayload) {
+  const { tones } = tonePatternFor(payload);
+  switch (payload?.kind) {
+    case "TICKET_REMINDER":
+      return { tones, gain: 0.6, repeats: 3 };
+    case "TICKET_NEW":
+      return { tones, gain: 0.55, repeats: 2 };
+    default:
+      return { tones, gain: 0.5, repeats: 2 };
+  }
+}
 
-    const { tones, gain: peak } = tonePatternFor(payload);
+function play(ctx: AudioContext, payload?: StaffPushPayload) {
+  const station = stationProfile;
+  const { tones, gain: peak, repeats } = station
+    ? stationPatternFor(payload)
+    : { ...tonePatternFor(payload), repeats: 1 };
+  const step = station ? 0.26 : 0.18;
+  const length = station ? 0.22 : 0.16;
+  const pause = station ? 0.35 : 0;
 
+  for (let round = 0; round < repeats; round += 1) {
+    const roundStart = round * (tones.length * step + pause);
     tones.forEach((freq, index) => {
-      const startAt = ctx.currentTime + index * 0.18;
-      const endAt = startAt + 0.16;
+      const startAt = ctx.currentTime + roundStart + index * step;
+      const endAt = startAt + length;
 
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
 
-      osc.type = "triangle";
+      osc.type = station ? "square" : "triangle";
       osc.frequency.setValueAtTime(freq, startAt);
 
       gain.gain.setValueAtTime(0.0001, startAt);
@@ -193,6 +217,28 @@ export function beep(payload?: StaffPushPayload) {
       osc.start(startAt);
       osc.stop(endAt);
     });
+  }
+}
+
+export function beep(payload?: StaffPushPayload) {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+
+    if (stationProfile && (!primed || ctx.state !== "running")) {
+      // A station tablet must not stay silent because Android paused the
+      // audio while the app was in the background: wake it and then play.
+      // An installed app is allowed to do this without a tap.
+      void primeAlerts()
+        .then(() => {
+          if (isAudioArmed()) play(ctx, payload);
+        })
+        .catch(() => {});
+      return;
+    }
+
+    if (!primed || ctx.state === "suspended") return;
+    play(ctx, payload);
   } catch {
     // ignore
   }
