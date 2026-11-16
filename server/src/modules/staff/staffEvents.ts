@@ -37,6 +37,7 @@ type Client = {
   venueId: number;
   role: StaffRole;
   res: Response;
+  deviceId: string | null;
 };
 
 const clientsByVenue = new Map<number, Set<Client>>();
@@ -52,8 +53,9 @@ function ensureHeartbeat() {
     for (const set of clientsByVenue.values()) {
       for (const client of set) {
         try {
-          // SSE comment line — keeps proxies/load balancers from closing idle conn.
-          client.res.write(`: ping ${Date.now()}\n\n`);
+          // Keeps proxies from closing the idle connection AND lets the screen
+          // see the line is alive (a comment line is invisible to the page).
+          client.res.write(`event: ping\ndata: ${Date.now()}\n\n`);
         } catch {
           // best-effort; the close handler will clean it up
         }
@@ -65,10 +67,15 @@ function ensureHeartbeat() {
   heartbeat.unref?.();
 }
 
-export function addStaffClient(venueId: number, role: StaffRole, res: Response): () => void {
+export function addStaffClient(
+  venueId: number,
+  role: StaffRole,
+  res: Response,
+  deviceId: string | null = null
+): () => void {
   ensureHeartbeat();
 
-  const client: Client = { id: nextClientId++, venueId, role, res };
+  const client: Client = { id: nextClientId++, venueId, role, res, deviceId };
 
   let set = clientsByVenue.get(venueId);
   if (!set) {
@@ -92,7 +99,12 @@ export function addStaffClient(venueId: number, role: StaffRole, res: Response):
  */
 export function emitStaffEvent(
   venueId: number,
-  event: Omit<StaffEvent, "venueId" | "at"> & { at?: number; roles?: StaffRole[] }
+  event: Omit<StaffEvent, "venueId" | "at"> & {
+    at?: number;
+    roles?: StaffRole[];
+    /** The device that caused the event: it gets no alert about its own action. */
+    exceptDevice?: string | null;
+  }
 ) {
   const set = clientsByVenue.get(venueId);
   if (!set || set.size === 0) return;
@@ -109,6 +121,7 @@ export function emitStaffEvent(
 
   for (const client of set) {
     if (event.roles && !event.roles.includes(client.role)) continue;
+    if (event.exceptDevice && client.deviceId === event.exceptDevice) continue;
     try {
       client.res.write(frame);
     } catch {

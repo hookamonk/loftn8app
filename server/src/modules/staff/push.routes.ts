@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../../db/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { validate } from "../../middleware/validate";
+import { staffDeviceOf } from "./staffDevice";
 import { requireStaffAuth } from "./staff.middleware";
 import { HttpError } from "../../utils/httpError";
 import { pushToStaff } from "./push.service";
@@ -38,6 +39,8 @@ staffPushRouter.post(
     const staffId = req.staff!.staffId;
     const venueId = req.staff!.venueId;
     const ua = String(req.headers["user-agent"] ?? "");
+    // Re-subscribing from the service worker has no device id: keep the one we have.
+    const deviceId = staffDeviceOf(req);
 
     await prisma.staffPushSubscription.upsert({
       where: { endpoint: sub.endpoint },
@@ -47,6 +50,7 @@ staffPushRouter.post(
         p256dh: sub.keys.p256dh,
         auth: sub.keys.auth,
         userAgent: ua,
+        ...(deviceId ? { deviceId } : {}),
       },
       create: {
         staffId,
@@ -55,6 +59,7 @@ staffPushRouter.post(
         p256dh: sub.keys.p256dh,
         auth: sub.keys.auth,
         userAgent: ua,
+        deviceId,
       },
     });
 

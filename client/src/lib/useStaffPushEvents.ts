@@ -12,6 +12,8 @@ export type StaffPushPayload = {
   ts?: number;
   kind?: StaffAlertKind;
   tableCode?: string | null;
+  /** Tapped notification (not a new alert): refresh only, no sound. */
+  opened?: boolean;
   venueId?: number | null;
   venueSlug?: string | null;
 };
@@ -38,7 +40,7 @@ export function useStaffPushEvents(
         return;
       }
 
-      if (inAppAlert && document.visibilityState === "visible") {
+      if (inAppAlert && !payload.opened && document.visibilityState === "visible") {
         fireInAppAlert(payload);
       }
 

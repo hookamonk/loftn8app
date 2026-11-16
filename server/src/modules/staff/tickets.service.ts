@@ -205,6 +205,8 @@ const ticketSelect = {
   readyAt: true,
   servedAt: true,
   cancelledAt: true,
+  etaAt: true,
+  etaMinutes: true,
   table: { select: { id: true, code: true, label: true } },
   venue: { select: { slug: true } },
   items: {
@@ -238,6 +240,9 @@ function toTicketView(ticket: TicketRow) {
     readyAt: ticket.readyAt,
     servedAt: ticket.servedAt,
     cancelledAt: ticket.cancelledAt,
+    // Set only in busy hours, when the station said how long it will take.
+    etaAt: ticket.etaAt,
+    etaMinutes: ticket.etaMinutes,
     table: toPublicTable(ticket.table),
     items: ticket.items.map((item) => ({
       id: item.id,
@@ -341,6 +346,8 @@ export async function moveTicket(params: {
   staffId: string;
   role: StaffRole;
   action: TicketAction;
+  /** The device that pressed the button: no alert about it there. */
+  deviceId?: string | null;
 }) {
   const { ticketId, venueId, staffId, role, action } = params;
 
@@ -391,7 +398,9 @@ export async function moveTicket(params: {
   emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
   if (action === "ready") {
-    void notifyTicketReady(ticket.id).catch((e) => console.warn("push notifyTicketReady failed", e));
+    void notifyTicketReady(ticket.id, { exceptDevice: params.deviceId }).catch((e) =>
+      console.warn("push notifyTicketReady failed", e)
+    );
   }
 
   return { changed: true, status: TO[action] };
@@ -410,6 +419,7 @@ export async function cancelOrderLine(params: {
   orderItemId: string;
   qty?: number;
   reason?: string | null;
+  deviceId?: string | null;
 }) {
   if (!canCancelItems(params.role)) {
     throw new HttpError(403, "FORBIDDEN", "Отменить позицию может только менеджер");
@@ -528,10 +538,71 @@ export async function cancelOrderLine(params: {
       line: `${item.menuItem.name} ×${result.qty}`,
       reason,
       wholeTicket: result.wholeTicket,
+      exceptDevice: params.deviceId,
     }).catch((e) => console.warn("push notifyTicketCancelled failed", e));
   }
 
   return { orderCancelled, cancelledQty: result.qty };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Ready time (busy hours)                                                  */
+/* ------------------------------------------------------------------------ */
+
+/** What a station may promise: 10, 15, … 40 minutes. */
+export const ETA_MINUTES = [10, 15, 20, 25, 30, 35, 40] as const;
+
+/**
+ * In a rush the station says when the order will be ready; the waiter sees the
+ * same countdown and can tell the guest. `null` clears it. Saying a time on a
+ * new order also takes it (the reminders stop). Silent: no alert anywhere,
+ * the screens just refresh.
+ */
+export async function setTicketEta(params: {
+  ticketId: string;
+  venueId: number;
+  staffId: string;
+  role: StaffRole;
+  minutes: number | null;
+}) {
+  const ticket = await prisma.stationTicket.findUnique({
+    where: { id: params.ticketId },
+    select: { id: true, venueId: true, station: true, status: true, orderId: true },
+  });
+  if (!ticket || ticket.venueId !== params.venueId) {
+    throw new HttpError(404, "TICKET_NOT_FOUND", "Заказ не найден");
+  }
+  if (!canPrepare(params.role, ticket.station)) throw new HttpError(403, "FORBIDDEN", "Это не ваш заказ");
+  if (params.minutes !== null && !(ETA_MINUTES as readonly number[]).includes(params.minutes)) {
+    throw new HttpError(400, "INVALID_INPUT", "Время: от 10 до 40 минут");
+  }
+
+  const now = new Date();
+  const eta =
+    params.minutes === null
+      ? { etaAt: null, etaMinutes: null }
+      : { etaAt: new Date(now.getTime() + params.minutes * 60_000), etaMinutes: params.minutes };
+
+  // Only while it is being made; a new order is taken at the same moment.
+  const updated = await prisma.stationTicket.updateMany({
+    where: { id: ticket.id, status: { in: ["NEW", "ACCEPTED"] } },
+    data: eta,
+  });
+  if (updated.count === 0) throw new HttpError(409, "TICKET_NOT_ACTIVE", "Заказ уже готов или отменён");
+
+  let accepted = false;
+  if (params.minutes !== null) {
+    const took = await prisma.stationTicket.updateMany({
+      where: { id: ticket.id, status: "NEW" },
+      data: { status: "ACCEPTED", acceptedAt: now, acceptedById: params.staffId },
+    });
+    accepted = took.count === 1;
+  }
+
+  if (accepted) await refreshAndAnnounce(ticket.orderId);
+  emitStaffEvent(params.venueId, { kind: "DATA_CHANGED" });
+
+  return { etaAt: eta.etaAt, etaMinutes: eta.etaMinutes, accepted };
 }
 
 /* ------------------------------------------------------------------------ */
@@ -543,54 +614,95 @@ function linesSummary(items: Array<{ qty: number; menuItem: { name: string } }>,
   return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
 }
 
+type TicketAlert = {
+  venueId: number;
+  roles: StaffRole[];
+  payload: Omit<PushPayload, "url" | "kind"> & { kind: Extract<StaffEventKind, PushPayload["kind"]> };
+  /** The device whose action caused the alert hears nothing about it. */
+  exceptDevice?: string | null;
+};
+
+/** The live channel: instant on every open screen. Never waits for anything. */
+function emitAlert({ venueId, roles, payload, exceptDevice }: TicketAlert) {
+  const unique = Array.from(new Set(roles));
+  emitStaffEvent(venueId, {
+    kind: payload.kind,
+    tableCode: payload.tableCode,
+    tag: payload.tag,
+    roles: unique,
+    exceptDevice,
+  });
+}
+
+/** Web push (lock screen). Station tablets land on their station screen, everyone else on Orders. */
+async function pushAlert({ venueId, roles, payload, exceptDevice }: TicketAlert) {
+  const unique = Array.from(new Set(roles));
+  const stations = unique.filter(isStationRole);
+  const floor = unique.filter((role) => !isStationRole(role));
+  const opts = { exceptDevice };
+  await Promise.all([
+    stations.length ? pushToVenueRoles(venueId, stations, { ...payload, url: "/staff/station" }, opts) : null,
+    floor.length ? pushToVenueRoles(venueId, floor, { ...payload, url: "/staff/orders" }, opts) : null,
+  ]);
+}
+
 /**
  * Same alert on both channels: SSE (instant while the screen is open) and web
  * push (lock screen). They share the tag, so an open screen beeps once.
- * Station iPads land on their station screen, everyone else on Orders.
  */
 async function alertRoles(
   venueId: number,
   roles: StaffRole[],
-  payload: Omit<PushPayload, "url" | "kind"> & { kind: Extract<StaffEventKind, PushPayload["kind"]> }
+  payload: TicketAlert["payload"],
+  exceptDevice?: string | null
 ) {
-  const unique = Array.from(new Set(roles));
-  emitStaffEvent(venueId, { kind: payload.kind, tableCode: payload.tableCode, tag: payload.tag, roles: unique });
-
-  const stations = unique.filter(isStationRole);
-  const floor = unique.filter((role) => !isStationRole(role));
-  await Promise.all([
-    stations.length ? pushToVenueRoles(venueId, stations, { ...payload, url: "/staff/station" }) : null,
-    floor.length ? pushToVenueRoles(venueId, floor, { ...payload, url: "/staff/orders" }) : null,
-  ]);
+  const alert = { venueId, roles, payload, exceptDevice };
+  emitAlert(alert);
+  await pushAlert(alert);
 }
 
 async function loadTicketForAlert(ticketId: string) {
   return prisma.stationTicket.findUnique({ where: { id: ticketId }, select: ticketSelect });
 }
 
-export async function notifyTicketsCreated(ticketIds: string[]) {
-  for (const ticketId of ticketIds) {
-    const ticket = await loadTicketForAlert(ticketId);
+/**
+ * One order can go to the kitchen AND the bar: both screens are alerted at the
+ * same moment (the bar never waits for the kitchen's pushes to be delivered),
+ * then every push goes out in parallel.
+ */
+export async function notifyTicketsCreated(ticketIds: string[], opts?: { exceptDevice?: string | null }) {
+  const tickets = await Promise.all(ticketIds.map((ticketId) => loadTicketForAlert(ticketId)));
+
+  const alerts: TicketAlert[] = [];
+  for (const ticket of tickets) {
     if (!ticket || ticket.status !== "NEW") continue;
 
     const tableCode = toPublicTable(ticket.table).code;
-    await alertRoles(ticket.venueId, [...prepareRolesFor(ticket.station), "MANAGER"], {
-      kind: "TICKET_NEW",
-      title: `${ticket.isAddon ? "Дозаказ" : "Новый заказ"} · ${SECTION_LABEL[ticket.station]}`,
-      body: `Стол ${tableCode} · ${linesSummary(ticket.items)}`,
-      // New-order and reminder alerts share the tag: the reminder replaces the
-      // notification on the lock screen instead of piling up a new one.
-      tag: `ticket:${ticket.id}`,
-      ts: Date.now(),
-      tableCode,
+    alerts.push({
       venueId: ticket.venueId,
-      venueSlug: publicVenueSlug(ticket.venue.slug),
-      vibrate: [320, 140, 320, 140, 420],
+      roles: [...prepareRolesFor(ticket.station), "MANAGER"],
+      exceptDevice: opts?.exceptDevice,
+      payload: {
+        kind: "TICKET_NEW",
+        title: `${ticket.isAddon ? "Дозаказ" : "Новый заказ"} · ${SECTION_LABEL[ticket.station]}`,
+        body: `Стол ${tableCode} · ${linesSummary(ticket.items)}`,
+        // New-order and reminder alerts share the tag: the reminder replaces the
+        // notification on the lock screen instead of piling up a new one.
+        tag: `ticket:${ticket.id}`,
+        ts: Date.now(),
+        tableCode,
+        venueId: ticket.venueId,
+        venueSlug: publicVenueSlug(ticket.venue.slug),
+        vibrate: [320, 140, 320, 140, 420],
+      },
     });
   }
+
+  alerts.forEach(emitAlert);
+  await Promise.all(alerts.map(pushAlert));
 }
 
-async function notifyTicketReady(ticketId: string) {
+async function notifyTicketReady(ticketId: string, opts?: { exceptDevice?: string | null }) {
   const ticket = await loadTicketForAlert(ticketId);
   if (!ticket || ticket.status !== "READY") return;
 
@@ -605,7 +717,7 @@ async function notifyTicketReady(ticketId: string) {
     venueId: ticket.venueId,
     venueSlug: publicVenueSlug(ticket.venue.slug),
     vibrate: [200, 100, 200, 100, 400],
-  });
+  }, opts?.exceptDevice);
 }
 
 async function notifyTicketCancelled(params: {
@@ -614,6 +726,7 @@ async function notifyTicketCancelled(params: {
   line: string;
   reason: string | null;
   wholeTicket: boolean;
+  exceptDevice?: string | null;
 }) {
   const ticket = await loadTicketForAlert(params.ticketId);
   if (!ticket) return;
@@ -632,7 +745,7 @@ async function notifyTicketCancelled(params: {
     venueId: ticket.venueId,
     venueSlug: publicVenueSlug(ticket.venue.slug),
     vibrate: [600, 200, 600],
-  });
+  }, params.exceptDevice);
 }
 
 async function notifyTicketReminder(ticketId: string) {
@@ -679,17 +792,23 @@ export async function runTicketReminders(now = new Date()) {
     select: { id: true, lastRemindedAt: true },
   });
 
+  const claimedIds: string[] = [];
   for (const ticket of due) {
     const claimed = await prisma.stationTicket.updateMany({
       where: { id: ticket.id, status: "NEW", lastRemindedAt: ticket.lastRemindedAt },
       data: { lastRemindedAt: now, reminderCount: { increment: 1 } },
     });
-    if (claimed.count !== 1) continue;
-
-    await notifyTicketReminder(ticket.id).catch((e) => {
-      console.warn("push notifyTicketReminder failed", e);
-    });
+    if (claimed.count === 1) claimedIds.push(ticket.id);
   }
+
+  // In parallel: the bar's reminder never waits for the kitchen's pushes.
+  await Promise.all(
+    claimedIds.map((ticketId) =>
+      notifyTicketReminder(ticketId).catch((e) => {
+        console.warn("push notifyTicketReminder failed", e);
+      })
+    )
+  );
 
   return due.length;
 }

@@ -1,11 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listActiveTables, type StaffActiveTable } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
-import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
-import { useStaffEvents } from "@/lib/useStaffEvents";
+import { useScreenRefresh } from "@/lib/staffScreenRefresh";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 
 const card =
@@ -36,14 +35,21 @@ export default function StaffTablesPage() {
   const [err, setErr] = useState<string | null>(null);
   const [last, setLast] = useState<number | null>(null);
 
-  const load = async (opts?: { silent?: boolean }) => {
+  // A slower, older answer never overwrites a newer one.
+  const loadSeqRef = useRef(0);
+  const appliedSeqRef = useRef(0);
+
+  const load = async (opts?: { silent?: boolean; fresh?: boolean }) => {
     const silent = opts?.silent ?? false;
     if (!silent) setLoading(true);
     setErr(null);
 
-    const result = await listActiveTables();
+    const seq = ++loadSeqRef.current;
+    const result = await listActiveTables(opts?.fresh ? { fresh: true } : undefined);
 
     if (!silent) setLoading(false);
+    if (seq < appliedSeqRef.current) return;
+    appliedSeqRef.current = seq;
 
     if (!result.ok) {
       setErr(result.error);
@@ -65,19 +71,9 @@ export default function StaffTablesPage() {
     void load({ silent: false });
   }, []);
 
-  useStaffPushEvents((payload) => {
-    if (
-      payload.kind === "ORDER_CREATED" ||
-      payload.kind === "CALL_CREATED" ||
-      payload.kind === "PAYMENT_REQUESTED" ||
-      payload.kind === "GUEST_MESSAGE"
-    ) {
-      void tick();
-    }
-  });
-
-  // SSE keeps the board live the moment anything changes at any table.
-  useStaffEvents(() => void tick());
+  // Alerts and every change at any table: the shell refreshes this board
+  // with fresh data, then sounds.
+  useScreenRefresh(() => load({ silent: true, fresh: true }));
 
   useEffect(() => subscribeStaffLiveSync(() => void tick()), [tick]);
 

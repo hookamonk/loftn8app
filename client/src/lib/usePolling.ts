@@ -66,7 +66,14 @@ export function usePolling(
   const tick = useCallback(async () => {
     if (!enabled) return;
     const now = Date.now();
-    if (now - lastTickAtRef.current < 1200) return;
+    const sinceLast = now - lastTickAtRef.current;
+    if (sinceLast < 1200) {
+      // Too soon after the last refresh: do it right after the pause instead
+      // of dropping it — an alert must never wait for the next regular poll.
+      if (!inFlightRef.current) schedule(1200 - sinceLast);
+      else rerunRequestedRef.current = true;
+      return;
+    }
     if (inFlightRef.current) {
       rerunRequestedRef.current = true;
       return;

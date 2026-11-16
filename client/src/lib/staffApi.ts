@@ -2,9 +2,15 @@ import type { StaffSession, StaffRole } from "@/providers/staffSession";
 import type { MenuSection } from "@/types";
 import { ensureBackendWarm } from "@/lib/backendWarmup";
 import { getStaffVenueSlug } from "@/lib/venue";
+import { getStaffDeviceId } from "@/lib/staffDevice";
+import { markOwnAlerts } from "@/lib/staffOwnAlerts";
 
 const API_BASE = "/api";
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
+// Light lists the screens refresh all the time: a read that hangs (lost packet
+// on venue Wi-Fi) is cut off and retried, it must never freeze a screen until
+// the browser gives up on its own (~30 s+). Heavy reads (reports) have no limit.
+const LIST_TIMEOUT_MS = 6000;
 const inFlightGetRequests = new Map<string, Promise<ApiResult<unknown>>>();
 
 function retryDelay(attempt: number) {
@@ -50,13 +56,28 @@ function withQuery(path: string, params?: Record<string, string | undefined>) {
   return qs ? `${path}?${qs}` : path;
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
+export type FetchOpts = {
+  /**
+   * Start a new request even if the same one is already running: after an
+   * alert the screen needs data read AFTER the change, not a request that
+   * left before it.
+   */
+  fresh?: boolean;
+  /** Cut off and retry a read that takes longer than this. */
+  timeoutMs?: number;
+};
+
+async function fetchJson<T>(path: string, init?: RequestInit, opts?: FetchOpts): Promise<ApiResult<T>> {
   const method = String(init?.method ?? "GET").toUpperCase();
   const maxAttempts = method === "GET" ? 3 : 1;
   const venueSlug = typeof window !== "undefined" ? getStaffVenueSlug() : undefined;
 
   if (method !== "GET") {
     await ensureBackendWarm();
+  }
+
+  if (method === "GET" && opts?.fresh) {
+    return performFetchJson<T>(path, init, maxAttempts, venueSlug, opts.timeoutMs);
   }
 
   if (method === "GET") {
@@ -68,7 +89,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult
 
     const pending = (async () => {
       try {
-        return await performFetchJson<T>(path, init, maxAttempts, venueSlug);
+        return await performFetchJson<T>(path, init, maxAttempts, venueSlug, opts?.timeoutMs);
       } finally {
         inFlightGetRequests.delete(key);
       }
@@ -85,15 +106,21 @@ async function performFetchJson<T>(
   path: string,
   init: RequestInit | undefined,
   maxAttempts: number,
-  venueSlug?: string
+  venueSlug?: string,
+  timeoutMs?: number
 ): Promise<ApiResult<T>> {
 
+  const isGet = String(init?.method ?? "GET").toUpperCase() === "GET";
+
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // Reads only: a write is never cut off (it could have reached the server).
+    const timeout = isGet && timeoutMs && !init?.signal ? new AbortController() : null;
+    const timer = timeout ? window.setTimeout(() => timeout.abort(), timeoutMs) : null;
     try {
-      const requestPath =
-        String(init?.method ?? "GET").toUpperCase() === "GET" ? withNoStoreQuery(path) : path;
+      const requestPath = isGet ? withNoStoreQuery(path) : path;
       const res = await fetch(`${API_BASE}${requestPath}`, {
         ...init,
+        ...(timeout ? { signal: timeout.signal } : {}),
         cache: "no-store",
         credentials: "include",
         headers: {
@@ -101,6 +128,7 @@ async function performFetchJson<T>(
           "Cache-Control": "no-cache, no-store, max-age=0",
           Pragma: "no-cache",
           ...(venueSlug ? { "X-Venue-Slug": venueSlug } : {}),
+          "X-Staff-Device": getStaffDeviceId(),
           ...(init?.headers || {}),
         },
       });
@@ -128,21 +156,24 @@ async function performFetchJson<T>(
       return { ok: true, data: json as T };
     } catch {
       if (attempt < maxAttempts) {
-        await sleep(retryDelay(attempt));
+        // A cut-off read is retried right away; a real network error waits a bit.
+        await sleep(timeout?.signal.aborted ? 150 : retryDelay(attempt));
         continue;
       }
       return { ok: false, error: "NETWORK_ERROR", status: 0 };
+    } finally {
+      if (timer !== null) window.clearTimeout(timer);
     }
   }
 
   return { ok: false, error: "NETWORK_ERROR", status: 0 };
 }
 
-async function tryPaths<T>(paths: string[], init?: RequestInit): Promise<ApiResult<T>> {
+async function tryPaths<T>(paths: string[], init?: RequestInit, opts?: FetchOpts): Promise<ApiResult<T>> {
   let last: ApiResult<T> | null = null;
 
   for (const p of paths) {
-    const r = await fetchJson<T>(p, init);
+    const r = await fetchJson<T>(p, init, opts);
     last = r;
     if (r.ok) return r;
     if (!r.ok && r.status !== 404) return r;
@@ -256,19 +287,23 @@ export async function closeShift(): Promise<ApiResult<{ shiftId: string; closedA
 }
 
 // DASHBOARD
+/** Something this account was alerted about and is still waiting (see the summary). */
+export type StaffOpenAlert = { tag: string; kind: string; tableCode: string };
+
 export type StaffSummary = {
   newOrders: number;
   ticketsToAccept?: number;
   ticketsToDeliver?: number;
   newCalls: number;
   pendingPayments: number;
+  alerts?: StaffOpenAlert[];
   shift?: {
     id: string;
     openedAt: string;
   };
 };
 
-export async function getStaffSummary(): Promise<ApiResult<StaffSummary>> {
+export async function getStaffSummary(opts?: FetchOpts): Promise<ApiResult<StaffSummary>> {
   const r = await tryPaths<{
     ok: true;
     shift?: { id: string; openedAt: string };
@@ -277,9 +312,12 @@ export async function getStaffSummary(): Promise<ApiResult<StaffSummary>> {
     ticketsToDeliver?: number;
     newCalls: number;
     pendingPayments: number;
-  }>(["/staff/dashboard/summary", "/staff/summary"], {
-    method: "GET",
-  });
+    alerts?: StaffOpenAlert[];
+  }>(
+    ["/staff/dashboard/summary", "/staff/summary"],
+    { method: "GET" },
+    { timeoutMs: LIST_TIMEOUT_MS, ...opts }
+  );
 
   if (!r.ok) return r;
 
@@ -292,6 +330,7 @@ export async function getStaffSummary(): Promise<ApiResult<StaffSummary>> {
       ticketsToDeliver: r.data.ticketsToDeliver,
       newCalls: r.data.newCalls,
       pendingPayments: r.data.pendingPayments,
+      alerts: r.data.alerts,
     },
   };
 }
@@ -311,10 +350,11 @@ export type StaffOrderRequest = {
   items?: Array<{ menuItemId: number; name: string; qty: number; priceCzk: number }>;
 };
 
-export async function listOrderRequests(): Promise<ApiResult<{ requests: StaffOrderRequest[] }>> {
+export async function listOrderRequests(opts?: FetchOpts): Promise<ApiResult<{ requests: StaffOrderRequest[] }>> {
   return tryPaths<{ ok: true; requests: StaffOrderRequest[] }>(
     ["/staff/dashboard/order-requests"],
-    { method: "GET" }
+    { method: "GET" },
+    { timeoutMs: LIST_TIMEOUT_MS, ...opts }
   ).then((r) => (r.ok ? { ok: true, data: { requests: r.data.requests } } : r));
 }
 
@@ -339,10 +379,13 @@ export async function createTableOrder(payload: {
   comment?: string;
   items: Array<{ menuItemId: number; qty: number; comment?: string }>;
 }): Promise<ApiResult<any>> {
-  return tryPaths<any>(
+  const r = await tryPaths<any>(
     ["/staff/dashboard/table-orders"],
     { method: "POST", body: JSON.stringify(payload) }
   );
+  // My own order: no "new order" sound for it on this device.
+  if (r.ok && Array.isArray(r.data?.ticketIds)) markOwnAlerts(r.data.ticketIds.map((id: string) => `ticket:${id}`));
+  return r;
 }
 
 // STATION TICKETS — one per station (kitchen / bar / hookah) per send.
@@ -360,6 +403,9 @@ export type StationTicket = {
   readyAt: string | null;
   servedAt: string | null;
   cancelledAt: string | null;
+  /** Busy hours: when the station promised it (null on a normal day). */
+  etaAt?: string | null;
+  etaMinutes?: number | null;
   table: { id: number; code: string; label: string | null };
   items: Array<{
     id: string;
@@ -381,21 +427,39 @@ export type StationTicket = {
 };
 
 export async function listTickets(
-  view: "active" | "served" = "active"
+  view: "active" | "served" = "active",
+  opts?: FetchOpts
 ): Promise<ApiResult<{ tickets: StationTicket[] }>> {
-  return tryPaths<{ ok: true; tickets: StationTicket[] }>([`/staff/tickets?view=${view}`], {
-    method: "GET",
-  }).then((r) => (r.ok ? { ok: true, data: { tickets: r.data.tickets } } : r));
+  return tryPaths<{ ok: true; tickets: StationTicket[] }>(
+    [`/staff/tickets?view=${view}`],
+    { method: "GET" },
+    { timeoutMs: LIST_TIMEOUT_MS, ...opts }
+  ).then((r) => (r.ok ? { ok: true, data: { tickets: r.data.tickets } } : r));
 }
 
 export async function moveTicket(
   id: string,
   action: TicketAction
 ): Promise<ApiResult<{ changed: boolean; status: TicketStatus }>> {
+  // I mark it ready: no "ready" sound for it on this device.
+  if (action === "ready") markOwnAlerts([`ticket_ready:${id}`]);
   return tryPaths<{ ok: true; changed: boolean; status: TicketStatus }>([`/staff/tickets/${id}/${action}`], {
     method: "POST",
     body: JSON.stringify({}),
   }).then((r) => (r.ok ? { ok: true, data: { changed: r.data.changed, status: r.data.status } } : r));
+}
+
+/** Station (or anyone who prepares it): ready in `minutes` (10–40); null clears it. */
+export async function setTicketEta(
+  id: string,
+  minutes: number | null
+): Promise<ApiResult<{ etaAt: string | null; etaMinutes: number | null; accepted: boolean }>> {
+  return tryPaths<{ ok: true; etaAt: string | null; etaMinutes: number | null; accepted: boolean }>(
+    [`/staff/tickets/${id}/eta`],
+    { method: "POST", body: JSON.stringify({ minutes }) }
+  ).then((r) =>
+    r.ok ? { ok: true, data: { etaAt: r.data.etaAt, etaMinutes: r.data.etaMinutes, accepted: r.data.accepted } } : r
+  );
 }
 
 /** Manager only: take `qty` (default: all) of a line off the order. */
@@ -422,10 +486,11 @@ export type StaffCall = {
   session: { id: string; user: { id: string; name: string; phone: string | null } | null };
 };
 
-export async function listCalls(status: CallStatus): Promise<ApiResult<{ calls: StaffCall[] }>> {
+export async function listCalls(status: CallStatus, opts?: FetchOpts): Promise<ApiResult<{ calls: StaffCall[] }>> {
   return tryPaths<{ ok: true; calls: StaffCall[] }>(
     [`/staff/dashboard/calls?status=${status}`, `/staff/calls?status=${status}`],
-    { method: "GET" }
+    { method: "GET" },
+    { timeoutMs: LIST_TIMEOUT_MS, ...opts }
   ).then((r) => (r.ok ? { ok: true, data: { calls: r.data.calls } } : r));
 }
 
@@ -523,18 +588,22 @@ export type StaffActiveTableDetails = {
   };
 };
 
-export async function listActiveTables(): Promise<ApiResult<{ tables: StaffActiveTable[] }>> {
-  return tryPaths<{ ok: true; tables: StaffActiveTable[] }>(["/staff/dashboard/tables"], {
-    method: "GET",
-  }).then((r) => (r.ok ? { ok: true, data: { tables: r.data.tables } } : r));
+export async function listActiveTables(opts?: FetchOpts): Promise<ApiResult<{ tables: StaffActiveTable[] }>> {
+  return tryPaths<{ ok: true; tables: StaffActiveTable[] }>(
+    ["/staff/dashboard/tables"],
+    { method: "GET" },
+    { timeoutMs: LIST_TIMEOUT_MS, ...opts }
+  ).then((r) => (r.ok ? { ok: true, data: { tables: r.data.tables } } : r));
 }
 
 export async function getActiveTableDetails(
-  tableId: number
+  tableId: number,
+  opts?: FetchOpts
 ): Promise<ApiResult<{ table: StaffActiveTableDetails }>> {
   return tryPaths<{ ok: true } & StaffActiveTableDetails>(
     [`/staff/dashboard/tables/${tableId}`],
-    { method: "GET" }
+    { method: "GET" },
+    { timeoutMs: LIST_TIMEOUT_MS, ...opts }
   ).then((r) =>
     r.ok
       ? {
@@ -560,10 +629,13 @@ export async function requestTablePayment(
   tableId: number,
   method: PaymentMethod
 ): Promise<ApiResult<any>> {
-  return tryPaths<any>(
+  const r = await tryPaths<any>(
     [`/staff/dashboard/tables/${tableId}/request-payment`],
     { method: "POST", body: JSON.stringify({ method }) }
   );
+  // I asked for the bill myself: no "payment request" sound for it here.
+  if (r.ok && r.data?.payment?.id) markOwnAlerts([`payment_pending:${r.data.payment.id}`]);
+  return r;
 }
 
 export async function confirmPayment(id: string): Promise<ApiResult<any>> {

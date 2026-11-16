@@ -190,6 +190,13 @@ staffMenuAdminRouter.delete(
 );
 
 // ===== ITEMS =====
+// A photo is a site path ("/menu/…", served by the web app) or an https URL.
+const ImageUrlSchema = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((v) => v.startsWith("/") || v.startsWith("https://"), "Image must be /path or https://");
+
 const ItemCreateSchema = z.object({
   categoryId: z.number().int(),
   name: z.string().trim().min(1).max(160),
@@ -199,6 +206,7 @@ const ItemCreateSchema = z.object({
   priceCzk: z.number().int().min(0).max(1_000_000),
   sort: z.number().int().optional(),
   isActive: z.boolean().optional(),
+  imageUrl: ImageUrlSchema.optional(),
 });
 
 async function assertCategoryInVenue(categoryId: number, venueId: number) {
@@ -238,6 +246,7 @@ staffMenuAdminRouter.post(
         priceCzk: body.priceCzk,
         sort,
         isActive: body.isActive ?? true,
+        ...(body.imageUrl ? { imageUrl: body.imageUrl } : {}),
       },
     });
 
@@ -255,6 +264,7 @@ const ItemUpdateSchema = z.object({
   priceCzk: z.number().int().min(0).max(1_000_000).optional(),
   sort: z.number().int().optional(),
   isActive: z.boolean().optional(),
+  imageUrl: ImageUrlSchema.nullable().optional(),
 });
 
 staffMenuAdminRouter.patch(
@@ -295,6 +305,7 @@ staffMenuAdminRouter.patch(
         ...(body.priceCzk !== undefined ? { priceCzk: body.priceCzk } : {}),
         ...(body.sort !== undefined ? { sort: body.sort } : {}),
         ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        ...(body.imageUrl !== undefined ? { imageUrl: body.imageUrl } : {}),
       },
     });
 

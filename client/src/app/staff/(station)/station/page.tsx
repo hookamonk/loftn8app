@@ -28,6 +28,7 @@ import {
 import { unsubscribePushOnLogout } from "@/lib/staffPush";
 import { stationScreenTitle } from "@/lib/staffRoles";
 import { TicketCard } from "@/components/staff/TicketCard";
+import { EtaSheet, type EtaTarget } from "@/components/staff/EtaSheet";
 import { NotificationSetup } from "@/components/staff/NotificationSetup";
 
 /**
@@ -45,6 +46,10 @@ import { NotificationSetup } from "@/components/staff/NotificationSetup";
  * right away, and the 5-second refresh beeps by itself for anything they
  * missed (new ticket, cancellation, hookah call), plus its own reminder while
  * a ticket waits. One gate below makes sure each event beeps once.
+ *
+ * The order and its sound arrive together: an alert from the server fetches
+ * fresh data at once and sounds when the order is on screen (or after 3 s at
+ * the latest, if the data can't be fetched).
  */
 
 type WakeLockSentinelLike = {
@@ -61,6 +66,9 @@ const REMINDER_MERGE_MS = 45_000;
 // A cancellation heard from the server covers what the refresh sees this long.
 const CANCEL_MATCH_MS = 30_000;
 const HEARD_TTL_MS = 15 * 60_000;
+// A server alert waits for its order to be on screen; if the data can't be
+// fetched this fast, it sounds anyway — an order must never go unheard.
+const SOUND_WAIT_MAX_MS = 3000;
 
 /** The ticket / call id inside a server alert tag. */
 function idFromTag(tag: string | null | undefined, prefix: string) {
@@ -149,6 +157,7 @@ export default function StaffStationPage() {
   const [noShift, setNoShift] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [etaTarget, setEtaTarget] = useState<EtaTarget | null>(null);
   const [soundOn, setSoundOn] = useState(() => isAudioArmed());
   const [now, setNow] = useState(() => Date.now());
 
@@ -198,6 +207,47 @@ export default function StaffStationPage() {
     fireInAppAlert({ kind, tag, tableCode });
   }, []);
 
+  // Server alerts waiting for the refresh that puts their order on screen.
+  const pendingRef = useRef<
+    Array<{ kind: StaffAlertKind; tag: string | undefined; table: string | null; at: number; timer: number }>
+  >([]);
+
+  const queueSound = useCallback(
+    (kind: StaffAlertKind, tag: string | undefined, table: string | null) => {
+      if (document.visibilityState !== "visible") return;
+      const at = Date.now();
+      const entry = { kind, tag, table, at, timer: 0 };
+      entry.timer = window.setTimeout(() => {
+        pendingRef.current = pendingRef.current.filter((p) => p !== entry);
+        sound(kind, tag, table);
+      }, SOUND_WAIT_MAX_MS);
+      pendingRef.current.push(entry);
+    },
+    [sound]
+  );
+
+  /** Sound the alerts that this refresh (started at `startedAt`) has put on screen. */
+  const flushSounds = useCallback(
+    (startedAt: number) => {
+      const due = pendingRef.current.filter((p) => p.at <= startedAt);
+      if (due.length === 0) return;
+      pendingRef.current = pendingRef.current.filter((p) => p.at > startedAt);
+      for (const p of due) {
+        window.clearTimeout(p.timer);
+        sound(p.kind, p.tag, p.table);
+      }
+    },
+    [sound]
+  );
+
+  useEffect(
+    () => () => {
+      for (const p of pendingRef.current) window.clearTimeout(p.timer);
+      pendingRef.current = [];
+    },
+    []
+  );
+
   const pruneHeard = useCallback((at: number) => {
     for (const [key, ts] of heardRef.current) if (at - ts > HEARD_TTL_MS) heardRef.current.delete(key);
     for (const [key, ts] of polledCancelRef.current) if (at - ts > CANCEL_MATCH_MS) polledCancelRef.current.delete(key);
@@ -233,7 +283,7 @@ export default function StaffStationPage() {
             return;
           }
         }
-        sound(kind, tag ?? `ticket_cancel:${at}`, table);
+        queueSound(kind, tag ?? `ticket_cancel:${at}`, table);
         return;
       }
 
@@ -244,9 +294,9 @@ export default function StaffStationPage() {
         if (heard.has(key)) return;
         heard.set(key, at);
       }
-      sound(kind, tag ?? undefined, table);
+      queueSound(kind, tag ?? undefined, table);
     },
-    [pruneHeard, sound]
+    [pruneHeard, queueSound, sound]
   );
 
   // What the previous refresh saw; null until the first one (nothing to
@@ -332,11 +382,21 @@ export default function StaffStationPage() {
   // kitchen / bar / hookah-zone iPads in «В смене».
   const joinedRef = useRef(false);
 
-  const load = useCallback(async () => {
+  // Refreshes may overlap (regular poll + one right after an alert): a slower,
+  // older answer never overwrites a newer one.
+  const loadSeqRef = useRef(0);
+  const appliedSeqRef = useRef(0);
+
+  const load = useCallback(async (opts?: { fresh?: boolean }) => {
+    const seq = ++loadSeqRef.current;
+    const startedAt = Date.now();
+    const fetchOpts = opts?.fresh ? { fresh: true } : undefined;
     const [result, callsResult] = await Promise.all([
-      listTickets("active"),
-      answersCalls ? listCalls("NEW") : Promise.resolve(null),
+      listTickets("active", fetchOpts),
+      answersCalls ? listCalls("NEW", fetchOpts) : Promise.resolve(null),
     ]);
+    if (seq < appliedSeqRef.current) return;
+    appliedSeqRef.current = seq;
     setLoaded(true);
     if (callsResult?.ok) {
       noticeCalls(callsResult.data.calls);
@@ -352,6 +412,7 @@ export default function StaffStationPage() {
         setNoShift(true);
         setTickets([]);
         setErr(null);
+        flushSounds(startedAt);
         return;
       }
       setErr(result.error);
@@ -363,6 +424,8 @@ export default function StaffStationPage() {
     setErr(null);
     noticeTickets(result.data.tickets);
     setTickets(result.data.tickets);
+    // The order is on screen now — and its alert sounds with it.
+    flushSounds(startedAt);
 
     if (!joinedRef.current) {
       joinedRef.current = true;
@@ -370,26 +433,59 @@ export default function StaffStationPage() {
         if (!r.ok) joinedRef.current = false;
       });
     }
-  }, [answersCalls, noticeCalls, noticeTickets]);
+  }, [answersCalls, flushSounds, noticeCalls, noticeTickets]);
 
-  const { tick } = usePolling(() => load(), {
+  usePolling(() => load(), {
     activeMs: 5000,
     idleMs: 15000,
     immediate: true,
     enabled: !!staff,
   });
 
+  // Right after an alert: a new request (never one that left before the
+  // change, never stuck behind a hung one). One at a time, plus one queued.
+  const freshBusyRef = useRef(false);
+  const freshAgainRef = useRef(false);
+  const refreshNow = useCallback(
+    function refresh() {
+      if (freshBusyRef.current) {
+        freshAgainRef.current = true;
+        return;
+      }
+      freshBusyRef.current = true;
+      void load({ fresh: true })
+        .catch(() => {})
+        .finally(() => {
+          freshBusyRef.current = false;
+          if (freshAgainRef.current) {
+            freshAgainRef.current = false;
+            refresh();
+          }
+        });
+    },
+    [load]
+  );
+
+  // Back on screen after sleep: fresh data at once.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshNow();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refreshNow]);
+
   // Alerts arrive role-filtered from the server: new ticket, reminder, cancel.
   useStaffEvents((e) => {
     onServerAlert(e.kind, e.tag, e.tableCode);
-    void tick();
+    refreshNow();
   });
   const onPush = useCallback(
-    (p: { kind?: string; tag?: string; tableCode?: string | null }) => {
-      onServerAlert(p.kind, p.tag, p.tableCode);
-      void tick();
+    (p: { kind?: string; tag?: string; tableCode?: string | null; opened?: boolean }) => {
+      if (!p.opened) onServerAlert(p.kind, p.tag, p.tableCode);
+      refreshNow();
     },
-    [onServerAlert, tick]
+    [onServerAlert, refreshNow]
   );
   useStaffPushEvents(onPush, { inAppAlert: false });
 
@@ -402,7 +498,7 @@ export default function StaffStationPage() {
     const result = await moveTicket(ticket.id, action);
     setBusyId(null);
     if (!result.ok) push({ kind: "error", title: "Ошибка", message: result.error });
-    await load().catch(() => {});
+    await load({ fresh: true }).catch(() => {});
   };
 
   const acceptCall = async (call: StaffCall) => {
@@ -411,7 +507,7 @@ export default function StaffStationPage() {
     const result = await updateCallStatus(call.id, "DONE");
     setBusyId(null);
     if (!result.ok) push({ kind: "error", title: "Ошибка", message: result.error });
-    await load().catch(() => {});
+    await load({ fresh: true }).catch(() => {});
   };
 
   const sortedCalls = [...calls].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -540,9 +636,23 @@ export default function StaffStationPage() {
                     }
                   : null
               }
+              // Busy hours: «Выдача через 10–40 мин», the waiter sees it too.
+              onEta={() =>
+                setEtaTarget({ ticketId: ticket.id, tableCode: ticket.table.code, current: ticket.etaMinutes ?? null })
+              }
             />
           ))}
         </div>
+
+        <EtaSheet
+          target={etaTarget}
+          large
+          onClose={() => setEtaTarget(null)}
+          onDone={() => {
+            setEtaTarget(null);
+            void load({ fresh: true }).catch(() => {});
+          }}
+        />
       </div>
     </div>
   );

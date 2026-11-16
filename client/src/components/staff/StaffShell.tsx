@@ -2,18 +2,37 @@
 
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { staffLogout, getStaffSummary, type StaffSummary } from "@/lib/staffApi";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  staffLogout,
+  getStaffSummary,
+  type FetchOpts,
+  type StaffOpenAlert,
+  type StaffSummary,
+} from "@/lib/staffApi";
 import { useStaffSession } from "@/providers/staffSession";
 import { usePolling } from "@/lib/usePolling";
 import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
 import { useStaffEvents } from "@/lib/useStaffEvents";
-import { fireInAppAlert, armAudio, isAlertKind } from "@/lib/staffAlerts";
+import { fireInAppAlert, armAudio, isAlertKind, isAudioArmed, type StaffAlertKind } from "@/lib/staffAlerts";
+import { refreshScreens } from "@/lib/staffScreenRefresh";
+import { isOwnAlert } from "@/lib/staffOwnAlerts";
 import { unsubscribePushOnLogout } from "@/lib/staffPush";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 import { roleLabel } from "@/lib/staffRoles";
 
 type NavItem = { href: string; label: string; badge?: number; exact?: boolean };
+
+// The same event by live channel and by push: one sound.
+const SAME_EVENT_MS = 15_000;
+// Two "not accepted" reminders closer than this: one sound.
+const REMINDER_MERGE_MS = 45_000;
+// An alert waits for its order / call / bill to be on screen at most this
+// long; if the data can't be fetched, it sounds anyway.
+const SOUND_WAIT_MAX_MS = 3000;
+const HEARD_TTL_MS = 15 * 60_000;
+
+type PendingSound = { kind: StaffAlertKind; tag: string | undefined; table: string | null; at: number; timer: number };
 
 function NavTab({ item, active }: { item: NavItem; active: boolean }) {
   const badge = item.badge ?? 0;
@@ -57,13 +76,26 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
     router.replace("/staff/login");
   };
 
-  // Prime the alert audio on the first interaction with the dashboard, so new
-  // orders/calls beep even for staff who didn't enable push notifications.
+  // Sound: on right away where the browser allows it (installed app on
+  // Android), otherwise at the next tap. iPhone switches it off whenever the
+  // app goes to the background, so every tap and every return re-arms it, and
+  // a bar says so while it is off.
+  const [soundOn, setSoundOn] = useState(true);
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const prime = () => void armAudio();
-    window.addEventListener("pointerdown", prime, { once: true });
-    return () => window.removeEventListener("pointerdown", prime);
+    const sync = () => setSoundOn(isAudioArmed());
+    const prime = () => void armAudio().then(sync);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") prime();
+    };
+    window.addEventListener("pointerdown", prime);
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = window.setInterval(sync, 3000);
+    prime();
+    return () => {
+      window.removeEventListener("pointerdown", prime);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(timer);
+    };
   }, []);
 
   const isAdmin = staff?.role === "ADMIN";
@@ -75,27 +107,142 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   // live — SSE ticks are no-ops when polling is disabled.
   const shouldPollSummary = !isAdmin;
 
-  const loadSummary = async () => {
-    if (isAdmin) return;
+  /* ---- one gate for every sound: live channel, push and the summary ---- */
 
-    const r = await getStaffSummary();
-    if (!r.ok) {
-      if (r.status === 409) {
-        // No open shift — surface it instead of silently showing zeros, so
-        // staff understand why nothing appears.
-        setNoShift(true);
-        setSummary({ newOrders: 0, newCalls: 0, pendingPayments: 0 });
-      }
-      // Network/server failure — signal the poller so it backs off.
-      if (r.status === undefined || r.status >= 500) {
-        throw new Error(r.error || "SUMMARY_FAILED");
-      }
-      return;
-    }
+  // tag → when it last sounded (or was found already handled).
+  const heardRef = useRef(new Map<string, number>());
+  const lastReminderRef = useRef(0);
+  // Open alerts the previous summary listed; null until the first one.
+  const knownAlertsRef = useRef<Set<string> | null>(null);
+  const pendingRef = useRef<PendingSound[]>([]);
+  const refreshNowRef = useRef<() => void>(() => {});
 
-    setNoShift(false);
-    setSummary(r.data);
-  };
+  // While the screen is off the lock-screen notification does the job.
+  // Nothing sounds for what this device did itself (my own order, my own bill,
+  // my own «Готово») — except the "not accepted yet" reminder, which is about
+  // the kitchen, not about me.
+  const sound = useCallback((kind: StaffAlertKind, tag: string | undefined, table: string | null) => {
+    if (document.visibilityState !== "visible") return;
+    if (kind !== "TICKET_REMINDER" && isOwnAlert(tag)) return;
+    fireInAppAlert({ kind, tag, tableCode: table });
+  }, []);
+
+  const queueSound = useCallback(
+    (kind: StaffAlertKind, tag: string | undefined, table: string | null) => {
+      if (document.visibilityState !== "visible") return;
+      const entry: PendingSound = { kind, tag, table, at: Date.now(), timer: 0 };
+      entry.timer = window.setTimeout(() => {
+        pendingRef.current = pendingRef.current.filter((p) => p !== entry);
+        sound(kind, tag, table);
+      }, SOUND_WAIT_MAX_MS);
+      pendingRef.current.push(entry);
+    },
+    [sound]
+  );
+
+  /** Sound the alerts that a refresh started at `startedAt` has put on screen. */
+  const flushSounds = useCallback(
+    (startedAt: number) => {
+      const due = pendingRef.current.filter((p) => p.at <= startedAt);
+      if (due.length === 0) return;
+      pendingRef.current = pendingRef.current.filter((p) => p.at > startedAt);
+      for (const p of due) {
+        window.clearTimeout(p.timer);
+        sound(p.kind, p.tag, p.table);
+      }
+    },
+    [sound]
+  );
+
+  useEffect(
+    () => () => {
+      for (const p of pendingRef.current) window.clearTimeout(p.timer);
+      pendingRef.current = [];
+    },
+    []
+  );
+
+  const pruneHeard = useCallback((at: number) => {
+    for (const [key, ts] of heardRef.current) if (at - ts > HEARD_TTL_MS) heardRef.current.delete(key);
+  }, []);
+
+  // Live channel and push: the same event twice is one sound; a guest
+  // calling again later sounds again.
+  const onServerAlert = useCallback(
+    (kind: string | null | undefined, tag: string | null | undefined, tableCode: string | null | undefined) => {
+      if (!isAlertKind(kind)) return;
+      const at = Date.now();
+      pruneHeard(at);
+      const table = tableCode ?? null;
+
+      if (kind === "TICKET_REMINDER") {
+        if (at - lastReminderRef.current < REMINDER_MERGE_MS) return;
+        lastReminderRef.current = at;
+        sound(kind, tag ?? undefined, table);
+        return;
+      }
+
+      if (tag) {
+        const last = heardRef.current.get(tag);
+        heardRef.current.set(tag, at);
+        if (last !== undefined && at - last < SAME_EVENT_MS) return;
+      }
+      queueSound(kind, tag ?? undefined, table);
+    },
+    [pruneHeard, queueSound, sound]
+  );
+
+  // The summary lists what is still waiting for this account: anything new
+  // there that no alert announced (connection dropped, push lost) sounds now.
+  const noticeAlerts = useCallback(
+    (alerts: StaffOpenAlert[] | undefined) => {
+      if (!alerts) return;
+      const prev = knownAlertsRef.current;
+      knownAlertsRef.current = new Set(alerts.map((a) => a.tag));
+      if (!prev) return;
+
+      const at = Date.now();
+      pruneHeard(at);
+      let found = false;
+      for (const alert of alerts) {
+        if (prev.has(alert.tag) || heardRef.current.has(alert.tag)) continue;
+        heardRef.current.set(alert.tag, at);
+        if (!isAlertKind(alert.kind)) continue;
+        queueSound(alert.kind, alert.tag, alert.tableCode);
+        found = true;
+      }
+      if (found) refreshNowRef.current();
+    },
+    [pruneHeard, queueSound]
+  );
+
+  const loadSummary = useCallback(
+    async (opts?: FetchOpts) => {
+      if (isAdmin) return;
+
+      const r = await getStaffSummary(opts);
+      if (!r.ok) {
+        if (r.status === 409) {
+          // No open shift — surface it instead of silently showing zeros, so
+          // staff understand why nothing appears.
+          setNoShift(true);
+          setSummary({ newOrders: 0, newCalls: 0, pendingPayments: 0 });
+          // Whatever shows up once the shift opens is new.
+          if (!knownAlertsRef.current) knownAlertsRef.current = new Set();
+        }
+        // Network/server failure — signal the poller so it backs off.
+        if (r.status === undefined || r.status >= 500) {
+          throw new Error(r.error || "SUMMARY_FAILED");
+        }
+        return;
+      }
+
+      setNoShift(false);
+      setSummary(r.data);
+      noticeAlerts(r.data.alerts);
+    },
+    [isAdmin, noticeAlerts]
+  );
 
   const { tick } = usePolling(() => loadSummary(), {
     activeMs: 4000,
@@ -104,19 +251,58 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
     enabled: shouldPollSummary,
   });
 
-  useStaffPushEvents((payload) => {
-    if (isAlertKind(payload.kind)) void tick();
-  });
+  // After an alert: fresh badges and a fresh open screen (never a request that
+  // left before the change), then the sound — together with the data.
+  const refreshBusyRef = useRef(false);
+  const refreshAgainRef = useRef(false);
+  const refreshNow = useCallback(
+    function refresh() {
+      if (refreshBusyRef.current) {
+        refreshAgainRef.current = true;
+        return;
+      }
+      refreshBusyRef.current = true;
+      const startedAt = Date.now();
+      void Promise.all([loadSummary({ fresh: true }).catch(() => {}), refreshScreens()]).finally(() => {
+        refreshBusyRef.current = false;
+        flushSounds(startedAt);
+        if (refreshAgainRef.current) {
+          refreshAgainRef.current = false;
+          refresh();
+        }
+      });
+    },
+    [flushSounds, loadSummary]
+  );
+  useEffect(() => {
+    refreshNowRef.current = refreshNow;
+  }, [refreshNow]);
+
+  // Back on screen after sleep / another app: fresh data at once.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshNow();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refreshNow]);
+
+  const onPush = useCallback(
+    (payload: { kind?: string; tag?: string; tableCode?: string | null; opened?: boolean }) => {
+      if (!payload.opened) onServerAlert(payload.kind, payload.tag, payload.tableCode);
+      refreshNow();
+    },
+    [onServerAlert, refreshNow]
+  );
+  useStaffPushEvents(onPush, { inAppAlert: false });
 
   // Realtime SSE channel — the reliable in-app signal while the dashboard is
   // open, independent of (flaky) web-push. The server already sends each alert
   // only to the roles it concerns.
   useStaffEvents(
     (e) => {
-      if (document.visibilityState === "visible" && isAlertKind(e.kind)) {
-        fireInAppAlert({ kind: e.kind, tableCode: e.tableCode ?? null, tag: e.tag ?? undefined });
-      }
-      void tick();
+      onServerAlert(e.kind, e.tag, e.tableCode);
+      refreshNow();
     },
     { enabled: !isAdmin }
   );
@@ -176,6 +362,16 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
             />
           ))}
         </nav>
+
+        {!isAdmin && !soundOn ? (
+          <button
+            type="button"
+            onClick={() => void armAudio().then(() => setSoundOn(isAudioArmed()))}
+            className="mt-3 h-9 w-full rounded-xl bg-amber-400 text-sm font-semibold text-black"
+          >
+            Звук выключен — коснитесь, чтобы включить
+          </button>
+        ) : null}
 
         {!isAdmin && noShift ? (
           <div className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">

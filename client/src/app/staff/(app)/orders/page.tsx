@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   connectOrderRequest,
   dismissOrderRequest,
@@ -15,14 +15,14 @@ import type { StaffRole } from "@/providers/staffSession";
 import { useStaffSession } from "@/providers/staffSession";
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
-import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
-import { useStaffEvents } from "@/lib/useStaffEvents";
+import { useScreenRefresh } from "@/lib/staffScreenRefresh";
 import { emitStaffLiveSync, subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 import { WaitBadge, TONE_BORDER, waitInfo } from "@/lib/staffQueue";
 import { canCancelItems, canDeliver, canPrepare, canTakeOrderRequests } from "@/lib/staffRoles";
 import { OrderComposer } from "@/components/staff/OrderComposer";
 import { TicketCard } from "@/components/staff/TicketCard";
 import { CancelItemSheet, type CancelTarget } from "@/components/staff/CancelItemSheet";
+import { EtaSheet, type EtaTarget } from "@/components/staff/EtaSheet";
 
 /**
  * Everything about orders on one screen, most urgent first, one button per card:
@@ -106,6 +106,7 @@ export default function StaffOrdersPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [composer, setComposer] = useState<ComposerTarget | null>(null);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
+  const [etaTarget, setEtaTarget] = useState<EtaTarget | null>(null);
 
   // Live clock so the waiting times tick between polls.
   const [now, setNow] = useState(() => Date.now());
@@ -114,12 +115,20 @@ export default function StaffOrdersPage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const load = useCallback(async () => {
+  // A slower, older answer never overwrites a newer one.
+  const loadSeqRef = useRef(0);
+  const appliedSeqRef = useRef(0);
+
+  const load = useCallback(async (opts?: { fresh?: boolean }) => {
+    const seq = ++loadSeqRef.current;
+    const fetchOpts = opts?.fresh ? { fresh: true } : undefined;
     const [requestsResult, ticketsResult, servedResult] = await Promise.all([
-      takesRequests ? listOrderRequests() : Promise.resolve(null),
-      listTickets("active"),
-      showServed ? listTickets("served") : Promise.resolve(null),
+      takesRequests ? listOrderRequests(fetchOpts) : Promise.resolve(null),
+      listTickets("active", fetchOpts),
+      showServed ? listTickets("served", fetchOpts) : Promise.resolve(null),
     ]);
+    if (seq < appliedSeqRef.current) return;
+    appliedSeqRef.current = seq;
 
     setLoaded(true);
 
@@ -149,8 +158,8 @@ export default function StaffOrdersPage() {
     if (staff) void load();
   }, [staff, load]);
 
-  useStaffPushEvents(() => void tick());
-  useStaffEvents(() => void tick());
+  // Alerts: the shell refreshes this screen with fresh data, then sounds.
+  useScreenRefresh(() => load({ fresh: true }), !!staff);
   useEffect(() => subscribeStaffLiveSync(() => void tick()), [tick]);
 
   const run = async (ticket: StationTicket, action: TicketAction) => {
@@ -229,6 +238,14 @@ export default function StaffOrdersPage() {
                   qty: line.qty,
                   tableCode: ticket.table.code,
                 })
+            : undefined
+        }
+        // Whoever prepares it (manager, hookah master for hookahs) may set the
+        // ready time; the waiter only sees it.
+        onEta={
+          canPrepare(role, ticket.station)
+            ? () =>
+                setEtaTarget({ ticketId: ticket.id, tableCode: ticket.table.code, current: ticket.etaMinutes ?? null })
             : undefined
         }
       />
@@ -375,6 +392,15 @@ export default function StaffOrdersPage() {
           }}
         />
       ) : null}
+
+      <EtaSheet
+        target={etaTarget}
+        onClose={() => setEtaTarget(null)}
+        onDone={async () => {
+          setEtaTarget(null);
+          await load({ fresh: true });
+        }}
+      />
 
       <CancelItemSheet
         target={cancelTarget}

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { StaffAlertKind } from "@/lib/staffAlerts";
+import { getStaffDeviceId } from "@/lib/staffDevice";
 
 export type StaffRealtimeEvent = {
   kind: StaffAlertKind | "DATA_CHANGED";
@@ -33,8 +34,69 @@ let es: EventSource | null = null;
 let attempts = 0;
 let reconnectTimer: number | null = null;
 
+// The server sends a ping every 25 s. A connection that stays silent much
+// longer is dead (Wi-Fi switched, tablet slept) even if the browser still
+// calls it open — drop it and connect again.
+const SILENT_LIMIT_MS = 70_000;
+// After the screen was off / the app in background this long, start a fresh
+// connection instead of trusting the old one.
+const RESUME_RECONNECT_MS = 15_000;
+let lastFrameAt = 0;
+// Only a server that sends visible pings can be judged by silence.
+let pingSeen = false;
+let hiddenAt = 0;
+let watchdog: number | null = null;
+let lifecycleBound = false;
+
+function restart() {
+  if (listeners.size === 0) return;
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  es?.close();
+  es = null;
+  attempts = 0;
+  connect();
+}
+
+function onVisibility() {
+  if (document.visibilityState === "hidden") {
+    hiddenAt = Date.now();
+    return;
+  }
+  const wasHidden = hiddenAt;
+  hiddenAt = 0;
+  if (wasHidden && Date.now() - wasHidden >= RESUME_RECONNECT_MS) restart();
+}
+
+function onOnline() {
+  restart();
+}
+
+function bindLifecycle() {
+  if (lifecycleBound) return;
+  lifecycleBound = true;
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("online", onOnline);
+  watchdog = window.setInterval(() => {
+    if (!es || !pingSeen || document.visibilityState !== "visible") return;
+    if (Date.now() - lastFrameAt > SILENT_LIMIT_MS) restart();
+  }, 10_000);
+}
+
+function unbindLifecycle() {
+  if (!lifecycleBound) return;
+  lifecycleBound = false;
+  document.removeEventListener("visibilitychange", onVisibility);
+  window.removeEventListener("online", onOnline);
+  if (watchdog !== null) window.clearInterval(watchdog);
+  watchdog = null;
+}
+
 function handleFrame(ev: MessageEvent) {
   attempts = 0;
+  lastFrameAt = Date.now();
   try {
     const data = JSON.parse(ev.data) as StaffRealtimeEvent;
     if (data && typeof data.kind === "string") {
@@ -61,13 +123,25 @@ function scheduleReconnect() {
 function connect() {
   if (listeners.size === 0 || es) return;
 
-  es = new EventSource("/api/staff/dashboard/events", { withCredentials: true });
+  bindLifecycle();
+  lastFrameAt = Date.now();
+  pingSeen = false;
+  // The device id: the server leaves this device out of alerts it caused itself.
+  es = new EventSource(`/api/staff/dashboard/events?device=${encodeURIComponent(getStaffDeviceId())}`, {
+    withCredentials: true,
+  });
   es.addEventListener("staff", handleFrame as EventListener);
   es.addEventListener("ready", () => {
     attempts = 0;
+    lastFrameAt = Date.now();
+  });
+  es.addEventListener("ping", () => {
+    pingSeen = true;
+    lastFrameAt = Date.now();
   });
   es.onopen = () => {
     attempts = 0;
+    lastFrameAt = Date.now();
   };
   es.onerror = () => {
     // If the browser gave up (CLOSED), reconnect manually with backoff.
@@ -89,6 +163,7 @@ function teardownIfIdle() {
   es?.close();
   es = null;
   attempts = 0;
+  unbindLifecycle();
 }
 
 export function useStaffEvents(

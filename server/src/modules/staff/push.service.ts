@@ -79,7 +79,12 @@ export async function pushToStaff(staffId: string, payload: PushPayload) {
   return { sent: r.ok, failed: r.failed, removed: r.removed };
 }
 
-export async function pushToVenueRoles(venueId: number, roles: StaffRole[], payload: PushPayload) {
+export async function pushToVenueRoles(
+  venueId: number,
+  roles: StaffRole[],
+  payload: PushPayload,
+  opts?: { exceptDevice?: string | null }
+) {
   const staff = await prisma.staffUser.findMany({
     where: { venueId, isActive: true, role: { in: roles } },
     select: { id: true },
@@ -88,15 +93,29 @@ export async function pushToVenueRoles(venueId: number, roles: StaffRole[], payl
   const staffIds = staff.map((x) => x.id);
   if (staffIds.length === 0) return { sent: 0, failed: 0, removed: 0 };
 
-  const subs = await prisma.staffPushSubscription.findMany({
+  const all = await prisma.staffPushSubscription.findMany({
     where: { venueId, staffId: { in: staffIds } },
-    select: { id: true, endpoint: true, p256dh: true, auth: true },
+    select: { id: true, endpoint: true, p256dh: true, auth: true, deviceId: true },
   });
+  // The device that caused the event gets no push about its own action.
+  const except = opts?.exceptDevice;
+  const subs = except ? all.filter((s) => s.deviceId !== except) : all;
 
   if (subs.length === 0) return { sent: 0, failed: 0, removed: 0 };
 
   const r = await sendToSubscriptions(subs, payload);
   return { sent: r.ok, failed: r.failed, removed: r.removed };
+}
+
+/**
+ * What a call sounds like on staff screens — one rule for the live alert, the
+ * push and the screens' own check, so they always agree.
+ */
+export function callAlertKind(type: "WAITER" | "HOOKAH" | "BILL" | "HELP", message?: string | null) {
+  // "Call the waiter" from the guest menu IS the request to order.
+  if (type === "WAITER" || isOrderRequestMessage(message)) return "ORDER_CREATED" as const;
+  if (type === "HELP" && normalizeCallMessage(type, message)) return "GUEST_MESSAGE" as const;
+  return "CALL_CREATED" as const;
 }
 
 export async function notifyCallCreated(callId: string) {
@@ -179,7 +198,7 @@ export async function notifyCallCreated(callId: string) {
   ]);
 }
 
-export async function notifyPaymentRequested(paymentRequestId: string) {
+export async function notifyPaymentRequested(paymentRequestId: string, opts?: { exceptDevice?: string | null }) {
   const pr = await prisma.paymentRequest.findUnique({
     where: { id: paymentRequestId },
     select: {
@@ -202,6 +221,7 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
     tableCode: publicTableCode(pr.table.code),
     tag: `payment_pending:${pr.id}`,
     roles: ["WAITER", "MANAGER"],
+    exceptDevice: opts?.exceptDevice,
   });
   emitStaffEvent(pr.table.venueId, { kind: "DATA_CHANGED" });
 
@@ -216,7 +236,7 @@ export async function notifyPaymentRequested(paymentRequestId: string) {
     venueId: pr.table.venueId,
     venueSlug,
     vibrate: [280, 120, 280, 120, 460],
-  });
+  }, { exceptDevice: opts?.exceptDevice });
 }
 
 // The guest switched card ↔ cash on an in-flight payment — let the team know so

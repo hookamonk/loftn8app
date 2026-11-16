@@ -6,7 +6,7 @@ import { HttpError } from "../../utils/httpError";
 import { validate } from "../../middleware/validate";
 import { requireStaffAuth } from "./staff.middleware";
 import { effectiveAvailableAt, nextPragueMidnight, summarizeLoyalty } from "../../utils/loyalty";
-import { notifyPaymentRequested } from "../staff/push.service";
+import { callAlertKind, notifyPaymentRequested } from "../staff/push.service";
 import { ORDER_REQUEST_MARKER, isOrderRequestMessage } from "../orders/orderRequest";
 import {
   latestLegacyPaymentCutoff,
@@ -15,6 +15,7 @@ import {
 } from "../payments/paymentAllocation";
 import { getOpenShiftOrThrow } from "./shiftCache";
 import { addStaffClient, emitStaffEvent } from "./staffEvents";
+import { cleanDeviceId, staffDeviceOf } from "./staffDevice";
 import { emitGuestEvent } from "../guest/guestEvents";
 import {
   notifyGuestCallUpdated,
@@ -30,9 +31,12 @@ import type { Prisma, CallType, CallStatus, OrderStatus, PaymentStatus, StaffRol
 import {
   callTypesForRole,
   canHandlePayments,
+  canPrepare,
   canTakeOrderRequests,
   canWorkTables,
+  deliverRolesFor,
   orderSectionsForRole,
+  ticketSectionsForRole,
 } from "./roles";
 import { toPublicTable } from "./tableView";
 import { staffCallMessage } from "../calls/hookahReasons";
@@ -71,7 +75,7 @@ staffDashboardRouter.get("/events", (req, res) => {
   res.write("retry: 3000\n\n");
   res.write(`event: ready\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
 
-  const remove = addStaffClient(venueId, role, res);
+  const remove = addStaffClient(venueId, role, res, cleanDeviceId(req.query.device));
 
   req.on("close", () => {
     remove();
@@ -96,6 +100,90 @@ function orderRequestWhere(): Prisma.StaffCallWhereInput {
 
 function isOrderRequestCall(call: { type: CallType; message: string | null }) {
   return call.type === "WAITER" || isOrderRequestMessage(call.message);
+}
+
+/**
+ * Everything this role was alerted about that is still waiting: new calls and
+ * order requests, bills to take, tickets to accept, tickets to carry out.
+ * Tags and kinds are exactly those of the live alert and the push, so a
+ * screen that missed both (connection dropped, push lost) still beeps once
+ * from its regular summary refresh — and never twice.
+ */
+type OpenAlert = { tag: string; kind: string; tableCode: string };
+const OPEN_ALERTS_LIMIT = 60;
+
+async function openAlertsForRole(
+  venueId: number,
+  shift: { id: string; openedAt: Date },
+  role: StaffRole
+): Promise<OpenAlert[]> {
+  const types = callTypesForRole(role);
+  const sections = ticketSectionsForRole(role);
+  const toAccept = sections.filter((section) => canPrepare(role, section));
+  const toDeliver = sections.filter((section) => deliverRolesFor(section).includes(role));
+  const table = { select: { code: true, label: true } } as const;
+  const newest = { createdAt: "desc" } as const;
+
+  const [requests, calls, payments, newTickets, readyTickets] = await Promise.all([
+    canTakeOrderRequests(role)
+      ? prisma.staffCall.findMany({
+          where: { status: "NEW", ...orderRequestWhere(), table: { venueId }, createdAt: { gte: shift.openedAt } },
+          select: { id: true, type: true, message: true, table },
+          orderBy: newest,
+          take: OPEN_ALERTS_LIMIT,
+        })
+      : Promise.resolve([]),
+    types.length
+      ? prisma.staffCall.findMany({
+          where: {
+            status: "NEW",
+            type: { in: types },
+            ...excludeOrderRequestMarker(),
+            table: { venueId },
+            session: { shiftId: shift.id },
+          },
+          select: { id: true, type: true, message: true, table },
+          orderBy: newest,
+          take: OPEN_ALERTS_LIMIT,
+        })
+      : Promise.resolve([]),
+    canHandlePayments(role)
+      ? prisma.paymentRequest.findMany({
+          where: { status: "PENDING", table: { venueId }, session: { shiftId: shift.id } },
+          select: { id: true, table },
+          orderBy: newest,
+          take: OPEN_ALERTS_LIMIT,
+        })
+      : Promise.resolve([]),
+    toAccept.length
+      ? prisma.stationTicket.findMany({
+          where: { venueId, shiftId: shift.id, status: "NEW", station: { in: toAccept } },
+          select: { id: true, table },
+          orderBy: newest,
+          take: OPEN_ALERTS_LIMIT,
+        })
+      : Promise.resolve([]),
+    toDeliver.length
+      ? prisma.stationTicket.findMany({
+          where: { venueId, shiftId: shift.id, status: "READY", station: { in: toDeliver } },
+          select: { id: true, table },
+          orderBy: newest,
+          take: OPEN_ALERTS_LIMIT,
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const code = (t: { code: string; label: string | null }) => toPublicTable(t).code;
+  return [
+    ...[...requests, ...calls].map((call) => ({
+      tag: `call_new:${call.id}`,
+      kind: callAlertKind(call.type, call.message),
+      tableCode: code(call.table),
+    })),
+    ...payments.map((pr) => ({ tag: `payment_pending:${pr.id}`, kind: "PAYMENT_REQUESTED", tableCode: code(pr.table) })),
+    ...newTickets.map((t) => ({ tag: `ticket:${t.id}`, kind: "TICKET_NEW", tableCode: code(t.table) })),
+    ...readyTickets.map((t) => ({ tag: `ticket_ready:${t.id}`, kind: "TICKET_READY", tableCode: code(t.table) })),
+  ];
 }
 
 function excludeOrderRequestMarker(): Prisma.StaffCallWhereInput {
@@ -340,7 +428,7 @@ staffDashboardRouter.get(
 
     const shift = await getActiveShiftOrThrow(venueId);
 
-    const [orderRequests, tickets, newCalls, pendingPayments] = await Promise.all([
+    const [orderRequests, tickets, newCalls, pendingPayments, alerts] = await Promise.all([
       canTakeOrderRequests(role)
         ? prisma.staffCall.count({
             where: {
@@ -372,6 +460,7 @@ staffDashboardRouter.get(
             },
           })
         : Promise.resolve(0),
+      openAlertsForRole(venueId, shift, role),
     ]);
 
     res.json({
@@ -387,6 +476,7 @@ staffDashboardRouter.get(
       ticketsToDeliver: tickets.toDeliver,
       newCalls,
       pendingPayments,
+      alerts,
     });
   })
 );
@@ -433,6 +523,7 @@ staffDashboardRouter.post(
       orderItemId: String(req.params.itemId),
       qty: body.qty,
       reason: body.reason,
+      deviceId: staffDeviceOf(req),
     });
 
     res.json({ ok: true, ...result });
@@ -553,7 +644,8 @@ staffDashboardRouter.post(
       return { orderId: order.id, ticketIds, statusChange };
     });
 
-    void notifyTicketsCreated(ticketIds).catch((e) => {
+    // Whoever punched the order hears nothing about it on their own device.
+    void notifyTicketsCreated(ticketIds, { exceptDevice: staffDeviceOf(req) }).catch((e) => {
       console.warn("push notifyTicketsCreated failed", e);
     });
     emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
@@ -1118,7 +1210,7 @@ staffDashboardRouter.post(
           },
         });
 
-    void notifyPaymentRequested(payment.id).catch((e: unknown) => {
+    void notifyPaymentRequested(payment.id, { exceptDevice: staffDeviceOf(req) }).catch((e: unknown) => {
       console.warn("push notifyPaymentRequested failed", e);
     });
 

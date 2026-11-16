@@ -43,6 +43,28 @@ const ICON = "/icon-192.png";
 const BADGE = "/icon-192.png";
 const DEFAULT_VIBRATE = [320, 140, 320, 140, 420];
 
+/**
+ * Safari (iPhone, iPad, Mac) has no `renotify`: a notification that replaces
+ * one with the same tag may come in silently. There a staff alert closes the
+ * previous one with its tag and comes with a tag of its own — so a reminder or
+ * a guest calling again always sounds, and nothing piles up.
+ */
+function isAppleWebKit() {
+  const ua = (self.navigator && self.navigator.userAgent) || "";
+  return /AppleWebKit/.test(ua) && !/Chrome|Chromium|CriOS|Android|Edg|Firefox|FxiOS/.test(ua);
+}
+
+async function closeNotificationsTagged(tag) {
+  try {
+    const open = await self.registration.getNotifications();
+    for (const n of open) {
+      if (n.data && n.data.tag === tag) n.close();
+    }
+  } catch {
+    // not supported — the new alert still shows
+  }
+}
+
 self.addEventListener("install", () => {
   self.skipWaiting();
 });
@@ -132,7 +154,12 @@ self.addEventListener("push", (event) => {
       // Showing a notification is mandatory: a push handler that stays silent
       // makes the browser display "site updated in background" and can revoke
       // the push permission after repeated offences.
-      await self.registration.showNotification(title, options);
+      const soundAgain = audience === "staff" && options.renotify && isAppleWebKit();
+      if (soundAgain) await closeNotificationsTagged(tag);
+      await self.registration.showNotification(
+        title,
+        soundAgain ? { ...options, tag: `${tag}#${ts}#${Math.random().toString(16).slice(2, 6)}` } : options
+      );
 
       const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of clients) {
@@ -159,7 +186,9 @@ self.addEventListener("notificationclick", (event) => {
       for (const client of clients) {
         if ("focus" in client) {
           await client.focus();
-          client.postMessage({ type: messageTypeFor(audience), payload: { ...data, ts: Date.now() } });
+          // `opened`: the person tapped an old notification — refresh the
+          // screen, don't play its sound again.
+          client.postMessage({ type: messageTypeFor(audience), payload: { ...data, ts: Date.now(), opened: true } });
           if ("navigate" in client && url) {
             try {
               await client.navigate(url);

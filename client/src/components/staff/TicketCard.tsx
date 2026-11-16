@@ -45,9 +45,27 @@ function waitLabel(ticket: StationTicket, now: number) {
   return mins < 1 ? "сейчас" : `${mins} мин`;
 }
 
+/**
+ * Busy hours: the station said when it will be ready. Shown only while the
+ * order is being made and only if a time was set — a normal day shows nothing.
+ */
+export function etaInfo(ticket: StationTicket, now: number) {
+  if (!ticket.etaAt || (ticket.status !== "NEW" && ticket.status !== "ACCEPTED")) return null;
+  const at = new Date(ticket.etaAt).getTime();
+  const left = at - now;
+  if (left > 0) {
+    return { late: false, label: `Выдача через ${Math.max(1, Math.ceil(left / 60000))} мин · к ${clock(ticket.etaAt)}` };
+  }
+  const over = Math.floor(-left / 60000);
+  return { late: true, label: over < 1 ? `Выдача сейчас · ${clock(ticket.etaAt)}` : `Опаздывает на ${over} мин · было к ${clock(ticket.etaAt)}` };
+}
+
 function borderFor(ticket: StationTicket, now: number) {
   if (ticket.status === "NEW") return "border-red-500/60";
   if (ticket.status === "READY") return "border-emerald-400/50";
+  // With a promised time the card turns red only once that time has passed.
+  const eta = etaInfo(ticket, now);
+  if (eta) return eta.late ? "border-red-500/40" : "border-amber-400/40";
   if (ticket.status === "ACCEPTED") {
     const mins = minutesSince(ticket.createdAt, now);
     if (mins >= 20) return "border-red-500/40";
@@ -64,6 +82,7 @@ export function TicketCard({
   showStatus = false,
   action,
   onCancelLine,
+  onEta,
 }: {
   ticket: StationTicket;
   now: number;
@@ -74,10 +93,14 @@ export function TicketCard({
   action?: TicketCardAction | null;
   /** Manager: take a line off the order. */
   onCancelLine?: (line: Line) => void;
+  /** Whoever prepares it: set / change the ready time (busy hours). */
+  onEta?: () => void;
 }) {
   const lg = size === "lg";
   const cancelled = ticket.status === "CANCELLED";
   const chip = STATUS_CHIP[ticket.status];
+  const eta = etaInfo(ticket, now);
+  const canSetEta = !!onEta && (ticket.status === "NEW" || ticket.status === "ACCEPTED");
 
   return (
     <div
@@ -114,6 +137,18 @@ export function TicketCard({
           {waitLabel(ticket, now)}
         </span>
       </div>
+
+      {eta ? (
+        <div
+          className={[
+            "mt-2 rounded-xl px-2.5 py-1.5 font-semibold tabular-nums",
+            lg ? "text-base" : "text-xs",
+            eta.late ? "bg-red-500/15 text-red-200" : "bg-amber-400/15 text-amber-100",
+          ].join(" ")}
+        >
+          ⏱ {eta.label}
+        </div>
+      ) : null}
 
       <div className={`mt-2.5 space-y-1.5 ${lg ? "text-lg" : "text-sm"}`}>
         {ticket.items.map((line) => (
@@ -152,21 +187,36 @@ export function TicketCard({
         ))}
       </div>
 
-      {action ? (
+      {action || canSetEta ? (
         // Pinned to the bottom so buttons line up across a grid of cards.
-        <div className="mt-auto pt-3">
-          <button
-            type="button"
-            disabled={action.busy}
-            onClick={action.onClick}
-            className={[
-              "w-full rounded-xl font-semibold text-black transition active:scale-[0.99] disabled:opacity-50",
-              lg ? "h-14 text-lg" : "h-11 text-sm",
-              action.tone === "accent" ? "bg-emerald-400" : "bg-white",
-            ].join(" ")}
-          >
-            {action.busy ? "…" : action.label}
-          </button>
+        <div className="mt-auto flex gap-2 pt-3">
+          {canSetEta ? (
+            <button
+              type="button"
+              onClick={onEta}
+              aria-label="Время выдачи"
+              className={[
+                "shrink-0 rounded-xl border border-white/15 bg-white/5 px-3 font-semibold text-white/85 transition active:scale-[0.99]",
+                lg ? "h-14 text-base" : "h-11 text-sm",
+              ].join(" ")}
+            >
+              ⏱ Время
+            </button>
+          ) : null}
+          {action ? (
+            <button
+              type="button"
+              disabled={action.busy}
+              onClick={action.onClick}
+              className={[
+                "min-w-0 flex-1 rounded-xl font-semibold text-black transition active:scale-[0.99] disabled:opacity-50",
+                lg ? "h-14 text-lg" : "h-11 text-sm",
+                action.tone === "accent" ? "bg-emerald-400" : "bg-white",
+              ].join(" ")}
+            >
+              {action.busy ? "…" : action.label}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

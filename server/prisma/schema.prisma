@@ -260,6 +260,10 @@ model StationTicket {
   // "Not accepted yet" reminders (every few minutes until a station accepts).
   lastRemindedAt DateTime?
   reminderCount  Int          @default(0)
+  // Busy hours: the station says when it will be ready (10–40 min). Empty in
+  // a normal flow — then no countdown is shown anywhere.
+  etaAt          DateTime?
+  etaMinutes     Int?
   updatedAt      DateTime     @updatedAt
 
   venue          Venue        @relation(fields: [venueId], references: [id])
@@ -453,6 +457,9 @@ model StaffPushSubscription {
   p256dh    String
   auth      String
   userAgent String?
+  // The browser this subscription belongs to: whoever does something on a
+  // device gets no alert about it on that same device.
+  deviceId  String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   staff     StaffUser @relation(fields: [staffId], references: [id])

@@ -1,6 +1,7 @@
 import type { ApiResult } from "@/lib/staffApi";
 import { primeAlerts } from "@/lib/staffAlerts";
 import { getStaffVenueSlug } from "@/lib/venue";
+import { getStaffDeviceId } from "@/lib/staffDevice";
 import {
   SW_URL,
   detectPlatform,
@@ -44,6 +45,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiResult<
       headers: {
         "Content-Type": "application/json",
         ...(venueSlug ? { "X-Venue-Slug": venueSlug } : {}),
+        "X-Staff-Device": getStaffDeviceId(),
         ...(init?.headers || {}),
       },
     });

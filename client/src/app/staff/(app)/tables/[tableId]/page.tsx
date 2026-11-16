@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelPayment,
   confirmPayment,
@@ -11,8 +11,7 @@ import {
   type StaffActiveTableDetails,
 } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
-import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
-import { useStaffEvents } from "@/lib/useStaffEvents";
+import { useScreenRefresh } from "@/lib/staffScreenRefresh";
 import { emitStaffLiveSync, subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 import { useToast } from "@/providers/toast";
 import { useStaffSession } from "@/providers/staffSession";
@@ -50,14 +49,21 @@ export default function StaffTableDetailsPage() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
 
+  // A slower, older answer never overwrites a newer one.
+  const loadSeqRef = useRef(0);
+  const appliedSeqRef = useRef(0);
+
   const load = useCallback(
-    async (opts?: { silent?: boolean }) => {
+    async (opts?: { silent?: boolean; fresh?: boolean }) => {
       const silent = opts?.silent ?? false;
       if (!silent) setLoading(true);
 
-      const result = await getActiveTableDetails(tableId);
+      const seq = ++loadSeqRef.current;
+      const result = await getActiveTableDetails(tableId, opts?.fresh ? { fresh: true } : undefined);
 
       if (!silent) setLoading(false);
+      if (seq < appliedSeqRef.current) return;
+      appliedSeqRef.current = seq;
 
       if (!result.ok) {
         setErr(result.error);
@@ -82,8 +88,8 @@ export default function StaffTableDetailsPage() {
     void load({ silent: false });
   }, [tableId, load]);
 
-  useStaffPushEvents(() => void tick());
-  useStaffEvents(() => void tick());
+  // Alerts: the shell refreshes this table with fresh data, then sounds.
+  useScreenRefresh(() => load({ silent: true, fresh: true }), Number.isFinite(tableId) && tableId > 0);
   useEffect(() => subscribeStaffLiveSync(() => void tick()), [tick]);
 
   const settle = async (method: "CARD" | "CASH") => {

@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listCalls, updateCallStatus, type StaffCall } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/providers/toast";
-import { useStaffPushEvents } from "@/lib/useStaffPushEvents";
-import { useStaffEvents } from "@/lib/useStaffEvents";
+import { useScreenRefresh } from "@/lib/staffScreenRefresh";
 import { emitStaffLiveSync } from "@/lib/staffLiveSync";
 import { WaitBadge, TONE_BORDER, waitInfo, queueCardBase } from "@/lib/staffQueue";
 
@@ -49,13 +48,20 @@ export default function StaffCallsPage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const load = useCallback(async (opts?: { silent?: boolean }) => {
+  // A slower, older answer never overwrites a newer one.
+  const loadSeqRef = useRef(0);
+  const appliedSeqRef = useRef(0);
+
+  const load = useCallback(async (opts?: { silent?: boolean; fresh?: boolean }) => {
     const silent = opts?.silent ?? false;
     if (!silent) setLoading(true);
 
-    const result = await listCalls("NEW");
+    const seq = ++loadSeqRef.current;
+    const result = await listCalls("NEW", opts?.fresh ? { fresh: true } : undefined);
 
     if (!silent) setLoading(false);
+    if (seq < appliedSeqRef.current) return;
+    appliedSeqRef.current = seq;
 
     if (!result.ok) {
       setErr(result.error);
@@ -66,7 +72,7 @@ export default function StaffCallsPage() {
     setCalls(result.data.calls);
   }, []);
 
-  const { tick } = usePolling(() => load({ silent: true }), {
+  usePolling(() => load({ silent: true }), {
     activeMs: 8000,
     idleMs: 20000,
     immediate: false,
@@ -77,13 +83,8 @@ export default function StaffCallsPage() {
     void load({ silent: false });
   }, [load]);
 
-  useStaffPushEvents((payload) => {
-    if (payload.kind === "CALL_CREATED" || payload.kind === "GUEST_MESSAGE") void tick();
-  });
-
-  useStaffEvents((e) => {
-    if (e.kind === "CALL_CREATED" || e.kind === "GUEST_MESSAGE" || e.kind === "DATA_CHANGED") void tick();
-  });
+  // Alerts: the shell refreshes this screen with fresh data, then sounds.
+  useScreenRefresh(() => load({ silent: true, fresh: true }));
 
   // Longest wait on top.
   const sorted = useMemo(
