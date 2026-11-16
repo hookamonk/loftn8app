@@ -38,7 +38,7 @@ export default function StaffLoginPage() {
 
   return (
     <main className="min-h-dvh w-full bg-[#07070a] text-white">
-      <div className="mx-auto flex min-h-dvh max-w-md items-center px-4 py-10">
+      <div className="staff-safe mx-auto flex min-h-dvh max-w-md items-center">
         <div className="w-full rounded-3xl border border-white/10 bg-white/[0.05] p-4">
           <div className="text-[11px] tracking-[0.18em] text-white/40">LOFT№8</div>
           <h1 className="mt-1 text-xl font-semibold">Вход для персонала</h1>

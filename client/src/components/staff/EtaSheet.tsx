@@ -64,7 +64,7 @@ function EtaForm({
     <div className="fixed inset-0 z-[95] flex items-end justify-center sm:items-center" role="dialog" aria-modal="true">
       <button type="button" aria-label="Закрыть" className="absolute inset-0 bg-black/60" onClick={onClose} />
 
-      <div className="relative w-full max-w-md rounded-t-3xl border border-white/10 bg-[#0c0c11] p-4 pb-8 sm:rounded-3xl sm:pb-4">
+      <div className="relative w-full max-w-md rounded-t-3xl border border-white/10 bg-[#0c0c11] p-4 staff-sheet-bottom sm:rounded-3xl sm:pb-4">
         <div className="text-[11px] tracking-[0.18em] text-white/40">СТОЛ {target.tableCode}</div>
         <div className={`mt-1 font-semibold text-white ${large ? "text-2xl" : "text-lg"}`}>Выдача через</div>
 

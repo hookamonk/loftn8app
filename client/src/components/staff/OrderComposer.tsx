@@ -252,7 +252,7 @@ export function OrderComposer({
   return (
     <div className="fixed inset-0 z-[90] flex flex-col bg-[#07070a]" role="dialog" aria-modal="true">
       {/* Header */}
-      <div className="border-b border-white/10 bg-[#0c0c11] px-4 pb-3 pt-4">
+      <div className="staff-safe-top border-b border-white/10 bg-[#0c0c11] px-4 pb-3">
         <div className="mx-auto flex max-w-md items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[11px] tracking-[0.24em] text-white/45">ЗАКАЗ</div>
@@ -359,7 +359,7 @@ export function OrderComposer({
       </div>
 
       {/* Sticky save bar */}
-      <div className="border-t border-white/10 bg-[#0c0c11] px-4 pb-6 pt-3">
+      <div className="staff-safe-bottom border-t border-white/10 bg-[#0c0c11] px-4 pt-3">
         <div className="mx-auto max-w-md">
           <div className="mb-2 flex items-center justify-between text-sm">
             <span className="text-white/55">

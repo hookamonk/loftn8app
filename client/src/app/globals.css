@@ -54,3 +54,26 @@ body {
 * {
   -webkit-tap-highlight-color: transparent;
 }
+
+/*
+ * Staff screens: keep content clear of the iPhone status bar / notch and the
+ * home indicator when the app is installed (black-translucent status bar,
+ * viewport-fit=cover). Elsewhere env() is 0 and the plain padding applies.
+ */
+.staff-safe {
+  padding-top: max(1rem, calc(env(safe-area-inset-top) + 0.5rem));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  padding-bottom: max(2.5rem, calc(env(safe-area-inset-bottom) + 1rem));
+  padding-left: max(1rem, env(safe-area-inset-left));
+}
+
+/* Full-screen staff overlays and bottom sheets: same idea, one edge each. */
+.staff-safe-top {
+  padding-top: max(1rem, calc(env(safe-area-inset-top) + 0.5rem));
+}
+.staff-safe-bottom {
+  padding-bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 0.75rem));
+}
+.staff-sheet-bottom {
+  padding-bottom: max(2rem, calc(env(safe-area-inset-bottom) + 1rem));
+}

@@ -336,7 +336,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-dvh bg-[#07070a] text-white">
-      <div className={`mx-auto p-4 pb-10 ${isAdminPage ? "max-w-7xl" : isReportPage ? "max-w-xl" : "max-w-md"}`}>
+      <div className={`staff-safe mx-auto ${isAdminPage ? "max-w-7xl" : isReportPage ? "max-w-xl" : "max-w-md"}`}>
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-[11px] tracking-[0.18em] text-white/40">

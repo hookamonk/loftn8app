@@ -69,7 +69,7 @@ export function StaffGuard({ children }: { children: React.ReactNode }) {
 
   if (!ready) {
     return (
-      <div className="min-h-dvh bg-[#07070a] p-4">
+      <div className="staff-safe min-h-dvh bg-[#07070a]">
         <div className="mx-auto max-w-md rounded-3xl border border-white/10 bg-white/[0.05] p-3.5 text-sm text-white">
           <div className="font-semibold">Персонал</div>
           <div className="mt-2 text-white/60">Проверяем доступ…</div>

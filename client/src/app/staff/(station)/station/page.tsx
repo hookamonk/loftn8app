@@ -522,7 +522,7 @@ export default function StaffStationPage() {
 
   return (
     <div className="min-h-dvh bg-[#07070a] text-white">
-      <div className="mx-auto max-w-[1400px] p-4 pb-10">
+      <div className="staff-safe mx-auto max-w-[1400px]">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[11px] tracking-[0.18em] text-white/40">
