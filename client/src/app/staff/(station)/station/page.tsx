@@ -619,6 +619,8 @@ export default function StaffStationPage() {
               ticket={ticket}
               now={now}
               size="lg"
+              // The kitchen reads dish names in Czech; the bar and the hookah zone as before.
+              czechNames={staff?.role === "KITCHEN"}
               action={
                 ticket.status === "NEW"
                   ? {

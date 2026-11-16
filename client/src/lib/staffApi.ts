@@ -412,6 +412,8 @@ export type StationTicket = {
     orderId: string;
     menuItemId: number;
     name: string;
+    /** Czech dish name — what the kitchen tablet shows. */
+    nameCs?: string | null;
     qty: number;
     comment: string | null;
     priceCzk: number;
@@ -419,6 +421,7 @@ export type StationTicket = {
   cancellations: Array<{
     id: string;
     name: string;
+    nameCs?: string | null;
     qty: number;
     comment: string | null;
     reason: string | null;

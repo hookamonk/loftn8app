@@ -83,6 +83,7 @@ export function TicketCard({
   action,
   onCancelLine,
   onEta,
+  czechNames = false,
 }: {
   ticket: StationTicket;
   now: number;
@@ -95,7 +96,10 @@ export function TicketCard({
   onCancelLine?: (line: Line) => void;
   /** Whoever prepares it: set / change the ready time (busy hours). */
   onEta?: () => void;
+  /** Kitchen tablet: dish names in Czech (falls back to the menu name). */
+  czechNames?: boolean;
 }) {
+  const dish = (line: { name: string; nameCs?: string | null }) => (czechNames && line.nameCs) || line.name;
   const lg = size === "lg";
   const cancelled = ticket.status === "CANCELLED";
   const chip = STATUS_CHIP[ticket.status];
@@ -155,7 +159,7 @@ export function TicketCard({
           <div key={line.id} className="flex items-start justify-between gap-2">
             <div className={`min-w-0 ${cancelled ? "line-through" : ""}`}>
               <div className="text-white">
-                <span className="font-bold tabular-nums">{line.qty} ×</span> {line.name}
+                <span className="font-bold tabular-nums">{line.qty} ×</span> {dish(line)}
               </div>
               {line.comment ? (
                 <div className={`${lg ? "text-base" : "text-xs"} font-medium text-amber-200`}>{line.comment}</div>
@@ -177,7 +181,7 @@ export function TicketCard({
         {ticket.cancellations.map((line) => (
           <div key={line.id} className="text-red-200/80">
             <span className="line-through">
-              {line.qty} × {line.name}
+              {line.qty} × {dish(line)}
             </span>
             <span className={`${lg ? "text-sm" : "text-[11px]"} font-semibold`}>
               {" "}

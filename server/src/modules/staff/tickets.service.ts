@@ -217,12 +217,20 @@ const ticketSelect = {
       qty: true,
       comment: true,
       priceCzk: true,
-      menuItem: { select: { id: true, name: true } },
+      menuItem: { select: { id: true, name: true, nameCs: true } },
     },
   },
   cancellations: {
     orderBy: { createdAt: "asc" },
-    select: { id: true, name: true, qty: true, comment: true, reason: true, createdAt: true },
+    select: {
+      id: true,
+      name: true,
+      qty: true,
+      comment: true,
+      reason: true,
+      createdAt: true,
+      menuItem: { select: { nameCs: true } },
+    },
   },
 } satisfies Prisma.StationTicketSelect;
 
@@ -249,11 +257,13 @@ function toTicketView(ticket: TicketRow) {
       orderId: item.orderId,
       menuItemId: item.menuItem.id,
       name: item.menuItem.name,
+      // The kitchen reads the menu in Czech.
+      nameCs: item.menuItem.nameCs,
       qty: item.qty,
       comment: item.comment,
       priceCzk: item.priceCzk,
     })),
-    cancellations: ticket.cancellations,
+    cancellations: ticket.cancellations.map(({ menuItem, ...line }) => ({ ...line, nameCs: menuItem.nameCs })),
   };
 }
 
@@ -435,7 +445,7 @@ export async function cancelOrderLine(params: {
       priceCzk: true,
       menuItemId: true,
       ticketId: true,
-      menuItem: { select: { name: true } },
+      menuItem: { select: { name: true, nameCs: true } },
       ticket: { select: { status: true } },
       order: { select: { status: true, tableId: true, table: { select: { venueId: true } } } },
     },
@@ -536,6 +546,7 @@ export async function cancelOrderLine(params: {
       ticketId: item.ticketId,
       statusBefore: item.ticket.status,
       line: `${item.menuItem.name} ×${result.qty}`,
+      lineCs: `${item.menuItem.nameCs || item.menuItem.name} ×${result.qty}`,
       reason,
       wholeTicket: result.wholeTicket,
       exceptDevice: params.deviceId,
@@ -609,10 +620,19 @@ export async function setTicketEta(params: {
 /* Notifications                                                            */
 /* ------------------------------------------------------------------------ */
 
-function linesSummary(items: Array<{ qty: number; menuItem: { name: string } }>, max = 140) {
-  const text = items.map((item) => `${item.menuItem.name} ×${item.qty}`).join(", ");
+function linesSummary(
+  items: Array<{ qty: number; menuItem: { name: string; nameCs?: string | null } }>,
+  max = 140,
+  czech = false
+) {
+  const text = items
+    .map((item) => `${(czech && item.menuItem.nameCs) || item.menuItem.name} ×${item.qty}`)
+    .join(", ");
   return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
 }
+
+/** Only the kitchen reads dish names in Czech; the bar and the hookah zone keep theirs. */
+const czechForStation = (station: MenuSection) => station === "DISHES";
 
 type TicketAlert = {
   venueId: number;
@@ -620,6 +640,8 @@ type TicketAlert = {
   payload: Omit<PushPayload, "url" | "kind"> & { kind: Extract<StaffEventKind, PushPayload["kind"]> };
   /** The device whose action caused the alert hears nothing about it. */
   exceptDevice?: string | null;
+  /** Text for the station tablet when it differs (the kitchen reads Czech dish names). */
+  stationBody?: string;
 };
 
 /** The live channel: instant on every open screen. Never waits for anything. */
@@ -635,13 +657,14 @@ function emitAlert({ venueId, roles, payload, exceptDevice }: TicketAlert) {
 }
 
 /** Web push (lock screen). Station tablets land on their station screen, everyone else on Orders. */
-async function pushAlert({ venueId, roles, payload, exceptDevice }: TicketAlert) {
+async function pushAlert({ venueId, roles, payload, exceptDevice, stationBody }: TicketAlert) {
   const unique = Array.from(new Set(roles));
   const stations = unique.filter(isStationRole);
   const floor = unique.filter((role) => !isStationRole(role));
   const opts = { exceptDevice };
+  const stationPayload = { ...payload, url: "/staff/station", ...(stationBody ? { body: stationBody } : {}) };
   await Promise.all([
-    stations.length ? pushToVenueRoles(venueId, stations, { ...payload, url: "/staff/station" }, opts) : null,
+    stations.length ? pushToVenueRoles(venueId, stations, stationPayload, opts) : null,
     floor.length ? pushToVenueRoles(venueId, floor, { ...payload, url: "/staff/orders" }, opts) : null,
   ]);
 }
@@ -654,9 +677,10 @@ async function alertRoles(
   venueId: number,
   roles: StaffRole[],
   payload: TicketAlert["payload"],
-  exceptDevice?: string | null
+  exceptDevice?: string | null,
+  stationBody?: string
 ) {
-  const alert = { venueId, roles, payload, exceptDevice };
+  const alert = { venueId, roles, payload, exceptDevice, stationBody };
   emitAlert(alert);
   await pushAlert(alert);
 }
@@ -682,6 +706,9 @@ export async function notifyTicketsCreated(ticketIds: string[], opts?: { exceptD
       venueId: ticket.venueId,
       roles: [...prepareRolesFor(ticket.station), "MANAGER"],
       exceptDevice: opts?.exceptDevice,
+      stationBody: czechForStation(ticket.station)
+        ? `Стол ${tableCode} · ${linesSummary(ticket.items, 140, true)}`
+        : undefined,
       payload: {
         kind: "TICKET_NEW",
         title: `${ticket.isAddon ? "Дозаказ" : "Новый заказ"} · ${SECTION_LABEL[ticket.station]}`,
@@ -727,6 +754,7 @@ async function notifyTicketCancelled(params: {
   reason: string | null;
   wholeTicket: boolean;
   exceptDevice?: string | null;
+  lineCs?: string;
 }) {
   const ticket = await loadTicketForAlert(params.ticketId);
   if (!ticket) return;
@@ -745,7 +773,9 @@ async function notifyTicketCancelled(params: {
     venueId: ticket.venueId,
     venueSlug: publicVenueSlug(ticket.venue.slug),
     vibrate: [600, 200, 600],
-  }, params.exceptDevice);
+  }, params.exceptDevice, czechForStation(ticket.station) && params.lineCs
+    ? (params.reason ? `${params.lineCs} · ${params.reason}` : params.lineCs)
+    : undefined);
 }
 
 async function notifyTicketReminder(ticketId: string) {
