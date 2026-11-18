@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { StaffAlertKind } from "@/lib/staffAlerts";
+import type { MenuSection } from "@/types";
 import { getStaffDeviceId } from "@/lib/staffDevice";
 
 export type StaffRealtimeEvent = {
@@ -12,6 +13,8 @@ export type StaffRealtimeEvent = {
   // Stable per-entity tag (e.g. `call_new:<id>`), shared with the web-push
   // payload so alerts dedupe across channels without merging distinct events.
   tag?: string | null;
+  /** Hookah or drinks / food — the bar tablet sounds a hookah differently. */
+  station?: MenuSection | null;
 };
 
 type Listener = (e: StaffRealtimeEvent) => void;

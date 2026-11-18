@@ -29,7 +29,7 @@ import {
   expireGuestSessionIfInactiveAfterPayment,
   getGuestSessionClosureState,
 } from "../guest/sessionExpiry";
-import type { Prisma, CallType, CallStatus, OrderStatus, PaymentStatus, StaffRole } from "@prisma/client";
+import type { Prisma, CallType, CallStatus, MenuSection, OrderStatus, PaymentStatus, StaffRole } from "@prisma/client";
 import {
   callTypesForRole,
   canHandlePayments,
@@ -111,7 +111,7 @@ function isOrderRequestCall(call: { type: CallType; message: string | null }) {
  * screen that missed both (connection dropped, push lost) still beeps once
  * from its regular summary refresh — and never twice.
  */
-type OpenAlert = { tag: string; kind: string; tableCode: string };
+type OpenAlert = { tag: string; kind: string; tableCode: string; station?: MenuSection | null };
 const OPEN_ALERTS_LIMIT = 60;
 
 async function openAlertsForRole(
@@ -160,7 +160,7 @@ async function openAlertsForRole(
     toAccept.length
       ? prisma.stationTicket.findMany({
           where: { venueId, shiftId: shift.id, status: "NEW", station: { in: toAccept } },
-          select: { id: true, table },
+          select: { id: true, station: true, table },
           orderBy: newest,
           take: OPEN_ALERTS_LIMIT,
         })
@@ -168,7 +168,7 @@ async function openAlertsForRole(
     toDeliver.length
       ? prisma.stationTicket.findMany({
           where: { venueId, shiftId: shift.id, status: "READY", station: { in: toDeliver } },
-          select: { id: true, table },
+          select: { id: true, station: true, table },
           orderBy: newest,
           take: OPEN_ALERTS_LIMIT,
         })
@@ -181,10 +181,16 @@ async function openAlertsForRole(
       tag: `call_new:${call.id}`,
       kind: callAlertKind(call.type, call.message),
       tableCode: code(call.table),
+      station: call.type === "HOOKAH" ? ("HOOKAH" as const) : null,
     })),
     ...payments.map((pr) => ({ tag: `payment_pending:${pr.id}`, kind: "PAYMENT_REQUESTED", tableCode: code(pr.table) })),
-    ...newTickets.map((t) => ({ tag: `ticket:${t.id}`, kind: "TICKET_NEW", tableCode: code(t.table) })),
-    ...readyTickets.map((t) => ({ tag: `ticket_ready:${t.id}`, kind: "TICKET_READY", tableCode: code(t.table) })),
+    ...newTickets.map((t) => ({ tag: `ticket:${t.id}`, kind: "TICKET_NEW", tableCode: code(t.table), station: t.station })),
+    ...readyTickets.map((t) => ({
+      tag: `ticket_ready:${t.id}`,
+      kind: "TICKET_READY",
+      tableCode: code(t.table),
+      station: t.station,
+    })),
   ];
 }
 

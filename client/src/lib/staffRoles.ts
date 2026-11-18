@@ -40,19 +40,21 @@ export function roleLabel(role?: StaffRole | string | null) {
   }
 }
 
-export function stationOfRole(role?: StaffRole | null): MenuSection | null {
-  if (role === "KITCHEN") return "DISHES";
-  if (role === "BAR") return "DRINKS";
-  if (role === "HOOKAH_ZONE") return "HOOKAH";
-  return null;
+/** What a station tablet works on. The bar tablet takes the hookahs too. */
+export function stationSectionsOfRole(role?: StaffRole | null): MenuSection[] {
+  if (role === "KITCHEN") return ["DISHES"];
+  if (role === "BAR") return ["DRINKS", "HOOKAH"];
+  if (role === "HOOKAH_ZONE") return ["HOOKAH"];
+  return [];
 }
 
 export function isStationRole(role?: StaffRole | null) {
-  return stationOfRole(role) !== null;
+  return stationSectionsOfRole(role).length > 0;
 }
 
 export function stationScreenTitle(role?: StaffRole | null) {
-  const station = stationOfRole(role);
+  if (role === "BAR") return "Бар · Кальяны";
+  const station = stationSectionsOfRole(role)[0];
   return station ? STATION_SCREEN_TITLE[station] : roleLabel(role);
 }
 
@@ -65,8 +67,8 @@ export function homeForRole(role?: StaffRole | null) {
 
 export function canPrepare(role: StaffRole | undefined, section: MenuSection) {
   if (role === "MANAGER") return true;
-  if (section === "HOOKAH") return role === "HOOKAH_ZONE" || role === "HOOKAH";
-  return stationOfRole(role) === section;
+  if (section === "HOOKAH") return role === "BAR" || role === "HOOKAH_ZONE" || role === "HOOKAH";
+  return stationSectionsOfRole(role)[0] === section;
 }
 
 export function canDeliver(role: StaffRole | undefined, section: MenuSection) {

@@ -26,13 +26,14 @@ import {
   type StaffAlertKind,
 } from "@/lib/staffAlerts";
 import { unsubscribePushOnLogout } from "@/lib/staffPush";
-import { stationScreenTitle } from "@/lib/staffRoles";
+import { stationScreenTitle, stationSectionsOfRole } from "@/lib/staffRoles";
+import type { MenuSection } from "@/types";
 import { TicketCard } from "@/components/staff/TicketCard";
 import { EtaSheet, type EtaTarget } from "@/components/staff/EtaSheet";
 import { NotificationSetup } from "@/components/staff/NotificationSetup";
 
 /**
- * Station iPad: kitchen, bar or hookah zone. Only this station's tickets,
+ * Station tablet: kitchen, bar or hookah zone. Only this station's tickets,
  * oldest first, one big button each:
  *
  *   new ticket  →  «Принять»  (stops the reminder chime)
@@ -40,7 +41,10 @@ import { NotificationSetup } from "@/components/staff/NotificationSetup";
  *
  * A ticket nobody accepted re-alerts every couple of minutes until someone
  * does. The screen is kept awake and asks for one tap if sound is blocked.
- * The hookah zone also gets the guests' hookah calls (coals, too harsh…).
+ *
+ * The bar tablet also takes the hookahs: drinks on the left, hookah orders and
+ * the guests' hookah calls (coals, too harsh…) on the right. Hookahs have
+ * sounds of their own, so the bar tells them apart without looking.
  *
  * Sound does not depend on one channel: the live channel and web push alert
  * right away, and the 5-second refresh beeps by itself for anything they
@@ -75,6 +79,14 @@ function idFromTag(tag: string | null | undefined, prefix: string) {
   if (!tag || !tag.startsWith(prefix)) return null;
   return tag.slice(prefix.length).split(":")[0] || null;
 }
+
+/** The ticket id behind an alert tag: new / reminder, cancellation (server or refresh). */
+function ticketIdFromTag(tag: string | null | undefined) {
+  return idFromTag(tag, "ticket:") ?? idFromTag(tag, "ticket_cancel:") ?? idFromTag(tag, "poll_cancel:");
+}
+
+/** Reminders are merged per half of the screen: a hookah never mutes the bar. */
+const halfOf = (station: MenuSection | null | undefined) => (station === "HOOKAH" ? "HOOKAH" : "MAIN");
 
 function useScreenWakeLock() {
   useEffect(() => {
@@ -199,31 +211,56 @@ export default function StaffStationPage() {
   const heardRef = useRef(new Map<string, number>());
   // Cancellations the refresh found before the server's alert arrived.
   const polledCancelRef = useRef(new Map<string, number>());
-  const lastReminderRef = useRef(0);
+  // Last reminder per half of the screen (bar / hookahs).
+  const lastReminderRef = useRef<Record<string, number>>({});
+  // What the latest refresh shows (also tells which half an alert is about).
+  const ticketsRef = useRef<StationTicket[]>([]);
+
+  /** Hookah or not: from the server's alert, else from the ticket on screen. */
+  const stationOf = useCallback(
+    (kind: StaffAlertKind, tag: string | undefined, hint: MenuSection | null | undefined): MenuSection | null => {
+      if (hint) return hint;
+      // Calls reach a station only when it takes the hookahs.
+      if (kind === "CALL_CREATED" || idFromTag(tag, "call_new:")) return "HOOKAH";
+      const ticketId = ticketIdFromTag(tag);
+      return (ticketId && ticketsRef.current.find((t) => t.id === ticketId)?.station) || null;
+    },
+    []
+  );
 
   // While the screen is off the lock-screen notification does the job.
-  const sound = useCallback((kind: StaffAlertKind, tag: string | undefined, tableCode: string | null) => {
-    if (document.visibilityState !== "visible") return;
-    fireInAppAlert({ kind, tag, tableCode });
-  }, []);
+  const sound = useCallback(
+    (kind: StaffAlertKind, tag: string | undefined, tableCode: string | null, station: MenuSection | null) => {
+      if (document.visibilityState !== "visible") return;
+      fireInAppAlert({ kind, tag, tableCode, station });
+    },
+    []
+  );
 
   // Server alerts waiting for the refresh that puts their order on screen.
   const pendingRef = useRef<
-    Array<{ kind: StaffAlertKind; tag: string | undefined; table: string | null; at: number; timer: number }>
+    Array<{
+      kind: StaffAlertKind;
+      tag: string | undefined;
+      table: string | null;
+      station: MenuSection | null;
+      at: number;
+      timer: number;
+    }>
   >([]);
 
   const queueSound = useCallback(
-    (kind: StaffAlertKind, tag: string | undefined, table: string | null) => {
+    (kind: StaffAlertKind, tag: string | undefined, table: string | null, station: MenuSection | null) => {
       if (document.visibilityState !== "visible") return;
       const at = Date.now();
-      const entry = { kind, tag, table, at, timer: 0 };
+      const entry = { kind, tag, table, station, at, timer: 0 };
       entry.timer = window.setTimeout(() => {
         pendingRef.current = pendingRef.current.filter((p) => p !== entry);
-        sound(kind, tag, table);
+        sound(kind, tag, table, stationOf(kind, tag, station));
       }, SOUND_WAIT_MAX_MS);
       pendingRef.current.push(entry);
     },
-    [sound]
+    [sound, stationOf]
   );
 
   /** Sound the alerts that this refresh (started at `startedAt`) has put on screen. */
@@ -234,10 +271,11 @@ export default function StaffStationPage() {
       pendingRef.current = pendingRef.current.filter((p) => p.at > startedAt);
       for (const p of due) {
         window.clearTimeout(p.timer);
-        sound(p.kind, p.tag, p.table);
+        // The order is on screen now: it says whether this is a hookah.
+        sound(p.kind, p.tag, p.table, stationOf(p.kind, p.tag, p.station));
       }
     },
-    [sound]
+    [sound, stationOf]
   );
 
   useEffect(
@@ -254,17 +292,26 @@ export default function StaffStationPage() {
   }, []);
 
   const onServerAlert = useCallback(
-    (kind: string | null | undefined, tag: string | null | undefined, tableCode: string | null | undefined) => {
+    (
+      kind: string | null | undefined,
+      tag: string | null | undefined,
+      tableCode: string | null | undefined,
+      stationHint?: MenuSection | null
+    ) => {
       if (!isAlertKind(kind)) return;
       const at = Date.now();
       pruneHeard(at);
       const heard = heardRef.current;
       const table = tableCode ?? null;
+      const hint = stationHint ?? null;
 
       if (kind === "TICKET_REMINDER") {
-        if (at - lastReminderRef.current < REMINDER_MERGE_MS) return;
-        lastReminderRef.current = at;
-        sound(kind, tag ?? `station-reminder:${at}`, table);
+        // The waiting ticket is already on screen: its half is known now.
+        const station = stationOf(kind, tag ?? undefined, hint);
+        const half = halfOf(station);
+        if (at - (lastReminderRef.current[half] ?? 0) < REMINDER_MERGE_MS) return;
+        lastReminderRef.current[half] = at;
+        sound(kind, tag ?? `station-reminder:${half}:${at}`, table, station);
         return;
       }
 
@@ -283,7 +330,7 @@ export default function StaffStationPage() {
             return;
           }
         }
-        queueSound(kind, tag ?? `ticket_cancel:${at}`, table);
+        queueSound(kind, tag ?? `ticket_cancel:${at}`, table, hint);
         return;
       }
 
@@ -294,16 +341,15 @@ export default function StaffStationPage() {
         if (heard.has(key)) return;
         heard.set(key, at);
       }
-      queueSound(kind, tag ?? undefined, table);
+      queueSound(kind, tag ?? undefined, table, hint);
     },
-    [pruneHeard, queueSound, sound]
+    [pruneHeard, queueSound, sound, stationOf]
   );
 
   // What the previous refresh saw; null until the first one (nothing to
   // compare with yet — tickets already waiting get the reminder).
   const snapshotRef = useRef<Map<string, { status: string; cancels: number }> | null>(null);
   const callIdsRef = useRef<Set<string> | null>(null);
-  const ticketsRef = useRef<StationTicket[]>([]);
 
   const noticeTickets = useCallback(
     (next: StationTicket[]) => {
@@ -324,7 +370,7 @@ export default function StaffStationPage() {
           const key = `new:${ticket.id}`;
           if (heard.has(key)) continue;
           heard.set(key, at);
-          sound("TICKET_NEW", `ticket:${ticket.id}`, table);
+          sound("TICKET_NEW", `ticket:${ticket.id}`, table, ticket.station);
           continue;
         }
 
@@ -337,7 +383,7 @@ export default function StaffStationPage() {
         if (last !== undefined && at - last < CANCEL_MATCH_MS) continue;
         heard.set(`cancel:${ticket.id}`, at);
         polledCancelRef.current.set(ticket.id, at);
-        sound("TICKET_CANCELLED", `poll_cancel:${ticket.id}:${ticket.cancellations.length}`, table);
+        sound("TICKET_CANCELLED", `poll_cancel:${ticket.id}:${ticket.cancellations.length}`, table, ticket.station);
       }
     },
     [pruneHeard, sound]
@@ -355,29 +401,36 @@ export default function StaffStationPage() {
         const key = `call:${call.id}`;
         if (heardRef.current.has(key)) continue;
         heardRef.current.set(key, at);
-        sound("CALL_CREATED", `call_new:${call.id}`, call.table.code);
+        sound("CALL_CREATED", `call_new:${call.id}`, call.table.code, "HOOKAH");
       }
     },
     [sound]
   );
 
   // Fallback reminder: the server's reminder normally comes every 2 minutes
-  // and keeps this one quiet; if it stops arriving, the screen reminds itself.
+  // and keeps this one quiet; if it stops arriving, the screen reminds itself
+  // — each half (bar / hookahs) with its own sound.
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
       const at = Date.now();
-      const overdue = ticketsRef.current.some(
+      const overdue = ticketsRef.current.filter(
         (ticket) => ticket.status === "NEW" && at - new Date(ticket.createdAt).getTime() >= FALLBACK_REMINDER_MS
       );
-      if (!overdue || at - lastReminderRef.current < FALLBACK_REMINDER_MS) return;
-      lastReminderRef.current = at;
-      sound("TICKET_REMINDER", `station-reminder:${at}`, null);
+      const halves = new Map(overdue.map((ticket) => [halfOf(ticket.station), ticket.station] as const));
+      for (const [half, station] of halves) {
+        if (at - (lastReminderRef.current[half] ?? 0) < FALLBACK_REMINDER_MS) continue;
+        lastReminderRef.current[half] = at;
+        sound("TICKET_REMINDER", `station-reminder:${half}:${at}`, null, station);
+      }
     }, 10_000);
     return () => window.clearInterval(timer);
   }, [sound]);
 
-  const answersCalls = staff?.role === "HOOKAH_ZONE";
+  const sections = useMemo(() => stationSectionsOfRole(staff?.role), [staff?.role]);
+  // The bar tablet: drinks on the left, hookahs on the right.
+  const split = sections.length > 1;
+  const answersCalls = sections.includes("HOOKAH");
   // The station joins the open shift by itself, so the manager sees the
   // kitchen / bar / hookah-zone iPads in «В смене».
   const joinedRef = useRef(false);
@@ -477,12 +530,12 @@ export default function StaffStationPage() {
 
   // Alerts arrive role-filtered from the server: new ticket, reminder, cancel.
   useStaffEvents((e) => {
-    onServerAlert(e.kind, e.tag, e.tableCode);
+    onServerAlert(e.kind, e.tag, e.tableCode, e.station);
     refreshNow();
   });
   const onPush = useCallback(
-    (p: { kind?: string; tag?: string; tableCode?: string | null; opened?: boolean }) => {
-      if (!p.opened) onServerAlert(p.kind, p.tag, p.tableCode);
+    (p: { kind?: string; tag?: string; tableCode?: string | null; station?: MenuSection | null; opened?: boolean }) => {
+      if (!p.opened) onServerAlert(p.kind, p.tag, p.tableCode, p.station);
       refreshNow();
     },
     [onServerAlert, refreshNow]
@@ -520,9 +573,119 @@ export default function StaffStationPage() {
     router.replace("/staff/login");
   };
 
+  const callCard = (call: StaffCall) => {
+    const mins = Math.max(0, Math.floor((now - new Date(call.createdAt).getTime()) / 60000));
+    return (
+      <div key={call.id} className="flex flex-col rounded-3xl border border-amber-400/50 bg-amber-400/[0.07] p-3.5">
+        <div className="flex items-start justify-between gap-2">
+          <span className="text-2xl font-bold text-white">Стол {call.table.code}</span>
+          <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-sm font-semibold text-white/70">
+            {mins < 1 ? "сейчас" : `${mins} мин`}
+          </span>
+        </div>
+        <div className="mt-2 text-lg font-semibold text-amber-100">{call.message || "Нужен кальянщик"}</div>
+        <div className="mt-auto pt-3">
+          <button
+            type="button"
+            disabled={busyId === call.id}
+            onClick={() => void acceptCall(call)}
+            className="h-14 w-full rounded-xl bg-white text-lg font-semibold text-black transition active:scale-[0.99] disabled:opacity-50"
+          >
+            Принять
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const ticketCard = (ticket: StationTicket) => (
+    <TicketCard
+      key={ticket.id}
+      ticket={ticket}
+      now={now}
+      size="lg"
+      // The kitchen reads dish names in Czech; the bar and the hookah zone as before.
+      czechNames={staff?.role === "KITCHEN"}
+      action={
+        ticket.status === "NEW"
+          ? {
+              label: "Принять",
+              tone: "primary",
+              busy: busyId === ticket.id,
+              onClick: () => void run(ticket, "accept"),
+            }
+          : ticket.status === "ACCEPTED"
+          ? {
+              label: "Готово",
+              tone: "accent",
+              busy: busyId === ticket.id,
+              onClick: () => void run(ticket, "ready"),
+            }
+          : null
+      }
+      // Busy hours: «Выдача через 10–40 мин», the waiter sees it too.
+      onEta={() =>
+        setEtaTarget({ ticketId: ticket.id, tableCode: ticket.table.code, current: ticket.etaMinutes ?? null })
+      }
+    />
+  );
+
+  /** One half of the bar tablet: its own title, counters, calls and orders. */
+  const half = (props: {
+    title: string;
+    hookah: boolean;
+    list: StationTicket[];
+    callList: StaffCall[];
+    empty: string;
+  }) => {
+    const newCount = props.list.filter((ticket) => ticket.status === "NEW").length;
+    const makingCount = props.list.filter((ticket) => ticket.status === "ACCEPTED").length;
+    return (
+      <section
+        data-half={props.hookah ? "hookah" : "bar"}
+        className={`min-w-0 rounded-3xl border p-3 ${
+          props.hookah ? "border-amber-400/25 bg-amber-400/[0.03]" : "border-white/10 bg-white/[0.02]"
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <h2 className={`text-xl font-bold uppercase tracking-[0.12em] ${props.hookah ? "text-amber-200" : "text-white"}`}>
+            {props.title}
+          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            {newCount > 0 ? (
+              <span className="animate-pulse rounded-full bg-red-500/25 px-3 py-1 text-sm font-semibold text-red-100">
+                Не приняты: {newCount}
+              </span>
+            ) : null}
+            <span className="rounded-full bg-white/10 px-3 py-1 text-sm font-semibold text-white/75">
+              Готовятся: {makingCount}
+            </span>
+          </div>
+        </div>
+
+        {props.callList.length > 0 ? (
+          <div className="mt-3">
+            <div className="px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
+              Вызовы · {props.callList.length}
+            </div>
+            <div className="mt-2 grid grid-cols-1 gap-3 min-[1700px]:grid-cols-2">{props.callList.map(callCard)}</div>
+          </div>
+        ) : null}
+
+        {props.list.length > 0 ? (
+          <div className="mt-3 grid grid-cols-1 gap-3 min-[1700px]:grid-cols-2">{props.list.map(ticketCard)}</div>
+        ) : null}
+
+        {loaded && !noShift && !err && props.list.length === 0 && props.callList.length === 0 ? (
+          <div className="py-12 text-center text-lg text-white/40">{props.empty}</div>
+        ) : null}
+      </section>
+    );
+  };
+
   return (
     <div className="min-h-dvh bg-[#07070a] text-white">
-      <div className="staff-safe mx-auto max-w-[1400px]">
+      <div className={`staff-safe mx-auto ${split ? "max-w-[1800px]" : "max-w-[1400px]"}`}>
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[11px] tracking-[0.18em] text-white/40">
@@ -532,14 +695,17 @@ export default function StaffStationPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            {waiting > 0 ? (
+            {/* The bar tablet counts each half on its own. */}
+            {!split && waiting > 0 ? (
               <span className="animate-pulse rounded-full bg-red-500/25 px-3 py-1 text-sm font-semibold text-red-100">
                 Не приняты: {waiting}
               </span>
             ) : null}
-            <span className="rounded-full bg-white/10 px-3 py-1 text-sm font-semibold text-white/75">
-              Готовятся: {cooking}
-            </span>
+            {!split ? (
+              <span className="rounded-full bg-white/10 px-3 py-1 text-sm font-semibold text-white/75">
+                Готовятся: {cooking}
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={() => void logout()}
@@ -574,77 +740,42 @@ export default function StaffStationPage() {
           <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">{err}</div>
         ) : null}
 
-        {sortedCalls.length > 0 ? (
-          <section className="mt-4">
-            <div className="px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
-              Вызовы · {sortedCalls.length}
-            </div>
-            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sortedCalls.map((call) => {
-                const mins = Math.max(0, Math.floor((now - new Date(call.createdAt).getTime()) / 60000));
-                return (
-                  <div key={call.id} className="flex flex-col rounded-3xl border border-amber-400/50 bg-amber-400/[0.07] p-3.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="text-2xl font-bold text-white">Стол {call.table.code}</span>
-                      <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-sm font-semibold text-white/70">
-                        {mins < 1 ? "сейчас" : `${mins} мин`}
-                      </span>
-                    </div>
-                    <div className="mt-2 text-lg font-semibold text-amber-100">{call.message || "Нужен кальянщик"}</div>
-                    <div className="mt-auto pt-3">
-                      <button
-                        type="button"
-                        disabled={busyId === call.id}
-                        onClick={() => void acceptCall(call)}
-                        className="h-14 w-full rounded-xl bg-white text-lg font-semibold text-black transition active:scale-[0.99] disabled:opacity-50"
-                      >
-                        Принять
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
+        {split ? (
+          // Bar on the left, hookahs (orders + hookah calls) on the right.
+          <div className="mt-4 grid grid-cols-1 items-start gap-3 min-[560px]:grid-cols-2">
+            {half({
+              title: "Бар",
+              hookah: false,
+              list: visible.filter((ticket) => ticket.station !== "HOOKAH"),
+              callList: [],
+              empty: "Заказов нет",
+            })}
+            {half({
+              title: "Кальяны",
+              hookah: true,
+              list: visible.filter((ticket) => ticket.station === "HOOKAH"),
+              callList: sortedCalls,
+              empty: "Кальянов нет",
+            })}
+          </div>
+        ) : (
+          <>
+            {sortedCalls.length > 0 ? (
+              <section className="mt-4">
+                <div className="px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
+                  Вызовы · {sortedCalls.length}
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{sortedCalls.map(callCard)}</div>
+              </section>
+            ) : null}
 
-        {loaded && !noShift && !err && visible.length === 0 && sortedCalls.length === 0 ? (
-          <div className="mt-16 text-center text-lg text-white/40">Заказов нет</div>
-        ) : null}
+            {loaded && !noShift && !err && visible.length === 0 && sortedCalls.length === 0 ? (
+              <div className="mt-16 text-center text-lg text-white/40">Заказов нет</div>
+            ) : null}
 
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {visible.map((ticket) => (
-            <TicketCard
-              key={ticket.id}
-              ticket={ticket}
-              now={now}
-              size="lg"
-              // The kitchen reads dish names in Czech; the bar and the hookah zone as before.
-              czechNames={staff?.role === "KITCHEN"}
-              action={
-                ticket.status === "NEW"
-                  ? {
-                      label: "Принять",
-                      tone: "primary",
-                      busy: busyId === ticket.id,
-                      onClick: () => void run(ticket, "accept"),
-                    }
-                  : ticket.status === "ACCEPTED"
-                  ? {
-                      label: "Готово",
-                      tone: "accent",
-                      busy: busyId === ticket.id,
-                      onClick: () => void run(ticket, "ready"),
-                    }
-                  : null
-              }
-              // Busy hours: «Выдача через 10–40 мин», the waiter sees it too.
-              onEta={() =>
-                setEtaTarget({ ticketId: ticket.id, tableCode: ticket.table.code, current: ticket.etaMinutes ?? null })
-              }
-            />
-          ))}
-        </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{visible.map(ticketCard)}</div>
+          </>
+        )}
 
         <EtaSheet
           target={etaTarget}

@@ -125,6 +125,8 @@ self.addEventListener("push", (event) => {
     kind: payload.kind || "CALL_CREATED",
     message: payload.message || null,
     tableCode: payload.tableCode || null,
+    // Hookah or drinks: the bar tablet plays a hookah's own sound.
+    station: payload.station || null,
     venueId: payload.venueId || null,
     venueSlug: payload.venueSlug || null,
     vibrate,

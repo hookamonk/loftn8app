@@ -22,12 +22,14 @@ import { toPublicTable } from "./tableView";
 
 /**
  * Station tickets: every order a waiter or hookah master sends is split into
- * one ticket per station (kitchen / bar / hookah zone).
+ * one ticket per station (kitchen / bar / hookah). The hookah tickets go to the
+ * bar tablet, on their own half of the screen.
  *
  *   NEW ──«Принять»──▶ ACCEPTED ──«Готово»──▶ READY ──«Выдано»──▶ SERVED
+ *   hookah:  NEW ──«Принять»──▶ ACCEPTED ──«Готово»──▶ SERVED
  *
- * The station accepts and finishes it, the waiter (or hookah master) carries
- * it out. A NEW ticket re-alerts its station every few minutes until someone
+ * The station accepts and finishes it, the waiter carries it out. A hookah is
+ * carried out by whoever made it, so its «Готово» puts it on the table. A NEW ticket re-alerts its station every few minutes until someone
  * accepts it. Order.status is derived from the tickets, so the guest side
  * (feed, "you can pay now") keeps working exactly as before.
  */
@@ -161,11 +163,6 @@ export async function createStationTickets(
       },
     });
 
-    // Hookah station paused: the hookah just goes on the bill — recorded as
-    // served at once, so nothing waits, alerts or reminds anybody.
-    const straightToBill = station === "HOOKAH" && !env.HOOKAH_STATION;
-    const now = new Date();
-
     const ticket = await tx.stationTicket.create({
       data: {
         venueId: params.venueId,
@@ -175,17 +172,6 @@ export async function createStationTickets(
         station,
         isAddon: earlier > 0,
         createdById: params.staffId,
-        ...(straightToBill
-          ? {
-              status: "SERVED" as const,
-              acceptedAt: now,
-              acceptedById: params.staffId,
-              readyAt: now,
-              readyById: params.staffId,
-              servedAt: now,
-              servedById: params.staffId,
-            }
-          : {}),
         items: {
           create: lines.map((line) => ({
             orderId: params.orderId,
@@ -388,11 +374,15 @@ export async function moveTicket(params: {
   const allowed = action === "served" ? canDeliver(role, ticket.station) : canPrepare(role, ticket.station);
   if (!allowed) throw new HttpError(403, "FORBIDDEN", "Это не ваш заказ");
 
+  // «Готово» on a hookah: whoever made it carries it out — it is on the table.
+  const carriedOut = action === "ready" && ticket.station === "HOOKAH";
+  const target: TicketStatus = carriedOut ? "SERVED" : TO[action];
+
   const now = new Date();
-  const data: Prisma.StationTicketUncheckedUpdateManyInput = { status: TO[action] };
+  const data: Prisma.StationTicketUncheckedUpdateManyInput = { status: target };
   if (action === "accept") Object.assign(data, { acceptedAt: now, acceptedById: staffId });
   if (action === "ready") Object.assign(data, { readyAt: now, readyById: staffId });
-  if (action === "served") Object.assign(data, { servedAt: now, servedById: staffId });
+  if (action === "served" || carriedOut) Object.assign(data, { servedAt: now, servedById: staffId });
 
   // Atomic: only the tap that actually moves the ticket wins; a double tap or
   // a second iPad gets "already done" instead of a second notification.
@@ -423,13 +413,14 @@ export async function moveTicket(params: {
   await refreshAndAnnounce(ticket.orderId);
   emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
 
-  if (action === "ready") {
+  // Someone has to carry it out — except a hookah, already on the table.
+  if (target === "READY") {
     void notifyTicketReady(ticket.id, { exceptDevice: params.deviceId }).catch((e) =>
       console.warn("push notifyTicketReady failed", e)
     );
   }
 
-  return { changed: true, status: TO[action] };
+  return { changed: true, status: target };
 }
 
 /* ------------------------------------------------------------------------ */
@@ -667,6 +658,7 @@ function emitAlert({ venueId, roles, payload, exceptDevice }: TicketAlert) {
     kind: payload.kind,
     tableCode: payload.tableCode,
     tag: payload.tag,
+    station: payload.station,
     roles: unique,
     exceptDevice,
   });
@@ -734,6 +726,8 @@ export async function notifyTicketsCreated(ticketIds: string[], opts?: { exceptD
         tag: `ticket:${ticket.id}`,
         ts: Date.now(),
         tableCode,
+        // The bar tablet plays the hookah sound for hookahs, the bar sound for drinks.
+        station: ticket.station,
         venueId: ticket.venueId,
         venueSlug: publicVenueSlug(ticket.venue.slug),
         vibrate: [320, 140, 320, 140, 420],
@@ -757,6 +751,7 @@ async function notifyTicketReady(ticketId: string, opts?: { exceptDevice?: strin
     tag: `ticket_ready:${ticket.id}`,
     ts: Date.now(),
     tableCode,
+    station: ticket.station,
     venueId: ticket.venueId,
     venueSlug: publicVenueSlug(ticket.venue.slug),
     vibrate: [200, 100, 200, 100, 400],
@@ -786,6 +781,7 @@ async function notifyTicketCancelled(params: {
     tag: `ticket_cancel:${ticket.id}:${Date.now()}`,
     ts: Date.now(),
     tableCode,
+    station: ticket.station,
     venueId: ticket.venueId,
     venueSlug: publicVenueSlug(ticket.venue.slug),
     vibrate: [600, 200, 600],
@@ -808,6 +804,7 @@ async function notifyTicketReminder(ticketId: string) {
     renotify: true,
     ts: Date.now(),
     tableCode,
+    station: ticket.station,
     venueId: ticket.venueId,
     venueSlug: publicVenueSlug(ticket.venue.slug),
     vibrate: [500, 150, 500, 150, 500, 150, 500],

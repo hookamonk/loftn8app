@@ -20,6 +20,7 @@ import { isOwnAlert } from "@/lib/staffOwnAlerts";
 import { unsubscribePushOnLogout } from "@/lib/staffPush";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 import { roleLabel } from "@/lib/staffRoles";
+import type { MenuSection } from "@/types";
 
 type NavItem = { href: string; label: string; badge?: number; exact?: boolean };
 
@@ -32,7 +33,15 @@ const REMINDER_MERGE_MS = 45_000;
 const SOUND_WAIT_MAX_MS = 3000;
 const HEARD_TTL_MS = 15 * 60_000;
 
-type PendingSound = { kind: StaffAlertKind; tag: string | undefined; table: string | null; at: number; timer: number };
+type PendingSound = {
+  kind: StaffAlertKind;
+  tag: string | undefined;
+  table: string | null;
+  // HOOKAH plays the hookah tune.
+  station: MenuSection | null;
+  at: number;
+  timer: number;
+};
 
 function NavTab({ item, active }: { item: NavItem; active: boolean }) {
   const badge = item.badge ?? 0;
@@ -121,19 +130,22 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   // Nothing sounds for what this device did itself (my own order, my own bill,
   // my own «Готово») — except the "not accepted yet" reminder, which is about
   // the kitchen, not about me.
-  const sound = useCallback((kind: StaffAlertKind, tag: string | undefined, table: string | null) => {
-    if (document.visibilityState !== "visible") return;
-    if (kind !== "TICKET_REMINDER" && isOwnAlert(tag)) return;
-    fireInAppAlert({ kind, tag, tableCode: table });
-  }, []);
+  const sound = useCallback(
+    (kind: StaffAlertKind, tag: string | undefined, table: string | null, station: MenuSection | null) => {
+      if (document.visibilityState !== "visible") return;
+      if (kind !== "TICKET_REMINDER" && isOwnAlert(tag)) return;
+      fireInAppAlert({ kind, tag, tableCode: table, station });
+    },
+    []
+  );
 
   const queueSound = useCallback(
-    (kind: StaffAlertKind, tag: string | undefined, table: string | null) => {
+    (kind: StaffAlertKind, tag: string | undefined, table: string | null, station: MenuSection | null) => {
       if (document.visibilityState !== "visible") return;
-      const entry: PendingSound = { kind, tag, table, at: Date.now(), timer: 0 };
+      const entry: PendingSound = { kind, tag, table, station, at: Date.now(), timer: 0 };
       entry.timer = window.setTimeout(() => {
         pendingRef.current = pendingRef.current.filter((p) => p !== entry);
-        sound(kind, tag, table);
+        sound(kind, tag, table, station);
       }, SOUND_WAIT_MAX_MS);
       pendingRef.current.push(entry);
     },
@@ -148,7 +160,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
       pendingRef.current = pendingRef.current.filter((p) => p.at > startedAt);
       for (const p of due) {
         window.clearTimeout(p.timer);
-        sound(p.kind, p.tag, p.table);
+        sound(p.kind, p.tag, p.table, p.station);
       }
     },
     [sound]
@@ -169,7 +181,12 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   // Live channel and push: the same event twice is one sound; a guest
   // calling again later sounds again.
   const onServerAlert = useCallback(
-    (kind: string | null | undefined, tag: string | null | undefined, tableCode: string | null | undefined) => {
+    (
+      kind: string | null | undefined,
+      tag: string | null | undefined,
+      tableCode: string | null | undefined,
+      station?: MenuSection | null
+    ) => {
       if (!isAlertKind(kind)) return;
       const at = Date.now();
       pruneHeard(at);
@@ -178,7 +195,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
       if (kind === "TICKET_REMINDER") {
         if (at - lastReminderRef.current < REMINDER_MERGE_MS) return;
         lastReminderRef.current = at;
-        sound(kind, tag ?? undefined, table);
+        sound(kind, tag ?? undefined, table, station ?? null);
         return;
       }
 
@@ -187,7 +204,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
         heardRef.current.set(tag, at);
         if (last !== undefined && at - last < SAME_EVENT_MS) return;
       }
-      queueSound(kind, tag ?? undefined, table);
+      queueSound(kind, tag ?? undefined, table, station ?? null);
     },
     [pruneHeard, queueSound, sound]
   );
@@ -208,7 +225,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
         if (prev.has(alert.tag) || heardRef.current.has(alert.tag)) continue;
         heardRef.current.set(alert.tag, at);
         if (!isAlertKind(alert.kind)) continue;
-        queueSound(alert.kind, alert.tag, alert.tableCode);
+        queueSound(alert.kind, alert.tag, alert.tableCode, alert.station ?? null);
         found = true;
       }
       if (found) refreshNowRef.current();
@@ -288,8 +305,8 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   }, [refreshNow]);
 
   const onPush = useCallback(
-    (payload: { kind?: string; tag?: string; tableCode?: string | null; opened?: boolean }) => {
-      if (!payload.opened) onServerAlert(payload.kind, payload.tag, payload.tableCode);
+    (payload: { kind?: string; tag?: string; tableCode?: string | null; station?: MenuSection | null; opened?: boolean }) => {
+      if (!payload.opened) onServerAlert(payload.kind, payload.tag, payload.tableCode, payload.station);
       refreshNow();
     },
     [onServerAlert, refreshNow]
@@ -301,7 +318,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   // only to the roles it concerns.
   useStaffEvents(
     (e) => {
-      onServerAlert(e.kind, e.tag, e.tableCode);
+      onServerAlert(e.kind, e.tag, e.tableCode, e.station);
       refreshNow();
     },
     { enabled: !isAdmin }

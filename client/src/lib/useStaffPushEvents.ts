@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { fireInAppAlert, type StaffAlertKind } from "@/lib/staffAlerts";
+import type { MenuSection } from "@/types";
 import { getStaffVenueSlug, resolveVenueSlug } from "@/lib/venue";
 
 export type StaffPushPayload = {
@@ -12,6 +13,7 @@ export type StaffPushPayload = {
   ts?: number;
   kind?: StaffAlertKind;
   tableCode?: string | null;
+  station?: MenuSection | null;
   /** Tapped notification (not a new alert): refresh only, no sound. */
   opened?: boolean;
   venueId?: number | null;

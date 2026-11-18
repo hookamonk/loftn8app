@@ -1,5 +1,5 @@
 import type { Response } from "express";
-import type { StaffRole } from "@prisma/client";
+import type { MenuSection, StaffRole } from "@prisma/client";
 
 /**
  * In-memory SSE (Server-Sent Events) hub for the staff dashboard.
@@ -30,6 +30,8 @@ export type StaffEvent = {
   // payload tag. The client dedupes alerts on this, so the SAME event arriving
   // via both SSE and push beeps once, while DISTINCT events always beep.
   tag?: string | null;
+  /** Hookah or drinks / food: the bar tablet sounds a hookah differently. */
+  station?: MenuSection | null;
 };
 
 type Client = {
@@ -115,6 +117,7 @@ export function emitStaffEvent(
     at: event.at ?? Date.now(),
     tableCode: event.tableCode ?? null,
     tag: event.tag ?? null,
+    station: event.station ?? null,
   };
 
   const frame = `event: staff\ndata: ${JSON.stringify(payload)}\n\n`;

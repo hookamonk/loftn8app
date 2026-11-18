@@ -1,3 +1,5 @@
+import type { MenuSection } from "@/types";
+
 export type StaffAlertKind =
   | "ORDER_CREATED"
   | "CALL_CREATED"
@@ -33,6 +35,8 @@ export type StaffPushPayload = {
   kind?: StaffAlertKind;
   message?: string | null;
   tableCode?: string | null;
+  /** HOOKAH plays the hookah tunes (the bar tablet hears drinks and hookahs). */
+  station?: MenuSection | null;
   venueId?: number | null;
   venueSlug?: string | null;
   vibrate?: number[];
@@ -148,7 +152,29 @@ function shouldFire(payload?: StaffPushPayload) {
   return true;
 }
 
+/**
+ * Hookahs have tunes of their own, so the bar tablet (drinks on the left,
+ * hookahs on the right) tells them apart by ear: the bar dings two notes back
+ * and forth, a hookah climbs.
+ */
+function hookahPatternFor(kind?: StaffAlertKind): { tones: number[]; gain: number } | null {
+  switch (kind) {
+    case "TICKET_NEW":
+      return { tones: [523, 659, 784, 1047], gain: 0.4 };
+    case "TICKET_REMINDER":
+      return { tones: [523, 784, 1047, 523, 784, 1047], gain: 0.5 };
+    case "TICKET_CANCELLED":
+      return { tones: [1047, 523, 1047, 523], gain: 0.35 };
+    default:
+      return null;
+  }
+}
+
 function tonePatternFor(payload?: StaffPushPayload): { tones: number[]; gain: number } {
+  if (payload?.station === "HOOKAH") {
+    const hookah = hookahPatternFor(payload.kind);
+    if (hookah) return hookah;
+  }
   switch (payload?.kind) {
     case "GUEST_MESSAGE":
       return { tones: [1120, 920, 1120], gain: 0.22 };
@@ -186,6 +212,13 @@ function stationPatternFor(payload?: StaffPushPayload) {
   }
 }
 
+// Two alerts at the same moment (a drink and a hookah, two reminders) play one
+// after the other, never on top of each other — each stays recognisable.
+const GAP_BETWEEN_ALERTS_S = 0.3;
+// A long queue never delays an alert by more than this.
+const MAX_ALERT_DELAY_S = 8;
+let soundFreeAt = 0;
+
 function play(ctx: AudioContext, payload?: StaffPushPayload) {
   const station = stationProfile;
   const { tones, gain: peak, repeats } = station
@@ -195,10 +228,15 @@ function play(ctx: AudioContext, payload?: StaffPushPayload) {
   const length = station ? 0.22 : 0.16;
   const pause = station ? 0.35 : 0;
 
+  const now = ctx.currentTime;
+  const begin = Math.max(now, Math.min(soundFreeAt, now + MAX_ALERT_DELAY_S));
+  const duration = repeats * tones.length * step + (repeats - 1) * pause;
+  soundFreeAt = begin + duration + GAP_BETWEEN_ALERTS_S;
+
   for (let round = 0; round < repeats; round += 1) {
     const roundStart = round * (tones.length * step + pause);
     tones.forEach((freq, index) => {
-      const startAt = ctx.currentTime + roundStart + index * step;
+      const startAt = begin + roundStart + index * step;
       const endAt = startAt + length;
 
       const osc = ctx.createOscillator();

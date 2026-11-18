@@ -1,8 +1,9 @@
 import { prisma } from "../../db/prisma";
-import type { StaffRole } from "@prisma/client";
+import type { MenuSection, StaffRole } from "@prisma/client";
 import { isOrderRequestMessage } from "../orders/orderRequest";
 import { publicTableCode, publicVenueSlug } from "../../config/venues";
 import { emitStaffEvent } from "./staffEvents";
+import { isStationRole } from "./roles";
 import { sendWebPush, type WebPushSubscriptionRow } from "../push/webPushSender";
 import { staffCallMessage } from "../calls/hookahReasons";
 
@@ -23,6 +24,8 @@ export type PushPayload = {
     | "TICKET_CANCELLED";
   message?: string;
   tableCode?: string;
+  /** Hookah or drinks: the bar tablet sounds them differently. */
+  station?: MenuSection;
   venueId?: number;
   venueSlug?: string;
   vibrate?: number[];
@@ -142,11 +145,15 @@ export async function notifyCallCreated(callId: string) {
   const messagePreview = normalizeCallMessage(call.type, call.message);
   const isMessageOnly = call.type === "HELP" && !!messagePreview;
 
-  // Hookah masters (and the hookah-zone iPad) get hookah calls only;
-  // everything else (order requests, the bill, guest messages) is the
-  // waiters'. The manager hears all of it.
+  // Hookah calls go to the hookah masters and to the tablet that takes the
+  // hookahs (the bar; a hookah-zone tablet if there ever is one); everything
+  // else (order requests, the bill, guest messages) is the waiters'. The
+  // manager hears all of it.
   const isHookahCall = call.type === "HOOKAH" && !isOrderRequest;
-  const roles: StaffRole[] = isHookahCall ? ["MANAGER", "HOOKAH", "HOOKAH_ZONE"] : ["MANAGER", "WAITER"];
+  const roles: StaffRole[] = isHookahCall
+    ? ["MANAGER", "HOOKAH", "BAR", "HOOKAH_ZONE"]
+    : ["MANAGER", "WAITER"];
+  const station: MenuSection | undefined = isHookahCall ? "HOOKAH" : undefined;
 
   // Emit SSE with the SAME kind the push uses, so the in-app alert plays the
   // right tone (a guest message sounds different from a service call).
@@ -154,6 +161,7 @@ export async function notifyCallCreated(callId: string) {
     kind: isOrderRequest ? "ORDER_CREATED" : isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
     tableCode,
     tag: `call_new:${call.id}`,
+    station,
     roles,
   });
   emitStaffEvent(venueId, { kind: "DATA_CHANGED" });
@@ -186,15 +194,17 @@ export async function notifyCallCreated(callId: string) {
     kind: isOrderRequest ? "ORDER_CREATED" : isMessageOnly ? "GUEST_MESSAGE" : "CALL_CREATED",
     message: messagePreview ?? undefined,
     tableCode,
+    station,
     venueId,
     venueSlug,
     vibrate: isMessageOnly ? [420, 140, 420, 140, 560] : [320, 140, 320, 140, 420],
   };
 
-  // The hookah-zone iPad opens its own station screen, everyone else Calls.
+  // A station tablet opens its own station screen, everyone else Calls.
+  const stations = roles.filter(isStationRole);
   await Promise.all([
-    pushToVenueRoles(venueId, roles.filter((role) => role !== "HOOKAH_ZONE"), payload),
-    isHookahCall ? pushToVenueRoles(venueId, ["HOOKAH_ZONE"], { ...payload, url: "/staff/station" }) : null,
+    pushToVenueRoles(venueId, roles.filter((role) => !isStationRole(role)), payload),
+    stations.length ? pushToVenueRoles(venueId, stations, { ...payload, url: "/staff/station" }) : null,
   ]);
 }
 

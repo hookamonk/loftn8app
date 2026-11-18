@@ -288,7 +288,7 @@ export async function closeShift(): Promise<ApiResult<{ shiftId: string; closedA
 
 // DASHBOARD
 /** Something this account was alerted about and is still waiting (see the summary). */
-export type StaffOpenAlert = { tag: string; kind: string; tableCode: string };
+export type StaffOpenAlert = { tag: string; kind: string; tableCode: string; station?: MenuSection | null };
 
 export type StaffSummary = {
   newOrders: number;
