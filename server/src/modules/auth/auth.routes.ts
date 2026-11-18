@@ -12,6 +12,7 @@ import { validate } from "../../middleware/validate";
 import { sendGuestOtpEmail, isEmailConfigured, missingEmailSettings } from "../../utils/mailer";
 import { rateLimit } from "../../middleware/rateLimit";
 import { socialProvidersConfig, verifyAppleIdToken, verifyGoogleCredential, type SocialIdentity } from "./socialAuth";
+import { emitStaffEvent } from "../staff/staffEvents";
 
 /**
  * Guest identity is an e-mail address and a password, or a Google / Apple
@@ -221,20 +222,31 @@ async function completeSignIn(req: Request, res: any, user: PublicUser) {
   // The guest scanned the QR before registering, so a table session already
   // exists — bind it to the account now, otherwise their bill and cashback
   // would stay anonymous.
-  const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
-  if (gsid) {
-    try {
-      const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
-      await prisma.guestSession.updateMany({
-        where: { id: payload.sessionId, endedAt: null },
-        data: { userId: user.id },
-      });
-    } catch {
-      // stale or foreign cookie — signing in still succeeds
-    }
-  }
+  await bindTableSession(req, user.id);
 
   return { ok: true as const, user: serializeUser(user) };
+}
+
+/**
+ * Attach the table session open in this browser to the signed-in guest, so
+ * staff see their name at the table right away (and their bill and cashback
+ * are theirs). Safe to call often: it only writes when something changes.
+ */
+async function bindTableSession(req: Request, userId: string) {
+  const gsid = (req.cookies?.gsid as string | undefined) ?? undefined;
+  if (!gsid) return;
+  try {
+    const payload = jwt.verify(gsid, env.JWT_GUEST_SESSION_SECRET) as { sessionId: string };
+    const session = await prisma.guestSession.findUnique({
+      where: { id: payload.sessionId },
+      select: { id: true, userId: true, endedAt: true, table: { select: { venueId: true } } },
+    });
+    if (!session || session.endedAt || session.userId === userId) return;
+    await prisma.guestSession.update({ where: { id: session.id }, data: { userId } });
+    emitStaffEvent(session.table.venueId, { kind: "DATA_CHANGED" });
+  } catch {
+    // stale or foreign cookie — signing in still succeeds
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +660,9 @@ authRouter.get(
       // coming back is never signed out.
       const ageSec = Math.floor(Date.now() / 1000) - (payload.iat ?? 0);
       if (ageSec > USER_TOKEN_REFRESH_AFTER_SEC) issueUserCookie(res, user);
+
+      // Signed in and sitting at a table: make sure the table knows who it is.
+      await bindTableSession(req, user.id);
 
       return res.json({ authenticated: true, user: serializeUser(user) });
     } catch {

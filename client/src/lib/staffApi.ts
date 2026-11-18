@@ -511,6 +511,8 @@ export type StaffActiveTable = {
     startedAt: string;
     user: { id: string; name: string; phone: string | null } | null;
   };
+  /** Everyone signed in at the table (a table can have several open sessions). */
+  guests?: string[];
   isActive: boolean;
   openItemsCount: number;
   activeCallsCount: number;
@@ -529,6 +531,8 @@ export type StaffActiveTableDetails = {
     startedAt: string;
     user: { id: string; name: string; phone: string | null } | null;
   };
+  /** Everyone signed in at the table (a table can have several open sessions). */
+  guests?: string[];
   orders: Array<{
     id: string;
     status: OrderStatus;
@@ -599,6 +603,49 @@ export async function listActiveTables(opts?: FetchOpts): Promise<ApiResult<{ ta
   ).then((r) => (r.ok ? { ok: true, data: { tables: r.data.tables } } : r));
 }
 
+/** Manager: a chosen line and how many of it. */
+export type TableLineChoice = { orderItemId: string; qty: number };
+export type TableChoice = { id: number; code: string; busy: boolean; guests: string[] };
+
+/** Manager: every table of the venue to move lines to. */
+export async function listTableChoices(): Promise<ApiResult<{ tables: TableChoice[] }>> {
+  return tryPaths<{ ok: true; tables: TableChoice[] }>(["/staff/dashboard/tables/choices"], { method: "GET" }).then((r) =>
+    r.ok ? { ok: true, data: { tables: r.data.tables } } : r
+  );
+}
+
+/** Manager: «Удалить» chosen lines (unpaid only). */
+export async function cancelTableItems(
+  tableId: number,
+  lines: TableLineChoice[],
+  reason?: string
+): Promise<ApiResult<{ cancelled: number }>> {
+  return tryPaths<{ ok: true; cancelled: number }>([`/staff/dashboard/tables/${tableId}/items/cancel`], {
+    method: "POST",
+    body: JSON.stringify({ lines, ...(reason ? { reason } : {}) }),
+  }).then((r) => (r.ok ? { ok: true, data: { cancelled: r.data.cancelled } } : r));
+}
+
+/** Manager: «Перенести» chosen lines to another table. */
+export async function moveTableItems(
+  tableId: number,
+  toTableId: number,
+  lines: TableLineChoice[]
+): Promise<ApiResult<{ moved: number; toTable: string }>> {
+  return tryPaths<{ ok: true; moved: number; toTable: string }>([`/staff/dashboard/tables/${tableId}/items/move`], {
+    method: "POST",
+    body: JSON.stringify({ toTableId, lines }),
+  }).then((r) => (r.ok ? { ok: true, data: { moved: r.data.moved, toTable: r.data.toTable } } : r));
+}
+
+/** «Закрыть стол»: the guests paid and left — free the table (refused while anything is unpaid). */
+export async function disconnectTable(tableId: number): Promise<ApiResult<{ ok: true }>> {
+  return tryPaths<{ ok: true }>([`/staff/dashboard/tables/${tableId}/disconnect`], {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function getActiveTableDetails(
   tableId: number,
   opts?: FetchOpts
@@ -615,6 +662,7 @@ export async function getActiveTableDetails(
             table: {
               table: r.data.table,
               session: r.data.session,
+              guests: r.data.guests ?? [],
               orders: r.data.orders,
               payableItems: r.data.payableItems,
               billTotalCzk: r.data.billTotalCzk,

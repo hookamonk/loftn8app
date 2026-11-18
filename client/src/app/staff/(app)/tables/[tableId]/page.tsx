@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { CloseTableSheet, type CloseTableTarget } from "@/components/staff/CloseTableSheet";
+import { TableItemsSheet, type TableItemsTarget } from "@/components/staff/TableItemsSheet";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -37,6 +40,8 @@ const btnGhost =
 export default function StaffTableDetailsPage() {
   const params = useParams<{ tableId: string }>();
   const { push } = useToast();
+  const router = useRouter();
+  const [closeTarget, setCloseTarget] = useState<CloseTableTarget | null>(null);
   const { staff } = useStaffSession();
   const canCancel = canCancelItems(staff?.role);
   const tableId = Number(params.tableId);
@@ -48,6 +53,10 @@ export default function StaffTableDetailsPage() {
   const [askMethod, setAskMethod] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
+  // Manager: choose lines to delete or move to another table.
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<Record<string, number>>({});
+  const [itemsTarget, setItemsTarget] = useState<TableItemsTarget | null>(null);
 
   // A slower, older answer never overwrites a newer one.
   const loadSeqRef = useRef(0);
@@ -158,7 +167,11 @@ export default function StaffTableDetailsPage() {
             <div className="text-[11px] tracking-[0.24em] text-white/45">СТОЛ</div>
             <div className="mt-1 text-2xl font-bold text-white">{data ? data.table.code : "—"}</div>
             <div className="mt-1 text-sm text-white/55">
-              {data?.session.user ? data.session.user.name : "Гость без аккаунта"}
+              {data?.guests?.length
+                ? data.guests.join(", ")
+                : data?.session.user
+                ? data.session.user.name?.trim() || "Гость с аккаунтом"
+                : "Гость без аккаунта"}
             </div>
           </div>
 
@@ -186,24 +199,98 @@ export default function StaffTableDetailsPage() {
           <div className="text-2xl font-bold text-white">{data?.billTotalCzk ?? 0} Kč</div>
         </div>
 
+        {/* Manager: delete or move lines (only what is unpaid, not while a bill is being paid). */}
+        {canCancel && data && data.payableItems.length > 0 ? (
+          pending ? (
+            <div className="mt-2 text-xs text-white/45">Удалить или перенести позиции можно после отмены счёта.</div>
+          ) : (
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelecting((value) => !value);
+                  setPicked({});
+                }}
+                className="h-8 rounded-xl border border-white/15 bg-white/5 px-3 text-xs font-semibold text-white/80 active:bg-white/10"
+              >
+                {selecting ? "Отменить выбор" : "Выбрать позиции"}
+              </button>
+            </div>
+          )
+        ) : null}
+
         <div className="mt-3 space-y-1.5">
           {data && data.payableItems.length > 0 ? (
-            data.payableItems.map((item) => (
+            data.payableItems.map((item) => {
+              const chosen = picked[item.orderItemId];
+              const toggle = () =>
+                setPicked((current) => {
+                  const next = { ...current };
+                  if (next[item.orderItemId]) delete next[item.orderItemId];
+                  else next[item.orderItemId] = item.qty;
+                  return next;
+                });
+              return (
               <div
                 key={item.orderItemId}
-                className="flex items-start justify-between gap-3 rounded-xl bg-black/20 px-3 py-2 text-sm text-white/85"
+                onClick={selecting ? toggle : undefined}
+                className={[
+                  "flex items-start justify-between gap-3 rounded-xl px-3 py-2 text-sm text-white/85",
+                  selecting ? "cursor-pointer" : "",
+                  chosen ? "bg-white/15 ring-1 ring-white/40" : "bg-black/20",
+                ].join(" ")}
               >
-                <div className="min-w-0">
-                  <div className="truncate">
-                    {item.name} × {item.qty}
-                  </div>
-                  {item.comment ? (
-                    <div className="mt-0.5 text-[11px] text-white/45">{item.comment}</div>
+                <div className="flex min-w-0 items-start gap-2.5">
+                  {selecting ? (
+                    <span
+                      aria-hidden
+                      className={[
+                        "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border text-[12px] font-bold",
+                        chosen ? "border-white bg-white text-black" : "border-white/30",
+                      ].join(" ")}
+                    >
+                      {chosen ? "✓" : ""}
+                    </span>
                   ) : null}
+                  <div className="min-w-0">
+                    <div className="truncate">
+                      {item.name} × {item.qty}
+                    </div>
+                    {item.comment ? (
+                      <div className="mt-0.5 text-[11px] text-white/45">{item.comment}</div>
+                    ) : null}
+                    {selecting && chosen && item.qty > 1 ? (
+                      <div className="mt-1.5 flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          aria-label="Меньше"
+                          disabled={chosen <= 1}
+                          onClick={() => setPicked((current) => ({ ...current, [item.orderItemId]: Math.max(1, chosen - 1) }))}
+                          className="grid h-7 w-7 place-items-center rounded-lg bg-white/10 text-white disabled:opacity-30"
+                        >
+                          −
+                        </button>
+                        <span className="w-14 text-center text-xs font-semibold tabular-nums">
+                          {chosen} из {item.qty}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Больше"
+                          disabled={chosen >= item.qty}
+                          onClick={() =>
+                            setPicked((current) => ({ ...current, [item.orderItemId]: Math.min(item.qty, chosen + 1) }))
+                          }
+                          className="grid h-7 w-7 place-items-center rounded-lg bg-white/10 text-white disabled:opacity-30"
+                        >
+                          +
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="text-white/70">{item.totalCzk} Kč</span>
-                  {canCancel && !pending ? (
+                  {canCancel && !pending && !selecting ? (
                     <button
                       type="button"
                       aria-label={`Отменить ${item.name}`}
@@ -223,13 +310,47 @@ export default function StaffTableDetailsPage() {
                   ) : null}
                 </div>
               </div>
-            ))
+              );
+            })
           ) : (
             <div className="rounded-xl bg-black/20 px-3 py-3 text-sm text-white/55">
               Неоплаченных позиций нет.
             </div>
           )}
         </div>
+
+        {selecting && data ? (
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {(() => {
+              const chosen = data.payableItems
+                .filter((item) => picked[item.orderItemId])
+                .map((item) => ({ orderItemId: item.orderItemId, qty: picked[item.orderItemId], name: item.name }));
+              const count = chosen.reduce((sum, line) => sum + line.qty, 0);
+              const open = (mode: "delete" | "move") =>
+                setItemsTarget({ mode, tableId: data.table.id, tableCode: data.table.code, lines: chosen });
+              return (
+                <>
+                  <button
+                    type="button"
+                    disabled={count === 0}
+                    onClick={() => open("delete")}
+                    className="h-11 rounded-xl bg-red-500 text-sm font-semibold text-white disabled:opacity-40"
+                  >
+                    Удалить{count ? ` (${count})` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={count === 0}
+                    onClick={() => open("move")}
+                    className="h-11 rounded-xl bg-white text-sm font-semibold text-black disabled:opacity-40"
+                  >
+                    Перенести{count ? ` (${count})` : ""}
+                  </button>
+                </>
+              );
+            })()}
+          </div>
+        ) : null}
       </div>
 
       {/* The guest started the payment from their phone — just confirm it. */}
@@ -313,8 +434,48 @@ export default function StaffTableDetailsPage() {
               Добавить позиции
             </button>
           ) : null}
+
+          {/* Paid and gone: free the table (asks first; refused while anything is unpaid). */}
+          {!askMethod && data.capabilities.canSettle ? (
+            <button
+              className={`${btnGhost} mt-2`}
+              onClick={() =>
+                setCloseTarget({
+                  tableId: data.table.id,
+                  tableCode: data.table.code,
+                  canClose: data.capabilities.canDisconnect,
+                  unpaidCzk: data.billTotalCzk,
+                  waitingPayment: !!pending,
+                })
+              }
+            >
+              Закрыть стол
+            </button>
+          ) : null}
         </div>
       ) : null}
+
+      <TableItemsSheet
+        target={itemsTarget}
+        onClose={() => setItemsTarget(null)}
+        onDone={async () => {
+          setItemsTarget(null);
+          setSelecting(false);
+          setPicked({});
+          emitStaffLiveSync("table-items-changed");
+          await load({ silent: true, fresh: true });
+        }}
+      />
+
+      <CloseTableSheet
+        target={closeTarget}
+        onClose={() => setCloseTarget(null)}
+        onDone={() => {
+          setCloseTarget(null);
+          emitStaffLiveSync("table-closed");
+          router.replace("/staff/tables");
+        }}
+      />
 
       <CancelItemSheet
         target={cancelTarget}

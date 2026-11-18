@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { listActiveTables, type StaffActiveTable } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useScreenRefresh } from "@/lib/staffScreenRefresh";
-import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
+import { CloseTableSheet, type CloseTableTarget } from "@/components/staff/CloseTableSheet";
+import { emitStaffLiveSync, subscribeStaffLiveSync } from "@/lib/staffLiveSync";
 
 const card =
   "rounded-3xl border border-white/10 bg-white/[0.05] p-3.5";
@@ -34,6 +35,7 @@ export default function StaffTablesPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [last, setLast] = useState<number | null>(null);
+  const [closeTarget, setCloseTarget] = useState<CloseTableTarget | null>(null);
 
   // A slower, older answer never overwrites a newer one.
   const loadSeqRef = useRef(0);
@@ -117,10 +119,10 @@ export default function StaffTablesPage() {
         {sorted.map((entry) => {
           const s = tableStatus(entry);
           return (
+            <div key={entry.session.id} className={`flex flex-col rounded-3xl border bg-white/[0.05] ${s.ring}`}>
             <Link
-              key={entry.session.id}
               href={`/staff/tables/${entry.table.id}`}
-              className={`rounded-3xl border bg-white/[0.05] p-3.5 transition active:scale-[0.98] hover:bg-white/[0.09] ${s.ring}`}
+              className="rounded-3xl p-3.5 transition active:scale-[0.98] hover:bg-white/[0.04]"
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="truncate text-lg font-bold text-white">
@@ -146,12 +148,51 @@ export default function StaffTablesPage() {
               </div>
 
               <div className="mt-2 truncate text-[11px] text-white/45">
-                {entry.session.user ? entry.session.user.name : "Гость"} · {formatTime(entry.lastActivityAt)}
+                {entry.guests?.length
+                  ? entry.guests.length > 2
+                    ? `${entry.guests.slice(0, 2).join(", ")} +${entry.guests.length - 2}`
+                    : entry.guests.join(", ")
+                  : entry.session.user
+                  ? entry.session.user.name?.trim() || "Гость с аккаунтом"
+                  : "Гость"}{" "}
+                ·{" "}
+                {formatTime(entry.lastActivityAt)}
               </div>
             </Link>
+            {/* Paid and gone: free the table right from the list. */}
+            {entry.capabilities?.canDisconnect ? (
+              <div className="px-3.5 pb-3.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCloseTarget({
+                      tableId: entry.table.id,
+                      tableCode: entry.table.code,
+                      canClose: true,
+                      unpaidCzk: 0,
+                      waitingPayment: false,
+                    })
+                  }
+                  className="h-9 w-full rounded-xl border border-white/15 bg-white/5 text-xs font-semibold text-white/80 active:bg-white/10"
+                >
+                  Закрыть стол
+                </button>
+              </div>
+            ) : null}
+            </div>
           );
         })}
       </div>
+
+      <CloseTableSheet
+        target={closeTarget}
+        onClose={() => setCloseTarget(null)}
+        onDone={() => {
+          setCloseTarget(null);
+          emitStaffLiveSync("table-closed");
+          void load({ silent: true, fresh: true });
+        }}
+      />
 
       {!loading && tables.length === 0 ? (
         <div className={`${card} mt-4 text-sm text-white/60`}>Сейчас нет активных столов.</div>

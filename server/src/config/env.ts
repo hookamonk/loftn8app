@@ -50,6 +50,15 @@ const EnvSchema = z.object({
 	// manager) every this many minutes until someone taps «Принять».
 	TICKET_REMINDER_MINUTES: z.coerce.number().positive().default(2),
 
+	// Hookah station (hookah-zone tablet + hookah masters confirming orders).
+	// Off for now: a hookah punched in by a waiter or manager just goes on the
+	// table's bill — no «Принять / Готово / Выдано», no alerts, no reminders.
+	// Set to "on" once the station works.
+	HOOKAH_STATION: z
+		.string()
+		.optional()
+		.transform((v) => ["on", "true", "1", "yes"].includes(String(v ?? "").trim().toLowerCase())),
+
 	// "Sign in with Google": the OAuth Web client ID from Google Cloud Console.
 	// "Sign in with Apple": the Services ID from the Apple Developer account.
 	// Each button appears in the guest app only when its ID is set.

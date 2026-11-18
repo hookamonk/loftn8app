@@ -73,7 +73,7 @@ export function ticketSectionsForRole(role: StaffRole): MenuSection[] {
 export function orderSectionsForRole(role: StaffRole): MenuSection[] {
   if (isStationRole(role)) return [];
   if (role === "HOOKAH") return ["HOOKAH"];
-  if (role === "WAITER") return ["DISHES", "DRINKS"];
+  // Waiters punch hookahs too (the hookah goes on the table's bill).
   return ALL_SECTIONS;
 }
 

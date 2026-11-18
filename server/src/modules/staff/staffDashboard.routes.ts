@@ -16,6 +16,8 @@ import {
 import { getOpenShiftOrThrow } from "./shiftCache";
 import { addStaffClient, emitStaffEvent } from "./staffEvents";
 import { cleanDeviceId, staffDeviceOf } from "./staffDevice";
+import { upsertOpenTableOrder } from "./openOrder";
+import { cancelTableLines, moveTableLines, type TableLine } from "./tableLines.service";
 import { emitGuestEvent } from "../guest/guestEvents";
 import {
   notifyGuestCallUpdated,
@@ -205,6 +207,19 @@ function forbidStations(role: StaffRole) {
   }
 }
 
+/** Names of the signed-in guests at a table, newest first, each once. */
+function guestNames(sessions: Array<{ user: { id: string; name: string } | null }>) {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const candidate of sessions) {
+    if (!candidate.user || seen.has(candidate.user.id)) continue;
+    seen.add(candidate.user.id);
+    // An account without a name (Apple can hide it) still shows that someone signed in.
+    names.push(candidate.user.name?.trim() || "Гость с аккаунтом");
+  }
+  return names;
+}
+
 function disconnectBlockedReason() {
   return "Сессию можно закрыть только после полной оплаты счета.";
 }
@@ -333,86 +348,6 @@ async function getActiveTableSessionOrThrow(params: {
  * new one. Lines are added afterwards by createStationTickets, one ticket per
  * station, and the status is then derived from those tickets.
  */
-async function upsertOpenTableOrder(
-  tx: Prisma.TransactionClient,
-  params: {
-    tableId: number;
-    sessionId: string;
-    userId?: string | null;
-    shiftId?: string | null;
-    comment?: string | null;
-  }
-) {
-  // Scope the "open order to append to" and the paid-through cutoff to the
-  // CURRENT shift, so a stale unpaid order left over from a previous shift at
-  // this table can't be merged into (and re-billed on) the current session.
-  const shiftScope = params.shiftId ? { session: { shiftId: params.shiftId } } : {};
-
-  const latestConfirmedPayment = await tx.paymentRequest.findFirst({
-    where: {
-      tableId: params.tableId,
-      status: "CONFIRMED",
-      ...shiftScope,
-    },
-    orderBy: { confirmedAt: "desc" },
-    select: {
-      confirmedAt: true,
-      createdAt: true,
-    },
-  });
-
-  const paidThroughAt = latestConfirmedPayment?.confirmedAt ?? latestConfirmedPayment?.createdAt ?? null;
-  const existingOpenOrder = await tx.order.findFirst({
-    where: {
-      tableId: params.tableId,
-      status: { in: ["NEW", "ACCEPTED", "IN_PROGRESS"] },
-      ...shiftScope,
-      ...(paidThroughAt
-        ? {
-            createdAt: {
-              gt: paidThroughAt,
-            },
-          }
-        : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      comment: true,
-    },
-  });
-
-  const mergedComment = (() => {
-    const left = String(existingOpenOrder?.comment ?? "").trim();
-    const right = String(params.comment ?? "").trim();
-    if (!left) return right || null;
-    if (!right || left === right) return left;
-    return `${left} | ${right}`;
-  })();
-
-  if (existingOpenOrder) {
-    return tx.order.update({
-      where: { id: existingOpenOrder.id },
-      data: {
-        sessionId: params.sessionId,
-        userId: params.userId ?? null,
-        comment: mergedComment,
-      },
-      select: { id: true },
-    });
-  }
-
-  return tx.order.create({
-    data: {
-      sessionId: params.sessionId,
-      tableId: params.tableId,
-      userId: params.userId ?? null,
-      status: "NEW",
-      comment: params.comment?.trim() || null,
-    },
-    select: { id: true },
-  });
-}
 
 async function getActiveShiftOrThrow(venueId: number) {
   return getOpenShiftOrThrow(venueId);
@@ -735,7 +670,11 @@ staffDashboardRouter.get(
       },
     });
 
-    const latestByTable = new Map<number, (typeof sessions)[number]>();
+    // A table can have several open sessions (two guests, or one guest who
+    // opened the QR in the camera and then in Safari). The table is all of
+    // them together — never just the newest one, which may be a guest that
+    // hasn't signed in and has ordered nothing.
+    const sessionsByTable = new Map<number, Array<(typeof sessions)[number]>>();
     for (const session of sessions) {
       const expiry = await expireGuestSessionIfInactiveAfterPayment(session.id, {
         id: session.id,
@@ -745,40 +684,50 @@ staffDashboardRouter.get(
       if (expiry.expired) {
         continue;
       }
-      if (!latestByTable.has(session.tableId)) {
-        latestByTable.set(session.tableId, session);
-      }
+      const list = sessionsByTable.get(session.tableId) ?? [];
+      list.push(session); // newest first
+      sessionsByTable.set(session.tableId, list);
     }
 
     const tables = await Promise.all(
-      Array.from(latestByTable.values()).map(async (session) => {
+      Array.from(sessionsByTable.values()).map(async (tableSessions) => {
+        const session = tableSessions.find((candidate) => candidate.user) ?? tableSessions[0];
         const closureState = await getGuestSessionClosureState(session.id, {
           id: session.id,
           endedAt: session.endedAt,
           startedAt: session.startedAt,
         });
-        const openItemsCount = session.orders.reduce(
+        const orders = tableSessions.flatMap((candidate) => candidate.orders);
+        const calls = tableSessions.flatMap((candidate) => candidate.calls);
+        const payments = tableSessions.flatMap((candidate) => candidate.payments);
+        const openItemsCount = orders.reduce(
           (sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.qty, 0),
           0
         );
+        const firstStartedAt = tableSessions.reduce(
+          (earliest, candidate) => (candidate.startedAt < earliest ? candidate.startedAt : earliest),
+          session.startedAt
+        );
         const lastActivityAt = [
-          session.startedAt,
-          ...session.orders.map((order) => order.createdAt),
-          ...session.calls.map((call) => call.createdAt),
-          ...session.payments.map((payment) => payment.createdAt),
-        ].reduce((latest, current) => (current > latest ? current : latest), session.startedAt);
+          ...tableSessions.map((candidate) => candidate.startedAt),
+          ...orders.map((order) => order.createdAt),
+          ...calls.map((call) => call.createdAt),
+          ...payments.map((payment) => payment.createdAt),
+        ].reduce((latest, current) => (current > latest ? current : latest), firstStartedAt);
 
         return {
           table: toPublicTable(session.table),
           session: {
             id: session.id,
-            startedAt: session.startedAt,
+            startedAt: firstStartedAt,
             user: session.user,
           },
+          // Everyone signed in at the table.
+          guests: guestNames(tableSessions),
           isActive: true,
           openItemsCount,
-          activeCallsCount: session.calls.length,
-          pendingPaymentsCount: session.payments.length,
+          activeCallsCount: calls.length,
+          pendingPaymentsCount: payments.length,
           lastActivityAt,
           capabilities: {
             canDisconnect: !("missing" in closureState) && !("ended" in closureState) && closureState.eligible,
@@ -870,6 +819,82 @@ staffDashboardRouter.post(
   })
 );
 
+const TableLinesSchema = z
+  .array(z.object({ orderItemId: z.string().min(1), qty: z.number().int().min(1).max(500) }))
+  .min(1)
+  .max(100);
+
+// Manager: every table of the venue to move lines to (busy ones first).
+staffDashboardRouter.get(
+  "/tables/choices",
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    forbidStations(req.staff!.role);
+    const shift = await getActiveShiftOrThrow(venueId);
+    const [tables, open] = await Promise.all([
+      prisma.table.findMany({
+        where: { venueId },
+        orderBy: { id: "asc" },
+        select: { id: true, code: true, label: true },
+      }),
+      prisma.guestSession.findMany({
+        where: { shiftId: shift.id, endedAt: null, table: { venueId } },
+        orderBy: { startedAt: "desc" },
+        select: { tableId: true, user: { select: { id: true, name: true } } },
+      }),
+    ]);
+    const byTable = new Map<number, Array<{ user: { id: string; name: string } | null }>>();
+    for (const session of open) byTable.set(session.tableId, [...(byTable.get(session.tableId) ?? []), session]);
+    res.json({
+      ok: true,
+      tables: tables
+        .map((table) => ({
+          id: table.id,
+          code: toPublicTable(table).code,
+          busy: byTable.has(table.id),
+          guests: guestNames(byTable.get(table.id) ?? []),
+        }))
+        .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })),
+    });
+  })
+);
+
+// Manager: «Удалить» chosen lines (not paid, not on a bill being paid).
+staffDashboardRouter.post(
+  "/tables/:id/items/cancel",
+  validate(z.object({ lines: TableLinesSchema, reason: z.string().trim().max(200).optional() })),
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const body = req.body as { lines: TableLine[]; reason?: string };
+    const result = await cancelTableLines(
+      { venueId, shiftId: shift.id, staffId: req.staff!.staffId, role: req.staff!.role, deviceId: staffDeviceOf(req) },
+      Number(req.params.id),
+      body.lines,
+      body.reason
+    );
+    res.json({ ok: true, ...result });
+  })
+);
+
+// Manager: «Перенести» chosen lines to another table.
+staffDashboardRouter.post(
+  "/tables/:id/items/move",
+  validate(z.object({ toTableId: z.number().int().positive(), lines: TableLinesSchema })),
+  asyncHandler(async (req, res) => {
+    const venueId = req.staff!.venueId;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const body = req.body as { toTableId: number; lines: TableLine[] };
+    const result = await moveTableLines(
+      { venueId, shiftId: shift.id, staffId: req.staff!.staffId, role: req.staff!.role },
+      Number(req.params.id),
+      body.toTableId,
+      body.lines
+    );
+    res.json({ ok: true, ...result });
+  })
+);
+
 staffDashboardRouter.get(
   "/tables/:id",
   asyncHandler(async (req, res) => {
@@ -893,11 +918,20 @@ staffDashboardRouter.get(
     // part of what they collect); the hookah master sees his own lines only.
     const sections = canHandlePayments(role) ? null : orderSectionsForRole(role);
 
+    // Every guest who is at the table now (not just the newest session).
+    const openSessions = await prisma.guestSession.findMany({
+      where: { tableId, endedAt: null, shiftId: shift.id, table: { venueId } },
+      orderBy: { startedAt: "desc" },
+      select: { id: true, startedAt: true, userId: true, user: { select: { id: true, name: true, phone: true } } },
+    });
+    const openSessionIds = openSessions.map((candidate) => candidate.id);
+    const primary = openSessions.find((candidate) => candidate.user) ?? openSessions[0];
+
     const [orders, activeCalls, pendingPayment] = await Promise.all([
       prisma.order.findMany({
         where: {
           tableId,
-          sessionId: session.id,
+          sessionId: { in: openSessionIds },
           status: { not: "CANCELLED" },
           ...(sections
             ? {
@@ -933,7 +967,7 @@ staffDashboardRouter.get(
       }),
       prisma.staffCall.findMany({
         where: {
-          sessionId: session.id,
+          sessionId: { in: openSessionIds },
           status: { in: ["NEW", "ACKED"] },
           type: { in: callTypesForRole(role) },
           ...excludeOrderRequestMarker(),
@@ -950,13 +984,14 @@ staffDashboardRouter.get(
       (prisma as any).paymentRequest.findFirst({
         where: {
           tableId,
-          sessionId: session.id,
+          sessionId: { in: openSessionIds },
           status: "PENDING",
         },
         orderBy: { createdAt: "desc" },
         select: {
           id: true,
           status: true,
+          session: { select: { userId: true } },
           method: true,
           createdAt: true,
           billTotalCzk: true,
@@ -978,9 +1013,11 @@ staffDashboardRouter.get(
     // compute the cashback the guest asked to use the same way /confirm will,
     // otherwise staff would charge the full bill.
     let pendingLoyaltyAppliedCzk = 0;
-    if (pendingPayment?.useLoyalty && session.userId) {
+    // Cashback belongs to the guest who asked for the bill.
+    const payerUserId: string | null = pendingPayment?.session?.userId ?? null;
+    if (pendingPayment?.useLoyalty && payerUserId) {
       const loyaltyTxns = await prisma.loyaltyTransaction.findMany({
-        where: { userId: session.userId, venueId },
+        where: { userId: payerUserId, venueId },
         select: {
           cashbackCzk: true,
           redeemedAmountCzk: true,
@@ -1039,10 +1076,15 @@ staffDashboardRouter.get(
       ok: true,
       table: toPublicTable(session.table),
       session: {
-        id: session.id,
-        startedAt: session.startedAt,
-        user: session.user,
+        id: primary?.id ?? session.id,
+        startedAt: openSessions.reduce(
+          (earliest, candidate) => (candidate.startedAt < earliest ? candidate.startedAt : earliest),
+          session.startedAt
+        ),
+        user: primary?.user ?? session.user,
       },
+      // Everyone signed in at the table.
+      guests: guestNames(openSessions),
       orders: orders.map((order) => ({
         ...order,
         totalCzk: order.items.reduce((sum, item) => sum + item.qty * item.priceCzk, 0),

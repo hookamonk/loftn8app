@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { emitStaffEvent } from "../../modules/staff/staffEvents";
 import jwt from "jsonwebtoken";
 import { env } from "../../config/env";
 import { normalizeVenueSlug, resolveVenueSlug } from "../../config/venues";
@@ -121,6 +122,8 @@ export async function guestSessionAuth(
 				req.user = user;
 
 				if (session.userId !== user.id) {
+					// The staff table list shows who sits there — refresh it now.
+					emitStaffEvent(session.table.venueId, { kind: "DATA_CHANGED" });
 					const syncedSession = await prisma.guestSession.update({
 						where: { id: session.id },
 						data: { userId: user.id },

@@ -86,6 +86,6 @@ export function canTakeOrderRequests(role?: StaffRole | null) {
 export function orderSectionsForRole(role?: StaffRole | null): MenuSection[] {
   if (isStationRole(role)) return [];
   if (role === "HOOKAH") return ["HOOKAH"];
-  if (role === "WAITER") return ["DISHES", "DRINKS"];
+  // Waiters punch hookahs too (the hookah goes on the table's bill).
   return ["DISHES", "DRINKS", "HOOKAH"];
 }

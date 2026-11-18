@@ -161,6 +161,11 @@ export async function createStationTickets(
       },
     });
 
+    // Hookah station paused: the hookah just goes on the bill — recorded as
+    // served at once, so nothing waits, alerts or reminds anybody.
+    const straightToBill = station === "HOOKAH" && !env.HOOKAH_STATION;
+    const now = new Date();
+
     const ticket = await tx.stationTicket.create({
       data: {
         venueId: params.venueId,
@@ -170,6 +175,17 @@ export async function createStationTickets(
         station,
         isAddon: earlier > 0,
         createdById: params.staffId,
+        ...(straightToBill
+          ? {
+              status: "SERVED" as const,
+              acceptedAt: now,
+              acceptedById: params.staffId,
+              readyAt: now,
+              readyById: params.staffId,
+              servedAt: now,
+              servedById: params.staffId,
+            }
+          : {}),
         items: {
           create: lines.map((line) => ({
             orderId: params.orderId,
