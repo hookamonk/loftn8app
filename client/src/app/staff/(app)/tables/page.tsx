@@ -6,6 +6,8 @@ import { listActiveTables, type StaffActiveTable } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
 import { useScreenRefresh } from "@/lib/staffScreenRefresh";
 import { subscribeStaffLiveSync } from "@/lib/staffLiveSync";
+import { useStaffSession } from "@/providers/staffSession";
+import { OpenTableSheet } from "@/components/staff/OpenTableSheet";
 
 const card =
   "rounded-3xl border border-white/10 bg-white/[0.05] p-3.5";
@@ -32,6 +34,10 @@ function formatTime(value?: string | null) {
 export default function StaffTablesPage() {
   const [tables, setTables] = useState<StaffActiveTable[]>([]);
   const [loading, setLoading] = useState(false);
+  const [openSheet, setOpenSheet] = useState(false);
+  const { staff } = useStaffSession();
+  // Waiters and managers open a table for guests who didn't scan.
+  const canOpen = staff?.role === "WAITER" || staff?.role === "MANAGER" || staff?.role === "ADMIN";
   const [err, setErr] = useState<string | null>(null);
   const [last, setLast] = useState<number | null>(null);
 
@@ -111,6 +117,16 @@ export default function StaffTablesPage() {
         ) : null}
       </div>
 
+      {canOpen ? (
+        <button
+          type="button"
+          onClick={() => setOpenSheet(true)}
+          className="mt-3 h-11 w-full rounded-2xl border border-white/15 bg-white/[0.06] text-sm font-semibold text-white active:bg-white/10"
+        >
+          + Открыть стол
+        </button>
+      ) : null}
+
       {loading ? <div className="mt-4 text-sm text-white/60">Загрузка…</div> : null}
 
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -161,6 +177,8 @@ export default function StaffTablesPage() {
           );
         })}
       </div>
+
+      <OpenTableSheet open={openSheet} onClose={() => setOpenSheet(false)} />
 
       {!loading && tables.length === 0 ? (
         <div className={`${card} mt-4 text-sm text-white/60`}>Сейчас нет активных столов.</div>

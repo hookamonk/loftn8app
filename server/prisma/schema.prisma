@@ -101,6 +101,10 @@ model GuestSession {
   // they choose to stay this flips true and the post-payment auto-end timer is
   // suspended until the next payment re-arms the prompt.
   stayOptIn Boolean          @default(false)
+  // A waiter or manager attached this registered guest to the table by hand
+  // (the guest didn't scan): who and when — the shift report's journal.
+  boundById String?
+  boundAt   DateTime?
   table     Table            @relation(fields: [tableId], references: [id])
   user      User?            @relation(fields: [userId], references: [id])
   shift     Shift?           @relation(fields: [shiftId], references: [id])

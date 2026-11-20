@@ -18,6 +18,7 @@ import { addStaffClient, emitStaffEvent } from "./staffEvents";
 import { cleanDeviceId, staffDeviceOf } from "./staffDevice";
 import { upsertOpenTableOrder } from "./openOrder";
 import { staffMenu } from "../menu/menu.routes";
+import { attachGuest, cardTail, detachGuest, openTable, searchGuests } from "./tableGuests.service";
 import { cancelTableLines, moveTableLines, type TableLine } from "./tableLines.service";
 import { emitGuestEvent } from "../guest/guestEvents";
 import {
@@ -846,6 +847,72 @@ const TableLinesSchema = z
   .max(100);
 
 // Manager: every table of the venue to move lines to (busy ones first).
+// Regulars who didn't scan: find their account, open the table, attach them.
+function settleCtx(req: any) {
+  const role = req.staff!.role;
+  forbidStations(role);
+  if (!canHandlePayments(role)) {
+    throw new HttpError(403, "FORBIDDEN", "Только официант или менеджер");
+  }
+}
+
+staffDashboardRouter.get(
+  "/guests/search",
+  asyncHandler(async (req, res) => {
+    settleCtx(req);
+    const venueId = req.staff!.venueId;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const guests = await searchGuests(
+      { venueId, shiftId: shift.id, staffId: req.staff!.staffId },
+      String(req.query.q ?? "")
+    );
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json({ ok: true, guests });
+  })
+);
+
+staffDashboardRouter.post(
+  "/tables/:id/open",
+  asyncHandler(async (req, res) => {
+    settleCtx(req);
+    const venueId = req.staff!.venueId;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const result = await openTable({ venueId, shiftId: shift.id, staffId: req.staff!.staffId }, Number(req.params.id));
+    res.json({ ok: true, ...result });
+  })
+);
+
+staffDashboardRouter.post(
+  "/tables/:id/guests",
+  validate(z.object({ userId: z.string().trim().min(1).max(64) })),
+  asyncHandler(async (req, res) => {
+    settleCtx(req);
+    const venueId = req.staff!.venueId;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const result = await attachGuest(
+      { venueId, shiftId: shift.id, staffId: req.staff!.staffId },
+      Number(req.params.id),
+      (req.body as { userId: string }).userId
+    );
+    res.json({ ok: true, ...result });
+  })
+);
+
+staffDashboardRouter.delete(
+  "/tables/:id/guests/:sessionId",
+  asyncHandler(async (req, res) => {
+    settleCtx(req);
+    const venueId = req.staff!.venueId;
+    const shift = await getActiveShiftOrThrow(venueId);
+    const result = await detachGuest(
+      { venueId, shiftId: shift.id, staffId: req.staff!.staffId },
+      Number(req.params.id),
+      String(req.params.sessionId)
+    );
+    res.json({ ok: true, ...result });
+  })
+);
+
 staffDashboardRouter.get(
   "/tables/choices",
   asyncHandler(async (req, res) => {
@@ -943,7 +1010,13 @@ staffDashboardRouter.get(
     const openSessions = await prisma.guestSession.findMany({
       where: { tableId, endedAt: null, shiftId: shift.id, table: { venueId } },
       orderBy: { startedAt: "desc" },
-      select: { id: true, startedAt: true, userId: true, user: { select: { id: true, name: true, phone: true } } },
+      select: {
+        id: true,
+        startedAt: true,
+        userId: true,
+        boundById: true,
+        user: { select: { id: true, name: true, phone: true, cardNumber: true } },
+      },
     });
     const openSessionIds = openSessions.map((candidate) => candidate.id);
     const primary = openSessions.find((candidate) => candidate.user) ?? openSessions[0];
@@ -1012,7 +1085,7 @@ staffDashboardRouter.get(
         select: {
           id: true,
           status: true,
-          session: { select: { userId: true } },
+          session: { select: { userId: true, user: { select: { name: true } } } },
           method: true,
           createdAt: true,
           billTotalCzk: true,
@@ -1093,6 +1166,17 @@ staffDashboardRouter.get(
     const billTotalCzk = payableItems.reduce((sum, item) => sum + item.totalCzk, 0);
     const canDisconnect = !pendingPayment && billTotalCzk <= 0;
 
+    // Each signed-in guest's cashback usable right now (this venue) — the
+    // waiter can take it off their part of the bill.
+    const peopleIds = Array.from(new Set(openSessions.map((candidate) => candidate.userId).filter((id): id is string => !!id)));
+    const peopleTxns = peopleIds.length
+      ? await prisma.loyaltyTransaction.findMany({
+          where: { userId: { in: peopleIds }, venueId },
+          select: { userId: true, cashbackCzk: true, redeemedAmountCzk: true, availableAt: true, createdAt: true },
+        })
+      : [];
+    const cashbackOf = (userId: string) => summarizeLoyalty(peopleTxns.filter((txn) => txn.userId === userId)).availableCzk;
+
     res.json({
       ok: true,
       table: toPublicTable(session.table),
@@ -1106,6 +1190,31 @@ staffDashboardRouter.get(
       },
       // Everyone signed in at the table.
       guests: guestNames(openSessions),
+      // The same, for choosing who pays (cashback) and for «Отвязать».
+      people: (() => {
+        const seen = new Set<string>();
+        const people: Array<{
+          sessionId: string;
+          userId: string;
+          name: string;
+          card: string | null;
+          attached: boolean;
+          cashbackCzk: number;
+        }> = [];
+        for (const candidate of openSessions) {
+          if (!candidate.user || seen.has(candidate.user.id)) continue;
+          seen.add(candidate.user.id);
+          people.push({
+            sessionId: candidate.id,
+            userId: candidate.user.id,
+            name: candidate.user.name?.trim() || "Гость с аккаунтом",
+            card: cardTail(candidate.user.cardNumber),
+            attached: !!candidate.boundById,
+            cashbackCzk: cashbackOf(candidate.user.id),
+          });
+        }
+        return people;
+      })(),
       orders: orders.map((order) => ({
         ...order,
         totalCzk: order.items.reduce((sum, item) => sum + item.qty * item.priceCzk, 0),
@@ -1116,6 +1225,10 @@ staffDashboardRouter.get(
       pendingPayment: pendingPayment
         ? {
             ...pendingPayment,
+            // Whose account gets the cashback of this bill (null: nobody's).
+            payerName: pendingPayment.session?.userId
+              ? pendingPayment.session.user?.name?.trim() || "Гость с аккаунтом"
+              : null,
             loyaltyAppliedCzk: pendingLoyaltyAppliedCzk,
             tipCzk: pendingTipCzk,
             dueCzk: pendingDueCzk,
@@ -1134,6 +1247,17 @@ staffDashboardRouter.get(
 
 const CreateStaffTablePaymentSchema = z.object({
   method: z.enum(["CARD", "CASH"]),
+  // Who pays — their account gets the cashback. "none": somebody without an
+  // account. Default: the guest signed in at the table.
+  payerSessionId: z.string().trim().min(1).max(64).optional(),
+  // Take the payer's cashback off this bill (the guest said yes).
+  useCashback: z.boolean().optional(),
+  // The bill split between guests: only these lines. Default: all unpaid.
+  items: z
+    .array(z.object({ orderItemId: z.string().trim().min(1), qty: z.number().int().min(1).max(1000) }))
+    .min(1)
+    .max(300)
+    .optional(),
 });
 
 staffDashboardRouter.post(
@@ -1153,11 +1277,35 @@ staffDashboardRouter.post(
     }
 
     const body = req.body as z.infer<typeof CreateStaffTablePaymentSchema>;
-    const session = await getActiveTableSessionOrThrow({
+    await getActiveTableSessionOrThrow({
       tableId,
       venueId,
       shiftId: shift.id,
     });
+
+    // The bill goes on the payer's session: confirming it gives THEIR account
+    // the cashback. Without a choice — the guest signed in at the table (not
+    // simply the newest session, which may be a friend without an account).
+    const seated = await prisma.guestSession.findMany({
+      where: { tableId, shiftId: shift.id, endedAt: null, table: { venueId } },
+      orderBy: { startedAt: "desc" },
+      select: { id: true, userId: true },
+    });
+    let session: { id: string; userId?: string | null } | undefined;
+    if (body.payerSessionId === "none") {
+      session =
+        seated.find((candidate) => !candidate.userId) ??
+        (await prisma.guestSession.create({ data: { tableId, shiftId: shift.id }, select: { id: true, userId: true } }));
+    } else if (body.payerSessionId) {
+      session = seated.find((candidate) => candidate.id === body.payerSessionId);
+      if (!session) throw new HttpError(400, "PAYER_NOT_AT_TABLE", "Этого гостя нет за столом — обновите стол");
+    } else {
+      session = seated.find((candidate) => candidate.userId) ?? seated[0];
+    }
+    if (!session) throw new HttpError(404, "SESSION_NOT_FOUND", "No active session for this table");
+    // Cashback can only come off a bill paid by a guest with an account; how
+    // much is decided at confirmation (their balance at that moment).
+    const useLoyalty = !!body.useCashback && !!session.userId;
 
     const tableWithBilling = await (prisma as any).table.findUnique({
       where: { id: tableId },
@@ -1225,8 +1373,27 @@ staffDashboardRouter.post(
       throw new HttpError(409, "NOTHING_TO_PAY", "Nothing left to pay in this tab");
     }
 
-    const billTotalCzk = payableItems.reduce((sum, item) => sum + item.totalCzk, 0);
-    const itemsJson = payableItems.map((item) => ({
+    // A split bill: only the lines (and quantities) this guest pays for.
+    let billed = payableItems;
+    if (body.items) {
+      const byId = new Map(payableItems.map((item) => [item.orderItemId, item]));
+      const seen = new Set<string>();
+      billed = body.items.map((line) => {
+        const source = byId.get(line.orderItemId);
+        if (!source || seen.has(line.orderItemId)) {
+          throw new HttpError(400, "ITEM_NOT_PAYABLE", "Позиция уже оплачена или убрана — обновите стол");
+        }
+        if (line.qty > source.qty) throw new HttpError(400, "ITEM_QTY_INVALID", "Неверное количество — обновите стол");
+        seen.add(line.orderItemId);
+        return { ...source, qty: line.qty, totalCzk: line.qty * source.unitPriceCzk };
+      });
+    }
+
+    const billTotalCzk = billed.reduce((sum, item) => sum + item.totalCzk, 0);
+    if (billTotalCzk <= 0) {
+      throw new HttpError(400, "EMPTY_PAYMENT_SELECTION", "Выберите хотя бы одну позицию");
+    }
+    const itemsJson = billed.map((item) => ({
       orderItemId: item.orderItemId,
       menuItemId: item.menuItemId,
       name: item.name,
@@ -1256,7 +1423,7 @@ staffDashboardRouter.post(
             sessionId: session.id,
             method: body.method,
             billTotalCzk,
-            useLoyalty: false,
+            useLoyalty,
             loyaltyAppliedCzk: 0,
             itemsJson,
           },
@@ -1267,7 +1434,7 @@ staffDashboardRouter.post(
             tableId,
             method: body.method,
             billTotalCzk,
-            useLoyalty: false,
+            useLoyalty,
             loyaltyAppliedCzk: 0,
             itemsJson,
           },

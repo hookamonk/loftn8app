@@ -4,13 +4,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CloseTableSheet, type CloseTableTarget } from "@/components/staff/CloseTableSheet";
 import { TableItemsSheet, type TableItemsTarget } from "@/components/staff/TableItemsSheet";
+import { GuestSheet } from "@/components/staff/GuestSheet";
+import { PaySheet } from "@/components/staff/PaySheet";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelPayment,
   confirmPayment,
   getActiveTableDetails,
-  requestTablePayment,
   type StaffActiveTableDetails,
 } from "@/lib/staffApi";
 import { usePolling } from "@/lib/usePolling";
@@ -25,13 +26,13 @@ import { CancelItemSheet, type CancelTarget } from "@/components/staff/CancelIte
 /**
  * Everything a waiter needs at a table, on one screen: what is unpaid right
  * now, one button to settle it, and — when the guest started the payment from
- * their own phone — one button to confirm it.
+ * their own phone — one button to confirm it. Regulars who didn't scan are
+ * attached by name («Гости»); «Рассчитать» says who pays (their cashback) and
+ * what — the bill can be split between the people at the table.
  */
 
 const card =
   "rounded-3xl border border-white/10 bg-white/[0.05] p-3.5";
-const btnPrimary =
-  "h-11 w-full rounded-xl bg-white text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
 const btnAccent =
   "h-11 w-full rounded-xl bg-emerald-400 text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-50";
 const btnGhost =
@@ -50,7 +51,8 @@ export default function StaffTableDetailsPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [askMethod, setAskMethod] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
+  const [guestsOpen, setGuestsOpen] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
   // Manager: choose lines to delete or move to another table.
@@ -100,28 +102,6 @@ export default function StaffTableDetailsPage() {
   // Alerts: the shell refreshes this table with fresh data, then sounds.
   useScreenRefresh(() => load({ silent: true, fresh: true }), Number.isFinite(tableId) && tableId > 0);
   useEffect(() => subscribeStaffLiveSync(() => void tick()), [tick]);
-
-  const settle = async (method: "CARD" | "CASH") => {
-    if (!data || busy) return;
-
-    setBusy(true);
-    const result = await requestTablePayment(data.table.id, method);
-    setBusy(false);
-    setAskMethod(false);
-
-    if (!result.ok) {
-      push({ kind: "error", title: "Ошибка", message: result.error });
-      return;
-    }
-
-    push({
-      kind: "success",
-      title: "Счёт выставлен",
-      message: method === "CARD" ? "Картой — несите терминал." : "Наличными.",
-    });
-    emitStaffLiveSync("payment-request-created");
-    await load({ silent: true });
-  };
 
   const confirm = async () => {
     if (!data?.pendingPayment || busy) return;
@@ -173,6 +153,16 @@ export default function StaffTableDetailsPage() {
                 ? data.session.user.name?.trim() || "Гость с аккаунтом"
                 : "Гость без аккаунта"}
             </div>
+            {/* A regular who didn't scan: find their account and attach it. */}
+            {data?.capabilities.canSettle ? (
+              <button
+                type="button"
+                onClick={() => setGuestsOpen(true)}
+                className="mt-2 h-8 rounded-xl border border-white/15 bg-white/5 px-3 text-xs font-semibold text-white/80 active:bg-white/10"
+              >
+                {data.people.length ? `Гости · ${data.people.length}` : "+ Гость"}
+              </button>
+            ) : null}
           </div>
 
           <Link
@@ -365,6 +355,12 @@ export default function StaffTableDetailsPage() {
               <span>Счёт</span>
               <span>{pending.billTotalCzk} Kč</span>
             </div>
+            {pending.payerName ? (
+              <div className="flex justify-between gap-3">
+                <span>Кэшбэк получит</span>
+                <span className="truncate">{pending.payerName}</span>
+              </div>
+            ) : null}
             {pending.loyaltyAppliedCzk > 0 ? (
               <div className="flex justify-between gap-3">
                 <span>Кэшбэк</span>
@@ -402,41 +398,21 @@ export default function StaffTableDetailsPage() {
       {data ? (
         <div className={card}>
           {!pending && data.capabilities.canSettle ? (
-            askMethod ? (
-              <div className="grid gap-2">
-                <div className="text-sm font-semibold text-white">Чем платит гость?</div>
-                <button className={btnPrimary} disabled={busy} onClick={() => void settle("CARD")}>
-                  Картой
-                </button>
-                <button className={btnPrimary} disabled={busy} onClick={() => void settle("CASH")}>
-                  Наличными
-                </button>
-                <button className={btnGhost} disabled={busy} onClick={() => setAskMethod(false)}>
-                  Отмена
-                </button>
-              </div>
-            ) : (
-              <button
-                className={btnAccent}
-                disabled={busy || data.billTotalCzk <= 0}
-                onClick={() => setAskMethod(true)}
-              >
-                Рассчитать
-              </button>
-            )
-          ) : null}
-
-          {!askMethod ? (
-            <button
-              className={`${btnGhost} ${!pending && data.capabilities.canSettle ? "mt-2" : ""}`}
-              onClick={() => setComposerOpen(true)}
-            >
-              Добавить позиции
+            // Who pays (cashback), the whole bill or only their lines, card or cash.
+            <button className={btnAccent} disabled={busy || data.billTotalCzk <= 0} onClick={() => setPayOpen(true)}>
+              Рассчитать
             </button>
           ) : null}
 
+          <button
+            className={`${btnGhost} ${!pending && data.capabilities.canSettle ? "mt-2" : ""}`}
+            onClick={() => setComposerOpen(true)}
+          >
+            Добавить позиции
+          </button>
+
           {/* Paid and gone: free the table (asks first; refused while anything is unpaid). */}
-          {!askMethod && data.capabilities.canSettle ? (
+          {data.capabilities.canSettle ? (
             <button
               className={`${btnGhost} mt-2`}
               onClick={() =>
@@ -454,6 +430,29 @@ export default function StaffTableDetailsPage() {
           ) : null}
         </div>
       ) : null}
+
+      <GuestSheet
+        target={guestsOpen && data ? { tableId: data.table.id, tableCode: data.table.code, people: data.people } : null}
+        onClose={() => setGuestsOpen(false)}
+        onChanged={() => {
+          emitStaffLiveSync("table-guests-changed");
+          void load({ silent: true, fresh: true });
+        }}
+      />
+
+      <PaySheet
+        target={
+          payOpen && data && !pending
+            ? { tableId: data.table.id, tableCode: data.table.code, people: data.people, items: data.payableItems }
+            : null
+        }
+        onClose={() => setPayOpen(false)}
+        onDone={async () => {
+          setPayOpen(false);
+          emitStaffLiveSync("payment-request-created");
+          await load({ silent: true, fresh: true });
+        }}
+      />
 
       <TableItemsSheet
         target={itemsTarget}

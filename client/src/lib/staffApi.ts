@@ -533,6 +533,8 @@ export type StaffActiveTableDetails = {
   };
   /** Everyone signed in at the table (a table can have several open sessions). */
   guests?: string[];
+  /** The same guests, to choose who pays (cashback) and to detach a wrong one. */
+  people: TablePerson[];
   orders: Array<{
     id: string;
     status: OrderStatus;
@@ -577,6 +579,8 @@ export type StaffActiveTableDetails = {
     tipCzk: number;
     /** What to collect: bill − cashback + tip. */
     dueCzk: number;
+    /** Whose account gets this bill's cashback (null: nobody's). */
+    payerName?: string | null;
     selectedItems: Array<{
       orderItemId: string;
       menuItemId: number;
@@ -606,6 +610,62 @@ export async function listActiveTables(opts?: FetchOpts): Promise<ApiResult<{ ta
 /** Manager: a chosen line and how many of it. */
 export type TableLineChoice = { orderItemId: string; qty: number };
 export type TableChoice = { id: number; code: string; busy: boolean; guests: string[] };
+
+/** A registered guest at the table. `attached`: added by staff, not scanned. */
+export type TablePerson = {
+  sessionId: string;
+  userId: string;
+  name: string;
+  card: string | null;
+  attached: boolean;
+  /** Cashback on their account usable right now (this venue). */
+  cashbackCzk?: number;
+};
+
+/** A registered guest found by name, e-mail, phone or card (contacts half-hidden). */
+export type GuestMatch = {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  card: string | null;
+  /** The table they sit at right now in this venue, if any. */
+  atTable: string | null;
+};
+
+export async function searchGuests(q: string): Promise<ApiResult<{ guests: GuestMatch[] }>> {
+  return tryPaths<{ ok: true; guests: GuestMatch[] }>(
+    [`/staff/dashboard/guests/search?q=${encodeURIComponent(q)}`],
+    { method: "GET" },
+    { timeoutMs: LIST_TIMEOUT_MS }
+  ).then((r) => (r.ok ? { ok: true, data: { guests: r.data.guests } } : r));
+}
+
+/** «Открыть стол»: guests who didn't scan. */
+export async function openTable(tableId: number): Promise<ApiResult<{ sessionId: string; opened: boolean }>> {
+  return tryPaths<{ ok: true; sessionId: string; opened: boolean }>([`/staff/dashboard/tables/${tableId}/open`], {
+    method: "POST",
+    body: JSON.stringify({}),
+  }).then((r) => (r.ok ? { ok: true, data: { sessionId: r.data.sessionId, opened: r.data.opened } } : r));
+}
+
+/** «+ Гость»: attach a registered guest to the table. */
+export async function attachGuest(
+  tableId: number,
+  userId: string
+): Promise<ApiResult<{ name: string; already: boolean }>> {
+  return tryPaths<{ ok: true; name: string; already: boolean }>([`/staff/dashboard/tables/${tableId}/guests`], {
+    method: "POST",
+    body: JSON.stringify({ userId }),
+  }).then((r) => (r.ok ? { ok: true, data: { name: r.data.name, already: r.data.already } } : r));
+}
+
+/** «Отвязать»: a guest attached by mistake (before anything was billed to them). */
+export async function detachGuest(tableId: number, sessionId: string): Promise<ApiResult<{ ok: true }>> {
+  return tryPaths<{ ok: true }>([`/staff/dashboard/tables/${tableId}/guests/${encodeURIComponent(sessionId)}`], {
+    method: "DELETE",
+  }).then((r) => (r.ok ? { ok: true, data: { ok: true } } : r));
+}
 
 /** Manager: every table of the venue to move lines to. */
 export async function listTableChoices(): Promise<ApiResult<{ tables: TableChoice[] }>> {
@@ -663,6 +723,7 @@ export async function getActiveTableDetails(
               table: r.data.table,
               session: r.data.session,
               guests: r.data.guests ?? [],
+              people: r.data.people ?? [],
               orders: r.data.orders,
               payableItems: r.data.payableItems,
               billTotalCzk: r.data.billTotalCzk,
@@ -678,11 +739,27 @@ export async function getActiveTableDetails(
 
 export async function requestTablePayment(
   tableId: number,
-  method: PaymentMethod
+  method: PaymentMethod,
+  opts?: {
+    /** Who pays — their account gets the cashback; "none": nobody's. */
+    payerSessionId?: string;
+    /** Take the payer's cashback off this bill. */
+    useCashback?: boolean;
+    /** Only these lines (the bill split between guests). */
+    items?: TableLineChoice[];
+  }
 ): Promise<ApiResult<any>> {
   const r = await tryPaths<any>(
     [`/staff/dashboard/tables/${tableId}/request-payment`],
-    { method: "POST", body: JSON.stringify({ method }) }
+    {
+      method: "POST",
+      body: JSON.stringify({
+        method,
+        ...(opts?.payerSessionId ? { payerSessionId: opts.payerSessionId } : {}),
+        ...(opts?.useCashback ? { useCashback: true } : {}),
+        ...(opts?.items?.length ? { items: opts.items } : {}),
+      }),
+    }
   );
   // I asked for the bill myself: no "payment request" sound for it here.
   if (r.ok && r.data?.payment?.id) markOwnAlerts([`payment_pending:${r.data.payment.id}`]);
@@ -752,6 +829,16 @@ export type ShiftReport = {
     totalCzk: number;
     list: Array<{ id: string; at: string; table: string; name: string; qty: number; totalCzk: number; reason: string | null; by: string }>;
   };
+  /** Guests attached to a table by hand (no QR scan): who did it, what they paid, cashback. */
+  attachedGuests?: Array<{
+    at: string | null;
+    table: string;
+    guest: string;
+    card: string | null;
+    by: string;
+    paidCzk: number;
+    cashbackCzk: number;
+  }>;
   payments: Array<{
     id: string;
     at: string;

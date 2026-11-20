@@ -219,6 +219,34 @@ export default function ShiftReportPage() {
         )}
       </div>
 
+      {/* Journal: regulars attached to a table by hand (they didn't scan). */}
+      <div className={card}>
+        <div className={title}>Гости, подключённые вручную · {report.attachedGuests?.length ?? 0}</div>
+        {report.attachedGuests?.length ? (
+          <div className="mt-2 divide-y divide-white/8">
+            {report.attachedGuests.map((g, index) => (
+              <div key={`${g.at}-${index}`} className="py-1.5 text-sm">
+                <div className="flex justify-between gap-3">
+                  <span className="text-white/85">
+                    {g.at ? clock(g.at) : "—"} · Стол {g.table} · {g.guest}
+                    {g.card ? ` · карта …${g.card}` : ""}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-white/60">
+                    {g.cashbackCzk ? `кэшбэк ${money(g.cashbackCzk)}` : ""}
+                  </span>
+                </div>
+                <div className="text-xs text-white/45">
+                  подключил {g.by}
+                  {g.paidCzk ? ` · оплатил ${money(g.paidCzk)}` : " · не платил"}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-2 text-sm text-white/50">Никого не подключали.</div>
+        )}
+      </div>
+
       <div className={card}>
         <div className={title}>Оплаты · {report.payments.length}</div>
         {report.payments.length ? (

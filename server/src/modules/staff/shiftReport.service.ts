@@ -61,7 +61,7 @@ export async function buildShiftReport(shiftId: string) {
 
   const until = shiftEnd(shift);
 
-  const [confirmations, orders, tickets, cancellations, shiftPayments] = await Promise.all([
+  const [confirmations, orders, tickets, cancellations, shiftPayments, attached] = await Promise.all([
     prisma.paymentConfirmation.findMany({
       where: { venueId: shift.venueId, createdAt: { gte: shift.openedAt, lte: until } },
       orderBy: { createdAt: "asc" },
@@ -116,7 +116,30 @@ export async function buildShiftReport(shiftId: string) {
       where: { status: "CONFIRMED", session: { shiftId: shift.id } },
       select: { status: true, itemsJson: true, confirmation: { select: { itemsJson: true } } },
     }),
+    // Guests a waiter or manager attached to a table by hand, with what they paid.
+    prisma.guestSession.findMany({
+      where: { shiftId: shift.id, boundById: { not: null } },
+      orderBy: { boundAt: "asc" },
+      select: {
+        boundById: true,
+        boundAt: true,
+        table: { select: { code: true, label: true } },
+        user: { select: { name: true, cardNumber: true } },
+        payments: {
+          where: { status: "CONFIRMED" },
+          select: { confirmation: { select: { amountCzk: true, loyaltyTxn: { select: { cashbackCzk: true } } } } },
+        },
+      },
+    }),
   ]);
+  const attachedBy = new Map(
+    (
+      await prisma.staffUser.findMany({
+        where: { id: { in: attached.map((row) => row.boundById!).filter(Boolean) } },
+        select: { id: true, username: true },
+      })
+    ).map((staff) => [staff.id, staff.username])
+  );
 
   /* ---- money ---- */
   const byMethod: Record<PaymentMethod, MethodTotals> = { CARD: emptyTotals(), CASH: emptyTotals() };
@@ -237,6 +260,16 @@ export async function buildShiftReport(shiftId: string) {
         by: c.cancelledBy.username,
       })),
     },
+    // Journal: who attached which guest to which table, and the cashback it brought.
+    attachedGuests: attached.map((row) => ({
+      at: row.boundAt,
+      table: toPublicTable(row.table).code,
+      guest: row.user?.name?.trim() || "Гость с аккаунтом",
+      card: row.user?.cardNumber ? row.user.cardNumber.slice(-4) : null,
+      by: (row.boundById && attachedBy.get(row.boundById)) || "—",
+      paidCzk: row.payments.reduce((sum, p) => sum + (p.confirmation?.amountCzk ?? 0), 0),
+      cashbackCzk: row.payments.reduce((sum, p) => sum + (p.confirmation?.loyaltyTxn?.cashbackCzk ?? 0), 0),
+    })),
     payments: confirmations.map((c) => ({
       id: c.id,
       at: c.createdAt,
