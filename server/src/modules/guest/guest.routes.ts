@@ -822,6 +822,8 @@ guestRouter.get(
         ...order,
         items: order.items
           .map((item) => {
+            // A free line (a side punched to a dish, 0 Kč) is never on the bill.
+            if (item.priceCzk <= 0) return null;
             const remainingQty = Math.max(item.qty - (paidQtyMap.get(item.id) ?? 0), 0);
             if (remainingQty <= 0) return null;
 

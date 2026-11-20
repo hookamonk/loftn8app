@@ -34,6 +34,14 @@ function sectionLabel(s: AdminMenuSection) {
   return SECTIONS.find((x) => x.key === s)?.label ?? s;
 }
 
+// Where the order goes when the item doesn't follow its category.
+const STATIONS: Array<{ key: AdminMenuSection; label: string }> = [
+  { key: "DISHES", label: "Кухня" },
+  { key: "DRINKS", label: "Бар" },
+  { key: "HOOKAH", label: "Кальяны" },
+];
+const stationLabel = (s: AdminMenuSection) => STATIONS.find((x) => x.key === s)?.label ?? s;
+
 type ItemDraft = {
   id?: number;
   categoryId: number;
@@ -43,6 +51,9 @@ type ItemDraft = {
   descriptionCs: string;
   priceCzk: string;
   isActive: boolean;
+  staffOnly: boolean;
+  /** "" = the category's station. */
+  station: AdminMenuSection | "";
 };
 
 type CategoryDraft = {
@@ -113,11 +124,20 @@ export default function StaffAdminMenuPage() {
       descriptionCs: itemDraft.descriptionCs.trim() || undefined,
       priceCzk: Math.round(price),
       isActive: itemDraft.isActive,
+      staffOnly: itemDraft.staffOnly,
     };
 
     const r = itemDraft.id
-      ? await updateAdminItem(venue, itemDraft.id, { ...payload, categoryId: itemDraft.categoryId })
-      : await createAdminItem(venue, { ...payload, categoryId: itemDraft.categoryId });
+      ? await updateAdminItem(venue, itemDraft.id, {
+          ...payload,
+          categoryId: itemDraft.categoryId,
+          station: itemDraft.station || null,
+        })
+      : await createAdminItem(venue, {
+          ...payload,
+          categoryId: itemDraft.categoryId,
+          ...(itemDraft.station ? { station: itemDraft.station } : {}),
+        });
     setBusy(false);
 
     if (!r.ok) {
@@ -343,6 +363,16 @@ export default function StaffAdminMenuPage() {
                             выключено
                           </span>
                         ) : null}
+                        {it.staffOnly ? (
+                          <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold text-sky-200">
+                            только персонал
+                          </span>
+                        ) : null}
+                        {it.station && it.station !== cat.section ? (
+                          <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-white/70">
+                            заказ → {stationLabel(it.station)}
+                          </span>
+                        ) : null}
                       </div>
                       {it.description ? (
                         <div className="mt-0.5 line-clamp-2 text-xs text-white/50">{it.description}</div>
@@ -383,6 +413,8 @@ export default function StaffAdminMenuPage() {
                               descriptionCs: it.descriptionCs ?? "",
                               priceCzk: String(it.priceCzk),
                               isActive: it.isActive,
+                              staffOnly: it.staffOnly,
+                              station: it.station ?? "",
                             })
                           }
                         >
@@ -407,6 +439,8 @@ export default function StaffAdminMenuPage() {
                       descriptionCs: "",
                       priceCzk: "",
                       isActive: true,
+                      staffOnly: false,
+                      station: "",
                     })
                   }
                 >
@@ -474,6 +508,29 @@ export default function StaffAdminMenuPage() {
               />
               Показывать в меню
             </label>
+            <label className="flex items-center gap-2 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={itemDraft.staffOnly}
+                onChange={(e) => setItemDraft({ ...itemDraft, staffOnly: e.target.checked })}
+              />
+              Только для персонала (гости не видят)
+            </label>
+            <label className="block text-xs text-white/60">Заказ уходит</label>
+            <select
+              className={field}
+              value={itemDraft.station}
+              onChange={(e) => setItemDraft({ ...itemDraft, station: e.target.value as AdminMenuSection | "" })}
+            >
+              <option value="" className="bg-[#0b0b10]">
+                Как у категории
+              </option>
+              {STATIONS.map((s) => (
+                <option key={s.key} value={s.key} className="bg-[#0b0b10]">
+                  {s.label}
+                </option>
+              ))}
+            </select>
 
             <div className="flex justify-end gap-2 pt-1">
               <button className={btnGhost} onClick={() => setItemDraft(null)}>

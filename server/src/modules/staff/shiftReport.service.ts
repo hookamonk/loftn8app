@@ -88,7 +88,7 @@ export async function buildShiftReport(shiftId: string) {
             id: true,
             qty: true,
             priceCzk: true,
-            menuItem: { select: { id: true, name: true, category: { select: { section: true } } } },
+            menuItem: { select: { id: true, name: true, station: true, category: { select: { section: true } } } },
           },
         },
       },
@@ -151,7 +151,8 @@ export async function buildShiftReport(shiftId: string) {
       const entry = itemsById.get(item.menuItem.id) ?? {
         menuItemId: item.menuItem.id,
         name: item.menuItem.name,
-        station: item.menuItem.category.section,
+        // The station that made it (a dessert the bar serves counts for the bar).
+        station: item.menuItem.station ?? item.menuItem.category.section,
         qty: 0,
         totalCzk: 0,
       };

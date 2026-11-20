@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { createTableOrder } from "@/lib/staffApi";
 import { getStaffVenueSlug } from "@/lib/venue";
 import { useStaffSession } from "@/providers/staffSession";
@@ -141,7 +141,13 @@ export function OrderComposer({
     const load = async () => {
       if (!hadCache) setLoading(true);
       try {
-        const next = await api<MenuResponse>("/menu", { headers: { "X-Venue-Slug": venueSlug } });
+        // The staff menu also has what guests never see (a side punched to a
+        // dish, a rental). A server that doesn't have it yet → the guest menu.
+        const headers = { "X-Venue-Slug": venueSlug };
+        const next = await api<MenuResponse>("/staff/dashboard/menu", { headers }).catch((e: unknown) => {
+          if (e instanceof ApiError && e.status === 404) return api<MenuResponse>("/menu", { headers });
+          throw e;
+        });
         setMenu(next);
         try {
           sessionStorage.setItem(cacheKey, JSON.stringify(next));
@@ -192,7 +198,8 @@ export function OrderComposer({
     const flat = source.flatMap((c) => c.items.map((i) => ({ ...i, categoryName: c.name, section: c.section })));
     if (!query) return flat;
     return flat.filter((i) =>
-      `${i.name} ${i.description ?? ""} ${i.categoryName}`.toLowerCase().includes(query)
+      // Czech names too: «česnek», «vejce» find what the kitchen calls them.
+      `${i.name} ${i.nameCs ?? ""} ${i.description ?? ""} ${i.categoryName}`.toLowerCase().includes(query)
     );
   }, [categories, activeCat, search]);
 

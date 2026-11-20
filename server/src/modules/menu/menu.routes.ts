@@ -36,21 +36,30 @@ function sanitizeImageUrl(value: unknown): string | null {
   return trimmed;
 }
 
+/**
+ * Guests get the menu without the staff-only items (sides punched to a dish,
+ * rentals); waiters and managers get everything — cached separately.
+ */
+type MenuAudience = "guest" | "staff";
+
 const menuCache = new Map<
-  number,
+  string,
   {
     expiresAt: number;
     payload: MenuPayload;
   }
 >();
 
+const cacheKey = (venueId: number, audience: MenuAudience) => `${venueId}:${audience}`;
+
 /**
- * Drop the cached guest menu for a venue so the next `GET /menu` rebuilds it.
+ * Drop the cached menus of a venue so the next request rebuilds them.
  * Called by the admin menu editor after every write, so edits show up in the
- * guest app immediately instead of after the 30s TTL.
+ * guest and staff apps immediately instead of after the 30s TTL.
  */
 export function invalidateMenuCache(venueId: number) {
-  menuCache.delete(venueId);
+  menuCache.delete(cacheKey(venueId, "guest"));
+  menuCache.delete(cacheKey(venueId, "staff"));
 }
 
 async function resolveVenue(rawVenueSlug?: string | null) {
@@ -99,57 +108,62 @@ async function ensureVenueMenuStructure(venueId: number) {
   }
 }
 
+async function menuFor(venue: { id: number; slug: string }, audience: MenuAudience): Promise<MenuPayload> {
+  const now = Date.now();
+  const key = cacheKey(venue.id, audience);
+  const cached = menuCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.payload;
+
+  await ensureVenueMenuStructure(venue.id);
+
+  const categories = await prisma.menuCategory.findMany({
+    where: { venueId: venue.id },
+    orderBy: [{ section: "asc" }, { sort: "asc" }],
+    include: {
+      items: {
+        where: { isActive: true, ...(audience === "guest" ? { staffOnly: false } : {}) },
+        orderBy: { sort: "asc" },
+      },
+    },
+  });
+
+  const payload: MenuPayload = {
+    venue: { id: venue.id, name: venueNameBySlug(venue.slug), slug: publicVenueSlug(venue.slug) },
+    categories: categories.map((c) => ({
+      id: c.id,
+      name: c.name,
+      nameCs: (c as any).nameCs ?? null,
+      sort: c.sort,
+      section: c.section,
+      items: c.items.map((i) => ({
+        id: i.id,
+        name: i.name,
+        nameCs: (i as any).nameCs ?? null,
+        description: i.description,
+        descriptionCs: (i as any).descriptionCs ?? null,
+        priceCzk: i.priceCzk,
+        imageUrl: sanitizeImageUrl((i as any).imageUrl),
+      })),
+    })),
+  };
+
+  menuCache.set(key, { expiresAt: now + MENU_CACHE_TTL_MS, payload });
+  return payload;
+}
+
+/** The waiters' and managers' menu: everything active, staff-only items included. */
+export async function staffMenu(venueId: number) {
+  const venue = await prisma.venue.findUnique({ where: { id: venueId }, select: { id: true, slug: true } });
+  if (!venue) throw new HttpError(404, "VENUE_NOT_FOUND", "Venue not found");
+  return menuFor(venue, "staff");
+}
+
 menuRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const requestedVenueSlug = String(req.headers["x-venue-slug"] ?? req.query?.venueSlug ?? "").trim();
     const venue = await resolveVenue(requestedVenueSlug);
-    const now = Date.now();
-    const cached = menuCache.get(venue.id);
-
-    if (cached && cached.expiresAt > now) {
-      res.setHeader("Cache-Control", "private, max-age=15, stale-while-revalidate=30");
-      return res.json(cached.payload);
-    }
-
-    await ensureVenueMenuStructure(venue.id);
-
-    const categories = await prisma.menuCategory.findMany({
-      where: { venueId: venue.id },
-      orderBy: [{ section: "asc" }, { sort: "asc" }],
-      include: {
-        items: {
-          where: { isActive: true },
-          orderBy: { sort: "asc" }, 
-        },
-      },
-    });
-
-    const payload: MenuPayload = {
-      venue: { id: venue.id, name: venueNameBySlug(venue.slug), slug: publicVenueSlug(venue.slug) },
-      categories: categories.map((c) => ({
-        id: c.id,
-        name: c.name,
-        nameCs: (c as any).nameCs ?? null,
-        sort: c.sort,
-        section: c.section,
-        items: c.items.map((i) => ({
-          id: i.id,
-          name: i.name,
-          nameCs: (i as any).nameCs ?? null,
-          description: i.description,
-          descriptionCs: (i as any).descriptionCs ?? null,
-          priceCzk: i.priceCzk,
-          imageUrl: sanitizeImageUrl((i as any).imageUrl),
-        })),
-      })),
-    };
-
-    menuCache.set(venue.id, {
-      expiresAt: now + MENU_CACHE_TTL_MS,
-      payload,
-    });
-
+    const payload = await menuFor(venue, "guest");
     res.setHeader("Cache-Control", "private, max-age=15, stale-while-revalidate=30");
     res.json(payload);
   })

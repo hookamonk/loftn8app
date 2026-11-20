@@ -870,6 +870,10 @@ export type AdminMenuItem = {
   priceCzk: number;
   sort: number;
   isActive: boolean;
+  /** Only waiters and managers see it; never in the guests' menu. */
+  staffOnly: boolean;
+  /** Made by another station than its category's (null = the category's). */
+  station: AdminMenuSection | null;
   imageUrl: string | null;
   hasOrders: boolean;
 };
@@ -940,6 +944,8 @@ export async function createAdminItem(
     priceCzk: number;
     sort?: number;
     isActive?: boolean;
+    staffOnly?: boolean;
+    station?: AdminMenuSection | null;
   }
 ): Promise<ApiResult<{ item: { id: number } }>> {
   return tryPaths<{ ok: true; item: { id: number } }>(
@@ -960,6 +966,8 @@ export async function updateAdminItem(
     priceCzk?: number;
     sort?: number;
     isActive?: boolean;
+    staffOnly?: boolean;
+    station?: AdminMenuSection | null;
   }
 ): Promise<ApiResult<{ ok: true }>> {
   return tryPaths<{ ok: true }>(

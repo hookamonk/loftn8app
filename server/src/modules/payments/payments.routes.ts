@@ -147,6 +147,8 @@ paymentsRouter.post(
       .flatMap((order: any) =>
         order.items
           .map((item: any) => {
+            // A free line (a side punched to a dish, 0 Kč) is never owed.
+            if (item.priceCzk <= 0) return null;
             const remainingQty = Math.max(item.qty - (paidQtyMap.get(item.id) ?? 0), 0);
             if (remainingQty <= 0) return null;
 

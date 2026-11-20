@@ -182,6 +182,10 @@ model MenuItem {
   priceCzk    Int
   imageUrl    String?
   isActive    Boolean      @default(true)
+  // Only the staff see it (something punched to a dish, a rental): never in the guests' menu.
+  staffOnly   Boolean      @default(false)
+  // The station that makes it when not the one of its category (a dessert the bar serves).
+  station     MenuSection?
   sort        Int          @default(0)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt

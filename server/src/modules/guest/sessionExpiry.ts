@@ -42,7 +42,7 @@ function remainingUnpaidQty(params: {
   orders: Array<{
     createdAt: Date;
     status: string;
-    items: Array<{ id: string; qty: number }>;
+    items: Array<{ id: string; qty: number; priceCzk: number }>;
   }>;
   payments: Array<{
     status: string;
@@ -65,7 +65,9 @@ function remainingUnpaidQty(params: {
       (sum, order) =>
         sum +
         order.items.reduce(
-          (itemSum, item) => itemSum + Math.max(item.qty - (paidQtyMap.get(item.id) ?? 0), 0),
+          // A free line (a side punched to a dish, 0 Kč) is never owed.
+          (itemSum, item) =>
+            item.priceCzk <= 0 ? itemSum : itemSum + Math.max(item.qty - (paidQtyMap.get(item.id) ?? 0), 0),
           0
         ),
       0
@@ -173,6 +175,7 @@ export async function getGuestSessionClosureState(
             select: {
               id: true,
               qty: true,
+              priceCzk: true,
             },
           },
         },

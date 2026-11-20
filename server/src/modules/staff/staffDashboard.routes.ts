@@ -17,6 +17,7 @@ import { getOpenShiftOrThrow } from "./shiftCache";
 import { addStaffClient, emitStaffEvent } from "./staffEvents";
 import { cleanDeviceId, staffDeviceOf } from "./staffDevice";
 import { upsertOpenTableOrder } from "./openOrder";
+import { staffMenu } from "../menu/menu.routes";
 import { cancelTableLines, moveTableLines, type TableLine } from "./tableLines.service";
 import { emitGuestEvent } from "../guest/guestEvents";
 import {
@@ -277,6 +278,8 @@ function buildPayableTableItems(params: {
     .flatMap((order) =>
       order.items
         .map((item) => {
+          // A free line (a side punched to a dish, 0 Kč) is never owed.
+          if (item.priceCzk <= 0) return null;
           const remainingQty = Math.max(item.qty - (paidQtyMap.get(item.id) ?? 0), 0);
           if (remainingQty <= 0) return null;
 
@@ -471,6 +474,17 @@ staffDashboardRouter.post(
   })
 );
 
+// The menu the order composer shows: staff-only items included (a side
+// punched to a dish, a rental) — guests never see those.
+staffDashboardRouter.get(
+  "/menu",
+  asyncHandler(async (req, res) => {
+    const payload = await staffMenu(req.staff!.venueId);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(payload);
+  })
+);
+
 staffDashboardRouter.post(
   "/table-orders",
   validate(CreateTableOrderSchema),
@@ -506,7 +520,7 @@ staffDashboardRouter.post(
           isActive: true,
           category: { venueId, section: { in: sections } },
         },
-        select: { id: true, priceCzk: true, category: { select: { section: true } } },
+        select: { id: true, priceCzk: true, station: true, category: { select: { section: true } } },
       }),
     ]);
 
@@ -544,7 +558,8 @@ staffDashboardRouter.post(
         comment: body.comment,
       });
 
-      // One ticket per station: food → kitchen, drinks → bar, hookah → zone.
+      // One ticket per station: food → kitchen, drinks and hookahs → bar. An
+      // item may name its own station (a dessert the bar serves).
       const ticketIds = await createStationTickets(tx, {
         venueId,
         tableId: body.tableId,
@@ -558,7 +573,7 @@ staffDashboardRouter.post(
             qty: it.qty,
             comment: it.comment,
             priceCzk: menuItem.priceCzk,
-            section: menuItem.category.section,
+            section: menuItem.station ?? menuItem.category.section,
           };
         }),
       });

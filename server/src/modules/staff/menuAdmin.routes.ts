@@ -75,6 +75,8 @@ staffMenuAdminRouter.get(
           priceCzk: i.priceCzk,
           sort: i.sort,
           isActive: i.isActive,
+          staffOnly: i.staffOnly,
+          station: i.station,
           imageUrl: i.imageUrl,
           hasOrders: i._count.orderItems > 0,
         })),
@@ -207,6 +209,10 @@ const ItemCreateSchema = z.object({
   sort: z.number().int().optional(),
   isActive: z.boolean().optional(),
   imageUrl: ImageUrlSchema.optional(),
+  // Only waiters and managers see it.
+  staffOnly: z.boolean().optional(),
+  // Made by another station than its category's; null = the category's.
+  station: z.enum(SECTIONS).nullable().optional(),
 });
 
 async function assertCategoryInVenue(categoryId: number, venueId: number) {
@@ -246,6 +252,8 @@ staffMenuAdminRouter.post(
         priceCzk: body.priceCzk,
         sort,
         isActive: body.isActive ?? true,
+        staffOnly: body.staffOnly ?? false,
+        station: body.station ?? null,
         ...(body.imageUrl ? { imageUrl: body.imageUrl } : {}),
       },
     });
@@ -265,6 +273,8 @@ const ItemUpdateSchema = z.object({
   sort: z.number().int().optional(),
   isActive: z.boolean().optional(),
   imageUrl: ImageUrlSchema.nullable().optional(),
+  staffOnly: z.boolean().optional(),
+  station: z.enum(SECTIONS).nullable().optional(),
 });
 
 staffMenuAdminRouter.patch(
@@ -306,6 +316,8 @@ staffMenuAdminRouter.patch(
         ...(body.sort !== undefined ? { sort: body.sort } : {}),
         ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
         ...(body.imageUrl !== undefined ? { imageUrl: body.imageUrl } : {}),
+        ...(body.staffOnly !== undefined ? { staffOnly: body.staffOnly } : {}),
+        ...(body.station !== undefined ? { station: body.station } : {}),
       },
     });
 
